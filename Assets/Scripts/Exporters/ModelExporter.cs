@@ -7,11 +7,13 @@ using LibMMD.Writer;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Rendering;
 using static BillboardBuilder;
 using static LibMMD.Model.Morph;
 using static LibMMD.Model.SkinningOperator;
+using static LibMMD.Reader.PMXReader;
 //using UnityGLTF;
 
 
@@ -52,10 +54,24 @@ public class ModelExporter
         var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject);
         var model = ReadPMXModel(container, textures);
 
+        // Vertex index size fix
+        PmxConfig pmxConfig = new PmxConfig()
+            {
+                Utf8Encoding = false,
+                Encoding = Encoding.Unicode,
+                ExtraUvNumber = 3, //include uv2 and color
+                VertexIndexSize = model.Vertices.Length > 65535 ? 4 : (model.Vertices.Length > 255 ? 2 : 1),
+                TextureIndexSize = model.TextureList.Count > 255 ? 2 : 1,
+                MaterialIndexSize = model.Parts.Length > 255 ? 2 : 1,
+                BoneIndexSize = model.Bones.Length > 65535 ? 4 : (model.Bones.Length > 255 ? 2 : 1),
+                MorphIndexSize = model.Morphs.Length > 65535 ? 4 : (model.Morphs.Length > 255 ? 2 : 1),
+                RigidBodyIndexSize = model.Rigidbodies.Length > 65535 ? 4 : (model.Rigidbodies.Length > 255 ? 2 : 1)
+            };
+
         FileStream fileStream = new FileStream(path, FileMode.Create);
         BinaryWriter writer = new BinaryWriter(fileStream);
         var config = new ModelConfig() { GlobalToonPath = "Toon" };
-        PMXWriter.Write(writer, model, config);
+        PMXWriter.Write(writer, model, config, pmxConfig);
 
         writer.Close();
         fileStream.Close();
@@ -307,7 +323,24 @@ public class ModelExporter
             }
             if (!mesh.isReadable)
             {
-                continue;
+                try
+                {
+                    mesh = MakeReadableMeshCopy(mesh);
+                }
+                catch
+                {
+                    UmaViewerUI.Instance.ShowMessage($"Skipping material for non-readable mesh: {mesh.name}", UIMessageType.Warning);
+                    // Still need to advance baseShift!
+                    baseShift += mesh.triangles.Length; // BUT: this mesh.triangles may fail too!
+                    // Better: get triangle count safely
+                    int triCount = 0;
+                    if (renderer is MeshRenderer mrr)
+                        triCount = mrr.GetComponent<MeshFilter>().sharedMesh.triangles.Length;
+                    else
+                        triCount = ((SkinnedMeshRenderer)renderer).sharedMesh.triangles.Length;
+                    baseShift += triCount;
+                    continue;
+                }
             }
             var materials = new List<Material>(renderer.sharedMaterials);
             for (int i = 0; i < mesh.subMeshCount; i++)

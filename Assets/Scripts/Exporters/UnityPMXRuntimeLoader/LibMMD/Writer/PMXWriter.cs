@@ -13,7 +13,7 @@ namespace LibMMD.Writer
 {
     public class PMXWriter
     {
-        public static void Write(BinaryWriter writer, RawMMDModel model, ModelConfig config)
+        public static void Write(BinaryWriter writer, RawMMDModel model, ModelConfig config, PmxConfig _pmxConfig = null)
         {
             var pmxHeader = new PmxMeta
             {
@@ -22,7 +22,7 @@ namespace LibMMD.Writer
                 FileFlagSize = 8
             };
 
-            PmxConfig PmxConfig = new PmxConfig()
+            PmxConfig pmxConfig = _pmxConfig ?? new PmxConfig()
             {
                 Utf8Encoding = false,
                 Encoding = Encoding.Unicode,
@@ -49,17 +49,17 @@ namespace LibMMD.Writer
             model.Entrys.Insert(0, baseEntry);
 
             WriteMeta(writer, pmxHeader);
-            WritePmxConfig(writer, PmxConfig);
-            WriteModelNameAndDescription(writer, model, PmxConfig);
-            WriteVertices(writer, model, PmxConfig);
-            WriteTriangles(writer, model, PmxConfig);
-            WriteTextureList(writer, model.TextureList, PmxConfig);
-            WriteParts(writer, config, model, PmxConfig);
-            WriteBones(writer, model, PmxConfig);
-            WriteMorphs(writer, model, PmxConfig);
-            WriteEntries(writer, model.Entrys, PmxConfig);
-            WriteRigidBodies(writer, model.Rigidbodies, PmxConfig);
-            WriteJoints(writer, model, PmxConfig);
+            WritePmxConfig(writer, pmxConfig);
+            WriteModelNameAndDescription(writer, model, pmxConfig);
+            WriteVertices(writer, model, pmxConfig);
+            WriteTriangles(writer, model, pmxConfig);
+            WriteTextureList(writer, model.TextureList, pmxConfig);
+            WriteParts(writer, config, model, pmxConfig);
+            WriteBones(writer, model, pmxConfig);
+            WriteMorphs(writer, model, pmxConfig);
+            WriteEntries(writer, model.Entrys, pmxConfig);
+            WriteRigidBodies(writer, model.Rigidbodies, pmxConfig);
+            WriteJoints(writer, model, pmxConfig);
         }
 
         private static void WriteJoints(BinaryWriter writer, RawMMDModel model, PmxConfig pmxConfig)
