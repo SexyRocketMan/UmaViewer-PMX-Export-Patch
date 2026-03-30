@@ -85,7 +85,7 @@ public class TextureExporter
                 }
             }
         }
-        Debug.Log("ÌáÈ¡³É¹¦");
+        Debug.Log($"Exported textures: {textureNames.ToArray()}");
         return textureNames.ToArray();
     }
 }

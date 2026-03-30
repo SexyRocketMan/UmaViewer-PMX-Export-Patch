@@ -359,10 +359,19 @@ public class ModelExporter
                 mat.DrawSelfShadow = true;
                 mat.EdgeColor = Color.black;
                 mat.EdgeSize = 0.4f;
+
                 if (material.HasProperty("_MainTex"))
                 {
-                    var tex = model.TextureList.Find(t => t.TexturePath.Contains($"/{material.mainTexture.name}.png"));
-                    mat.Texture = (tex ?? model.TextureList[0]);
+                    try
+                    {
+                        var tex = model.TextureList.Find(t => t.TexturePath.Contains($"/{material.mainTexture.name}.png"));
+                        mat.Texture = (tex ?? model.TextureList[0]);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.Log("texture list name lookup failed, defaulting to first texture");
+                        mat.Texture = model.TextureList[0];
+                    }
                 }
                 else
                 {
