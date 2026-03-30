@@ -4,7 +4,7 @@
 There are several issues with the PMX export in the og repo - and i don't expect them to fixed anytime soon  
 Mainly, the exported model are using 2-byte vertex indices, which isn't an issue - until you hit the 65535 vertex limit  
 To my knowledge, no props or umas pass this threshold - but some scenes do, and as a result you get unusable mess of faces which can't be fixed post-export  
-So this fork is meant to fix the aforementioned bug, and maybe some other issues (like material export not working)  
+So this fork is meant to fix the aforementioned bug, and some other issues (like material export not working)  
 I'm not sure i'll be able to maintain it, keep this in mind  
 
 Original readme follows:  
