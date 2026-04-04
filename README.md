@@ -5,9 +5,18 @@ There are several issues with the PMX export in the og repo - and i don't expect
 Mainly, the exported model are using 2-byte vertex indices, which isn't an issue - until you hit the 65535 vertex limit  
 To my knowledge, no props or umas pass this threshold - but some scenes do, and as a result you get unusable mess of faces which can't be fixed post-export  
 So this fork is meant to fix the aforementioned bug, and some other issues (like material export not working)  
-I'm not sure i'll be able to maintain it, keep this in mind  
+I'm not sure i'll be able to maintain it, keep this in mind
 
-Original readme follows:  
+# Changes from the og repo
+**Done:**
+- Fixed materials for all exported scenes
+- Fixed broken geometry for exported scenes with 65k+ faces
+
+**To-do (maybe):**
+- Add proper vmd recording and export for mini-umas
+- Export vmd with english bone names? Uma models are exported so; won't have to use a custom translation dictionary if done
+
+#Original readme follows:  
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
 
 | Version   | Supported |
