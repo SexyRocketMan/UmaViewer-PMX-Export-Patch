@@ -148,6 +148,12 @@ public class UmaViewerUI : MonoBehaviour
         UmaAssetManager.OnLoadedBundleClear -= AssetSettings.LoadedAssetsClear;
     }
 
+    // Apply settings on android
+    private void OnApplicationPause(bool pause)
+    {
+        OtherSettings.ApplySettings();
+    }
+
     private void Update()
     {
         if (Builder.CurrentAudioSources.Count > 0 && Builder.CurrentAudioSources[0])
