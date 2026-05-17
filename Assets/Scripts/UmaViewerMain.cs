@@ -97,6 +97,13 @@ public class UmaViewerMain : MonoBehaviour
             filesToDownload.Clear();
         }
 
+        // Force Global-Default mode on android for now
+        // Upd: This didn't work at all
+        #if UNITY_ANDROID
+            Config.Instance.WorkMode = WorkMode.Default;
+            Config.Instance.Region = Region.Global;
+        #endif
+
         loadingUI.LoadingProgressChange(loadingStep++, loadingStepsTotal, "Loading Character Data");
         yield return null;
         foreach (var item in UmaCharaData)

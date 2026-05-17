@@ -55,6 +55,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     Dictionary<BoneNames, List<Vector3>> positionDictionarySaved = new Dictionary<BoneNames, List<Vector3>>();
     Dictionary<BoneNames, List<Quaternion>> rotationDictionary = new Dictionary<BoneNames, List<Quaternion>>();
     Dictionary<BoneNames, List<Quaternion>> rotationDictionarySaved = new Dictionary<BoneNames, List<Quaternion>>();
+    Dictionary<BoneNames, Vector3> _boneInitialLocalPositions = new Dictionary<BoneNames, Vector3>();
     Dictionary<int, bool> visitableDictionary = new Dictionary<int, bool>();
     //ボーン移動量の補正係数
     //この値は大体の値、正確ではない
@@ -209,6 +210,29 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
         foreach (BoneNames boneName in BoneDictionary.Keys)
         {
+
+            // Debug fuckery - remove me, hello??
+            /*
+            if (boneName == BoneNames.首)
+            {
+                var neckBone = BoneDictionary[boneName];
+                var parent = neckBone.parent;
+                
+                Debug.Log($"[VMD Neck Debug] Frame {FrameNumber}");
+                Debug.Log($"  localPosition: {neckBone.localPosition}");
+                Debug.Log($"  parent.lossyScale: {parent?.lossyScale}");
+                Debug.Log($"  parent.name: {parent?.name}");
+                Debug.Log($"  IsMini: {UmaViewerBuilder.Instance.CurrentUMAContainer.IsMini}, BodyScale: {UmaViewerBuilder.Instance.CurrentUMAContainer.BodyScale}");
+                
+                // What the "true" scaled local position would be
+                if (parent != null)
+                {
+                    var scaledLocal = Vector3.Scale(neckBone.localPosition, parent.lossyScale);
+                    Debug.Log($"  scaled local (visual offset): {scaledLocal}");
+                }
+            }
+            */
+
             if (BoneDictionary[boneName] == null)
             {
                 continue;
@@ -312,6 +336,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 fixedPosition -= parentInitialPosition;
             }
 
+            // Log first frame
+            if (FrameNumber == 0 && (boneName == BoneNames.首 || boneName == BoneNames.左肩 || boneName == BoneNames.右肩))
+            {
+                Debug.Log($"[VMD Frame0] {boneName}: localPos={BoneDictionary[boneName].localPosition}, recorded={(new Vector3(-fixedPosition.x, fixedPosition.y, -fixedPosition.z) * DefaultBoneAmplifier)}");
+            }
+
+            vmdPosition = new Vector3(-fixedPosition.x, fixedPosition.y, -fixedPosition.z);
+
+            if (boneName == BoneNames.全ての親)
+            {
+                positionDictionary[boneName].Add(vmdPosition * DefaultBoneAmplifier + ParentOfAllOffset);
+            }
+            else
+            {
+                positionDictionary[boneName].Add(vmdPosition * DefaultBoneAmplifier);
+            }
+
             vmdPosition = new Vector3(-fixedPosition.x, fixedPosition.y, -fixedPosition.z);
 
             if (boneName == BoneNames.全ての親)
@@ -360,6 +401,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     {
         SetInitialPositionAndRotation();
         IsRecording = true;
+
+        foreach (var kvp in BoneDictionary)
+        {
+            if (kvp.Value != null)
+            {
+                _boneInitialLocalPositions[kvp.Key] = kvp.Value.localPosition;
+                Debug.Log($"{kvp} is {_boneInitialLocalPositions[kvp.Key]}");
+            }
+        }
+
         IsLive = islive;
 
         if (islive)
@@ -611,11 +662,20 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             }
         }
         if (boneGhost != null)
-        {
-            foreach(var pair in boneGhost.GhostDictionary)
+        {   
+            // Mini-umas motion export cause an exception here
+            try
             {
-                Destroy(pair.Value.ghost.gameObject);
+               foreach(var pair in boneGhost.GhostDictionary)
+                {
+                    Destroy(pair.Value.ghost.gameObject);
+                } 
             }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to destroy some boneGhost pairs");
+            }
+            
         }
         Destroy(this);
     }
@@ -629,7 +689,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     /// <param name="keyReductionLevel">キーの書き込み頻度を減らして容量を減らす</param>
     public void SaveVMD(string modelName, int keyReductionLevel = 3)
     {
-        string fileName = $"{Application.dataPath}{FileSavePath}/{string.Format("UMA_{0}.vmd", DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"))}";
+        string fileName = $"{Application.dataPath}{FileSavePath}/{modelName} {DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss")}.vmd";
+        //string.Format("UMA_{0}.vmd", )
         Directory.CreateDirectory(Application.dataPath + FileSavePath);
         KeyReductionLevel = keyReductionLevel;
         SaveVMD(modelName, fileName);
@@ -833,28 +894,37 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         {
             var facialTarget = model.GetComponentInParent<UmaContainerCharacter>().FaceDrivenKeyTarget;
             FacialMorphList = new List<FacialMorph>();
-            FacialMorphList.AddRange(facialTarget.EyeBrowMorphs);
-            FacialMorphList.AddRange(facialTarget.EyeMorphs);
-            FacialMorphList.AddRange(facialTarget.MouthMorphs);
-            for (int i = 0; i < FacialMorphList.Count; i++)
+            
+            if (facialTarget != null)
             {
-                string morphName = ConvertMorphName(FacialMorphList[i].name);
-
-                if (MorphDrivers.Keys.Contains(morphName))
+                FacialMorphList.AddRange(facialTarget.EyeBrowMorphs);
+                FacialMorphList.AddRange(facialTarget.EyeMorphs);
+                FacialMorphList.AddRange(facialTarget.MouthMorphs);
+                for (int i = 0; i < FacialMorphList.Count; i++)
                 {
-                    if (!MorphDrivers[morphName].Morphs.Contains(FacialMorphList[i]))
+                    string morphName = ConvertMorphName(FacialMorphList[i].name);
+
+                    if (MorphDrivers.Keys.Contains(morphName))
                     {
-                        MorphDrivers[morphName].Morphs.Add(FacialMorphList[i]);
+                        if (!MorphDrivers[morphName].Morphs.Contains(FacialMorphList[i]))
+                        {
+                            MorphDrivers[morphName].Morphs.Add(FacialMorphList[i]);
+                        }
+                    }
+                    else
+                    {
+                        List<FacialMorph> morphList = new List<FacialMorph>();
+                        morphList.Add(FacialMorphList[i]);
+                        var driver = new MorphDriver(morphList, i);
+                        MorphDrivers.Add(morphName, driver);
                     }
                 }
-                else
-                {
-                    List<FacialMorph> morphList = new List<FacialMorph>();
-                    morphList.Add(FacialMorphList[i]);
-                    var driver = new MorphDriver(morphList, i);
-                    MorphDrivers.Add(morphName, driver);
-                }
             }
+            else
+            {
+                Debug.LogWarning($"Mini UMA detected: skipping facial morph recording (no FaceDrivenKeyTarget)");
+            }
+            
         }
 
 

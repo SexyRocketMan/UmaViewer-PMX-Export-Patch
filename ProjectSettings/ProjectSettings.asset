@@ -13,7 +13,7 @@ PlayerSettings:
   useOnDemandResources: 0
   accelerometerFrequency: 60
   companyName: Katboi01
-  productName: UmaViewer (PMX Export Patch)
+  productName: UmaViewer (Mini uma motion export patch)
   defaultCursor: {fileID: 0}
   cursorHotspot: {x: 0, y: 0}
   m_SplashScreenBackgroundColor: {r: 0.13725491, g: 0.12156863, b: 0.1254902, a: 1}
@@ -164,7 +164,7 @@ PlayerSettings:
   androidMaxAspectRatio: 2.1
   applicationIdentifier:
     Android: com.Katboi01.UmaViewer
-    Standalone: com.Katboi01.UmaViewer--PMX-Export-Patch-
+    Standalone: com.Katboi01.UmaViewer--Mini-uma-motion-export-patch-
   buildNumber:
     Standalone: 0
     VisionOS: 0

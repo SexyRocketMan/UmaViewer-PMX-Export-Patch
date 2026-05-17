@@ -9,6 +9,7 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 //修改(载入通用服装ColorSet相关)(保存当前选中的颜色配置到TXT文件)
 using System.Text;
 
@@ -1024,6 +1025,13 @@ public class UmaViewerUI : MonoBehaviour
         }
     }
 
+    /// <summary> Fuckass method to allow the user to apply config changes on mobile </summary>
+    public void ReloadScene()
+    {
+        OtherSettings.ApplySettings();
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
     public void ToggleUIFacial(GameObject go)
     {
         if (go.activeSelf || !TogglableFacials.Contains(go))
@@ -1044,13 +1052,20 @@ public class UmaViewerUI : MonoBehaviour
         var camera = Builder.AnimationCamera;
         var buttonText = AnimationSettings.VMDButton.GetComponentInChildren<TextMeshProUGUI>();
 
-        if (!container || container.IsMini)
+        if (!container /*|| container.IsMini*/) // mini uma cockblock removed, added a facial target null check in MorphRecorder ctor. When something goes horribly wrong, put it back
         {
             buttonText.text = string.Format("<color=#FF0000>{0}</color>", "Need Normal UMA");
             return;
         }
 
         var rootbone = container.transform.Find("Position");
+        Debug.Log($"[VMD Debug] Position scale: {rootbone.localScale}, IsMini: {container.IsMini}, BodyScale: {container.BodyScale}");
+
+        // Also log neck bone positions
+        // var neck = rootbone.Find("Hip/Waist/Chest/Neck");
+        // if (neck) Debug.Log($"[VMD Debug] Neck - LocalPos: {neck.localPosition}, WorldPos: {neck.position}");
+
+
         if (rootbone.gameObject.TryGetComponent(out UnityHumanoidVMDRecorder recorder))
         {
             if (recorder.IsRecording)
