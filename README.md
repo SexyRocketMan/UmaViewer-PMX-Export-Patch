@@ -11,12 +11,12 @@ I'm not sure i'll be able to maintain it, keep this in mind
 **Done:**
 - Fixed materials for all exported scenes
 - Fixed broken geometry for exported scenes with 65k+ faces
+- Somewhat fixed mini-uma motion export (semi-done: shitty fix in place, could do better)
 
 **To-do (maybe):**
-- Add proper vmd recording and export for mini-umas
 - Export vmd with english bone names? Uma models are exported so; won't have to use a custom translation dictionary if done
 
-#Original readme follows:  
+# Original readme follows:  
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
 
 | Version   | Supported |
