@@ -41,6 +41,11 @@ public class Config
     public string VmdKeyReductionLevelTip = "Affects the recording quality: 1 = record every frame, 2 = record every two frames, and so on.";
     public int VmdKeyReductionLevel = 2;
 
+    public string VmdUseEnglishBoneNamesTip = "True = uses the same bone names as exported models, false = uses japanese names";
+    public bool VmdUseEnglishBoneNames = true;
+    public string VmdUseEnglishMorphNamesTip = "True = uses the same morph names as exported models, false = uses japanese names";
+    public bool VmdUseEnglishMorphNames = true;
+
     public string AntiAliasingTip = "Display, screenshot antialiasing level. 0 - no AA, 1 - 2x MSAA, 2 - 4x MSAA, 3 - 8x MSAA";
     public int AntiAliasing = 2;
 

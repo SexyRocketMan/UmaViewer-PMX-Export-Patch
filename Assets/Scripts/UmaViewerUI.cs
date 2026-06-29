@@ -1061,11 +1061,6 @@ public class UmaViewerUI : MonoBehaviour
         var rootbone = container.transform.Find("Position");
         Debug.Log($"[VMD Debug] Position scale: {rootbone.localScale}, IsMini: {container.IsMini}, BodyScale: {container.BodyScale}");
 
-        // Also log neck bone positions
-        // var neck = rootbone.Find("Hip/Waist/Chest/Neck");
-        // if (neck) Debug.Log($"[VMD Debug] Neck - LocalPos: {neck.localPosition}, WorldPos: {neck.position}");
-
-
         if (rootbone.gameObject.TryGetComponent(out UnityHumanoidVMDRecorder recorder))
         {
             if (recorder.IsRecording)

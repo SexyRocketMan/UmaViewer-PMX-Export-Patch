@@ -125,6 +125,20 @@ public class UISettingsAnimation : MonoBehaviour
         container.UmaAnimator.SetLayerWeight(2, enable ? 1 : 0);
     }
 
+    public void EnableEnglishVmdBoneNames(bool enable)
+    {
+        Config.Instance.VmdUseEnglishBoneNames = enable;
+        Debug.Log($"{(enable ? "English" : "Japanese")} bone names will be used for exported vmds now");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    public void EnableEnglishVmdMorphNames(bool enable)
+    {
+        Config.Instance.VmdUseEnglishMorphNames = enable;
+        Debug.Log($"{(enable ? "English" : "Japanese")} morph names will be used for exported vmds now");
+        Config.Instance.UpdateConfig(false);
+    }
+
     public static string ToFrameFormat(float time, float frameRate)
     {
         int frames = Mathf.FloorToInt(time % 1 * frameRate);

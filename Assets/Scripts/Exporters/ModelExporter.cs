@@ -14,6 +14,7 @@ using static BillboardBuilder;
 using static LibMMD.Model.Morph;
 using static LibMMD.Model.SkinningOperator;
 using static LibMMD.Reader.PMXReader;
+using System.Linq;
 //using UnityGLTF;
 
 
@@ -219,8 +220,10 @@ public class ModelExporter
 
     private static Morph[] ReadMorph(List<Renderer> renderers)
     {
-        List<Morph> morphs = new List<Morph>();
+        // Dictionary to group morph data by name to prevent duplicates like .001
+        Dictionary<string, Morph> groupedMorphs = new Dictionary<string, Morph>();
         int vertexOffset = 0;
+
         foreach (Renderer renderer in renderers)
         {
             Mesh mesh;
@@ -242,42 +245,64 @@ public class ModelExporter
                 var deltaTangents= new Vector3[vertexCount];
                 mesh.GetBlendShapeFrameVertices(i, 0, deltaVertices, deltaNormals, deltaTangents);
 
-                Morph morph = new Morph();
-                morph.Name = morph.NameEn = mesh.GetBlendShapeName(i);
-                morph.Type = MorphType.MorphTypeVertex;
-                var datas = new VertexMorphData[vertexCount];
+                // 1. Get the clean English name
+                string rawName = mesh.GetBlendShapeName(i);
+                string cleanName = rawName;
+                
+                // Strip suffixes added by AddBlendShape like "(WaraiA)[M_Face]"
+                int parenIndex = cleanName.IndexOf('(');
+                if (parenIndex > 0) cleanName = cleanName.Substring(0, parenIndex);
+                int bracketIndex = cleanName.IndexOf('[');
+                if (bracketIndex > 0) cleanName = cleanName.Substring(0, bracketIndex);
+                
+                // Strip Blender duplicate suffixes just in case
+                if (cleanName.Contains(".00")) 
+                {
+                    cleanName = cleanName.Substring(0, cleanName.LastIndexOf('.'));
+                }
+                
+                cleanName = cleanName.Trim();
+
+                // 2. Group by clean name
+                if (!groupedMorphs.ContainsKey(cleanName))
+                {
+                    Morph newMorph = new Morph();
+                    newMorph.Name = newMorph.NameEn = cleanName;
+                    newMorph.Type = MorphType.MorphTypeVertex;
+                    
+                    // Determine category based on name
+                    if (cleanName.Contains("Mouth_")) newMorph.Category = MorphCategory.MorphCatMouth;
+                    else if (cleanName.Contains("EyeBrow_")) newMorph.Category = MorphCategory.MorphCatEyebrow;
+                    else if (cleanName.Contains("Eye_")) newMorph.Category = MorphCategory.MorphCatEye;
+                    else newMorph.Category = MorphCategory.MorphCatOther;
+                    
+                    newMorph.MorphDatas = new VertexMorphData[0]; // Initialize empty
+                    groupedMorphs[cleanName] = newMorph;
+                }
+
+                Morph targetMorph = groupedMorphs[cleanName];
+                
+                // 3. Create vertex data for this specific mesh
+                var newDatas = new VertexMorphData[vertexCount];
                 for (int j = 0; j < vertexCount; j++) 
                 {
                     var data = new VertexMorphData();
-                    data.VertexIndex = vertexOffset + j;
+                    data.VertexIndex = vertexOffset + j; // Offset ensures vertices map to the correct mesh in the combined PMX
                     data.Offset = deltaVertices[j];
-                    datas[j] = data;
+                    newDatas[j] = data;
                 }
-                morph.MorphDatas = datas;
-
-                if (morph.Name.Contains("Mouth_"))
-                {
-                    morph.Category = MorphCategory.MorphCatMouth;
-                }
-                else if(morph.Name.Contains("EyeBrow_"))
-                {
-                    morph.Category = MorphCategory.MorphCatEyebrow;
-                }
-                else if(morph.Name.Contains("Eye_"))
-                {
-                    morph.Category = MorphCategory.MorphCatEye;
-                }
-                else 
-                {
-                    morph.Category = MorphCategory.MorphCatOther;
-                }
-
-                morphs.Add(morph);
+                
+                // 4. Combine with existing data from other meshes
+                var existingDatas = targetMorph.MorphDatas;
+                var combinedDatas = new VertexMorphData[existingDatas.Length + newDatas.Length];
+                existingDatas.CopyTo(combinedDatas, 0);
+                newDatas.CopyTo(combinedDatas, existingDatas.Length);
+                targetMorph.MorphDatas = combinedDatas;
             }
-
             vertexOffset += mesh.vertexCount;
         }
-        return morphs.ToArray();
+        
+        return groupedMorphs.Values.ToArray();
     }
 
     private static Bone[] ReadBones(List<Transform> bonelist)
