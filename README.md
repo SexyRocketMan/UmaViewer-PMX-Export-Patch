@@ -9,12 +9,16 @@ I'm not sure i'll be able to maintain it, keep this in mind
 
 # Changes from the og repo
 **Done:**
-- Fixed materials for all exported scenes
-- Fixed broken geometry for exported scenes with 65k+ faces
-- Somewhat fixed mini-uma motion export (semi-done: shitty fix in place, could do better)
+- Fixed materials for all exported scenes  
+- Fixed broken geometry for exported scenes with 65k+ faces  
+- Full support for mini-uma motion export  
+- Added options to use short english names for bones and morphs (fixed morph mapping)  
 
 **To-do (maybe):**
-- Export vmd with english bone names? Uma models are exported so; won't have to use a custom translation dictionary if done
+- Rework the bone and morph naming schema - current names are not descriptive of the action, old ones don't fit in the vmd 15-byte morph name limit  
+
+**Latest tutorial video:**  
+https://www.youtube.com/watch?v=zbzfF3pubjQ
 
 # Original readme follows:  
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
