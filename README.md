@@ -20,6 +20,10 @@ I'm not sure i'll be able to maintain it, keep this in mind
 **Latest tutorial video:**  
 https://www.youtube.com/watch?v=zbzfF3pubjQ
 
+*UPDATE*:  
+So my dumbass somehow managed to break vertex group parenting for exported uma models - for now, I've noticed the eye bones relations are broken, but there might be more issues.  
+I'll look into it, but for Rigify-driven animation work - stick to the og version for now.  
+
 # Original readme follows:  
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
 
