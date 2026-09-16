@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text;
 using UnityEngine;
 
@@ -48,10 +49,65 @@ public static class ExportNaming
     }
 
     /// <summary>
-    /// The tail of an animation asset name: "anm_rac_type01_run02_stride" is "stride". The viewer names
-    /// clips after their asset path, so the last underscore separated part is what identifies the motion.
+    /// The costume the container was loaded with: the long form when there is one ("0001_00_00" for the
+    /// generic costumes), otherwise the id the container is named after ("Chara_1001_00" is "00").
     /// </summary>
-    public static string MotionTag(AnimationClip clip)
+    public static string CostumeId(UmaContainerCharacter container)
+    {
+        if (container == null) return "";
+        if (!string.IsNullOrEmpty(container.VarCostumeIdLong)) return container.VarCostumeIdLong;
+        string[] parts = container.name.Split('_');
+        return parts.Length >= 3 ? parts[parts.Length - 1] : "";
+    }
+
+    /// <summary>
+    /// The costume's name, the way the costume list shows it ("Race Shorts", "Default"), so two exports of
+    /// the same uma in different outfits do not suggest the same file name.
+    /// </summary>
+    public static string CostumeName(UmaContainerCharacter container)
+    {
+        string costumeId = CostumeId(container);
+        if (string.IsNullOrEmpty(costumeId)) return "";
+
+        string dressName = null;
+        var main = UmaViewerMain.Instance;
+        var entry = container.CharaEntry;
+        if (main != null && main.Costumes != null && entry != null && int.TryParse(costumeId, out int sub))
+        {
+            var dress = main.Costumes.FirstOrDefault(c => c.CharaId == entry.Id && c.BodyTypeSub == sub);
+            if (dress != null) dressName = dress.DressName;
+        }
+
+        // GetCostumeName turns the id into a readable name and falls back to what it is given
+        return Sanitize(UmaViewerUI.GetCostumeName(costumeId, string.IsNullOrEmpty(dressName) ? costumeId : dressName), "");
+    }
+
+    /// <summary>The whole default name for a model export: "special_week_default".</summary>
+    public static string ModelFile(UmaContainerCharacter container)
+    {
+        string name = CharacterName(container);
+        string costume = CostumeName(container);
+        return string.IsNullOrEmpty(costume) ? name : $"{name}_{costume}";
+    }
+
+    /// <summary>
+    /// A part of an asset name that says nothing about the motion: the "anm" prefix, the character the clip
+    /// belongs to ("chr1001") and empty parts.
+    /// </summary>
+    static bool IsNoiseToken(string token, string characterIdToken)
+    {
+        if (string.IsNullOrEmpty(token)) return true;
+        if (token == "anm") return true;
+        if (token.Length > 3 && token.StartsWith("chr") && token.Substring(3).All(char.IsDigit)) return true;
+        return !string.IsNullOrEmpty(characterIdToken) && token == characterIdToken;
+    }
+
+    /// <summary>
+    /// The tail of an animation asset name: "anm_rac_type01_run02_stride" is "stride". Asset names are
+    /// "<prefix>_<group>_<character id>_<variation>_<what it is>", so the last part that is not a number
+    /// and not the character id is what identifies the motion for a human.
+    /// </summary>
+    public static string MotionTag(AnimationClip clip, string characterIdToken = null)
     {
         if (clip == null) return "motion";
         // clip names are asset paths ("3d/motion/racemain/body/type01/anm_rac_type01_run02_stride")
@@ -61,7 +117,18 @@ public static class ExportNaming
         string[] parts = file.Split('_');
         for (int i = parts.Length - 1; i >= 0; i--)
         {
-            if (!string.IsNullOrEmpty(parts[i])) return Sanitize(parts[i], "motion");
+            string part = parts[i];
+            if (IsNoiseToken(part, characterIdToken)) continue;
+            if (part.All(char.IsDigit)) continue;
+
+            // keep what follows it, so "anm_res_chr1001_001" is "res_001" rather than "001"
+            string tail = part;
+            for (int j = i + 1; j < parts.Length; j++)
+            {
+                if (IsNoiseToken(parts[j], characterIdToken)) continue;
+                tail += "_" + parts[j];
+            }
+            return Sanitize(tail, "motion");
         }
         return Sanitize(file, "motion");
     }
@@ -69,6 +136,9 @@ public static class ExportNaming
     /// <summary>The whole default name for a recorded motion: "special_week_stride".</summary>
     public static string MotionFile(UmaContainerCharacter container, AnimationClip clip)
     {
-        return $"{CharacterName(container)}_{MotionTag(clip)}";
+        string characterId = container != null && container.CharaEntry != null
+            ? "chr" + container.CharaEntry.Id
+            : null;
+        return $"{CharacterName(container)}_{MotionTag(clip, characterId)}";
     }
 }

@@ -583,7 +583,7 @@ public static class UmaHeadlessExport
                     Debug.Log($"{Tag} exporting to {exportPath}");
                     if (container is UmaContainerCharacter character)
                     {
-                        Debug.Log($"{Tag} the save dialog would suggest '{ExportNaming.CharacterName(character)}.pmx'");
+                        Debug.Log($"{Tag} the save dialog would suggest '{ExportNaming.ModelFile(character)}.pmx'");
                         ModelExporter.ExportModel(character, exportPath);
                     }
                     else

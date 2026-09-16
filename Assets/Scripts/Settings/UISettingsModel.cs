@@ -252,7 +252,7 @@ public class UISettingsModel : MonoBehaviour
         {
             var path = StandaloneFileBrowser.SaveFilePanel("Save PMX File",
                 Config.Instance.ModelSaveFolder(Config.Instance.MainPath),
-                ExportNaming.CharacterName(container), "pmx");
+                ExportNaming.ModelFile(container), "pmx");
             if (!string.IsNullOrEmpty(path))
             {
                 ModelExporter.ExportModel(container, path);
