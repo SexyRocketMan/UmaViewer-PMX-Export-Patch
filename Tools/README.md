@@ -10,6 +10,7 @@ regression tested from a terminal (and from CI).
 | `blender_verify_pmx.py` | The Blender side of `verify_export.ps1`. |
 | `pmx_inspect.py` | Blender-free PMX inspector/differ (`summary`, `bones`, `weights`, `morphs`, `diff`, `check`). |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator (`summary`, `loop`). |
+| `blender_verify_vmd.py` | Imports a PMX + VMD in Blender and checks the motion's morph keyframes survive. |
 
 ## Quick start
 
@@ -43,7 +44,51 @@ Props/scenes export through the same CLI (`-umaProp` takes an asset path or a un
     -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 ```
 
-## Motion recording (one button, no trimming)
+## Morph naming (one name for the model and the motion)
+
+`MorphNaming` is the single source of truth for morph names, used by both `ModelExporter` (the .pmx)
+and `UnityHumanoidVMDRecorder` (the .vmd). Blender's mmd_tools matches vmd morph keyframes to the
+model's shape keys **by name**, so a name that exists in only one of the two files is dropped on
+import - which is why exported motions used to import as bone keyframes only.
+
+A vmd morph name field is 15 bytes of shift-jis. The stock spelling
+(`Eye_2_L(CloseA)[M_Face]`, 27-30 bytes) can never be stored in one, so `PmxMorphNameMode` chooses:
+
+| mode | example | fits a vmd | notes |
+|---|---|---|---|
+| `0` BlenderCompatible | `Eye_2_L(CloseA)[M_Face]` | no | stock `uma_addon` compatibility only |
+| `1` ShortEnglish | `Eye_2_L` | yes | the fork's old behaviour |
+| `2` Both | both of the above | yes | bridge: addon + motion both work |
+| `3` Unified *(default)* | `Brow_WaraiA_R`, `Eye_XRange_L` | yes | english group + romaji tag + side |
+
+The unified spelling drops the numeric id and the `[M_Face]` mesh suffix, and abbreviates the two
+tags that would not fit (`EyelidHideA/B` -> `LidHideA/B`). Over the full 240 morph set of a character
+it produces 192 unique names with a worst case of exactly 15 bytes, verified with:
+
+```powershell
+uv run Tools/pmx_inspect.py names D:/out/1001_00.pmx --require Eye_XRange_L,Eye_XRange_R,Eye_YRange_L,Eye_YRange_R
+```
+
+`pmx_inspect.py names` fails on names longer than 15 bytes or on duplicates (Blender renames
+duplicates to `.001`, which breaks vmd import again).
+
+### Round-trip check: does the motion drive the model?
+
+```powershell
+blender --background --factory-startup --python Tools/blender_verify_vmd.py -- \
+    --pmx D:/out/1001_00.pmx --vmd D:/out/1001_00.vmd
+```
+
+It imports both, then asserts every morph name in the vmd resolved to a shape key *and* got an
+animation curve. Measured results:
+
+| model | motion | morph names resolved |
+|---|---|---|
+| unified (mode 3) | unified | **160 / 160** ✅ |
+| og tagged (stock 2.1.8) | unified | **0 / 160** ❌ (the mismatch this test exists to catch) |
+| short (mode 1) | short | **160 / 160** ✅ |
+
+
 
 `UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one loop of a clip by
 stepping the animation to exact normalized times (`frame / totalFrames`), pinning

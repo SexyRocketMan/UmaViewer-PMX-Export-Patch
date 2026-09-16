@@ -823,6 +823,14 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 //全モーフフレーム数の書き込み
                 morphRecorderSaved.DisableIntron();
                 if (TrimMorphNumber) { morphRecorderSaved.TrimMorphNumber(); }
+
+                var tooLongMorphs = morphRecorderSaved.MorphDrivers.Keys
+                    .Where(n => !MorphNaming.FitsVmd(n)).ToList();
+                if (tooLongMorphs.Count > 0)
+                {
+                    Debug.LogWarning($"[VMD] {tooLongMorphs.Count} morph(s) have names longer than {MorphNaming.VmdNameByteLimit} bytes and are left out of this vmd "
+                                     + $"(e.g. {string.Join(", ", tooLongMorphs.Take(3))}). Export the model with a name mode whose names fit the vmd field.");
+                }
                 void LoopWithMorphCondition(Action<string, int> action)
                 {
                     for (int i = 0; i < frameNumberSaved; i++)
@@ -1169,7 +1177,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 Debug.Log($"[Morph Debug] Total FacialMorphList count: {FacialMorphList.Count}");
                 for (int i = 0; i < FacialMorphList.Count; i++)
                 {
-                    string morphName = ConvertMorphName(FacialMorphList[i].name);
+                    string morphName = ConvertMorphName(FacialMorphList[i]);
                     Debug.Log($"[Morph Debug] Processing morph: {FacialMorphList[i].name} -> {morphName}");
 
                     if (MorphDrivers.Keys.Contains(morphName))
@@ -1188,6 +1196,11 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     }
                 }
                 Debug.Log($"[Morph Debug] Final MorphDrivers count: {MorphDrivers.Count}");
+                if (Config.Instance.VmdUseEnglishMorphNames && !MorphNaming.ModelAndMotionNamesAgree(Config.Instance.PmxMorphNameMode))
+                {
+                    Debug.LogWarning("[VMD] PmxMorphNameMode 0 (BlenderCompatible) names morphs longer than a vmd morph name field, "
+                                     + "so exported motions cannot drive the exported model. Use mode 3 (Unified) or 2 (Both) for motions.");
+                }
                 foreach (var kvp in MorphDrivers)
                 {
                     Debug.Log($"[Morph Debug]   - {kvp.Key}: {kvp.Value.Morphs.Count} morphs");
@@ -1202,31 +1215,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         }
 
 
-        public string ConvertMorphName(string name)
+        /// <summary>
+        /// The name this morph gets in the vmd. It has to be the same name <see cref="ModelExporter"/>
+        /// wrote into the model, otherwise Blender's mmd_tools silently drops the morph keyframes when
+        /// the motion is imported - both sides therefore go through <see cref="MorphNaming"/>.
+        /// </summary>
+        public string ConvertMorphName(FacialMorph morph)
         {
-            // Clean the name by removing suffixes like "(WaraiA)[M_Face]"
-            string cleanName = name;
-            
-            int parenIndex = cleanName.IndexOf('(');
-            if (parenIndex > 0) 
-            {
-                cleanName = cleanName.Substring(0, parenIndex);
-            }
-            
-            int bracketIndex = cleanName.IndexOf('[');
-            if (bracketIndex > 0) 
-            {
-                cleanName = cleanName.Substring(0, bracketIndex);
-            }
+            string name = morph != null ? morph.name : "";
+            string tag = morph != null ? morph.tag : "";
 
-            // If English morph names are enabled, return the cleaned English name
             if (Config.Instance.VmdUseEnglishMorphNames)
             {
-                return cleanName;
+                return MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode);
             }
 
             // Default behavior: Convert to Japanese MMD standard names
-            if (Config.Instance.VmdMorphConvertSetting.Count > 0)
+            if (Config.Instance.VmdMorphConvertSetting != null && Config.Instance.VmdMorphConvertSetting.Count > 0)
             {
                 var setting = Config.Instance.VmdMorphConvertSetting;
                 foreach (var val in setting)
@@ -1240,9 +1245,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     }
                 }
             }
-            
-            // Fallback to the cleaned name if no conversion is found
-            return cleanName;
+
+            return MorphNaming.ShortName(name);
         }
 
         public void RecrodAllMorph()

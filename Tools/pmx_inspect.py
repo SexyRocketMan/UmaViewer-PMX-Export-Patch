@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -404,6 +405,48 @@ def cmd_check(paths: list[str], args) -> int:
     return 0 if ok else 1
 
 
+def cmd_names(paths: list[str], args) -> int:
+    """Validate morph names: they must be unique and fit a vmd's 15 byte shift-jis name field."""
+    ok = True
+    required = [n for n in (args.require or "").split(",") if n]
+    for path in paths:
+        m = read_model(path)
+        names = m.morph_names
+        lengths = {n: len(n.encode("shift_jis", errors="replace")) for n in names}
+        over = {n: length for n, length in lengths.items() if length > 15}
+        dupes = [n for n, c in Counter(names).items() if c > 1]
+
+        tagged = sum(1 for n in names if "(" in n and "[" in n)
+        if tagged == len(names) and names:
+            scheme = "tagged (BlenderCompatible)"
+        elif all(re.match(r"^(Eye|Brow|Ear|Mouth)_", n) for n in names) and names:
+            scheme = "unified"
+        else:
+            scheme = "short/other"
+
+        print(f"== {path}")
+        print(f"   morphs={len(names)} distinct={len(set(names))} "
+              f"maxBytes={max(lengths.values()) if lengths else 0} scheme={scheme}")
+        if over:
+            ok = False
+            print(f"   !! {len(over)} morph name(s) do not fit a vmd name field (>15 bytes shift-jis):")
+            for n, length in sorted(over.items(), key=lambda kv: -kv[1])[:10]:
+                print(f"        {length:3}B  {n}")
+        if dupes:
+            ok = False
+            print(f"   !! duplicate morph names (Blender would rename them .001 and break vmd import): {dupes[:10]}")
+        if required:
+            missing = [n for n in required if n not in set(names)]
+            if missing:
+                ok = False
+                print(f"   !! required morph name(s) missing: {missing}")
+            else:
+                print(f"   required names present: {required}")
+        if not over and not dupes:
+            print("   all names are unique and within the vmd limit")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -412,11 +455,15 @@ def main() -> int:
         p.add_argument("paths", nargs="+")
         p.add_argument("--material")
         p.add_argument("--grep")
+    p = sub.add_parser("names")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("--require", help="comma separated morph names that must exist")
     p = sub.add_parser("diff")
     p.add_argument("paths", nargs=2)
     args = ap.parse_args()
     return {"summary": cmd_summary, "bones": cmd_bones, "weights": cmd_weights,
-            "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check}[args.cmd](args.paths, args)
+            "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check,
+            "names": cmd_names}[args.cmd](args.paths, args)
 
 
 if __name__ == "__main__":

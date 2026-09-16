@@ -31,6 +31,7 @@ using UnityEngine;
 ///   -umaListProps &lt;f&gt;    print prop/scene assets whose name contains &lt;f&gt; (empty = all), then exit
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
+///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short, 2 both, 3 unified)
 ///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
 ///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
 ///   -umaTimeout &lt;sec&gt;    abort after this many seconds, default 600
@@ -85,6 +86,7 @@ public static class UmaHeadlessExport
         public string ListPropsFilter = "";
         public bool DumpMaterials;
         public string Variant = "";
+        public int MorphNameMode = -1;
         public string RecordVmd = "";
         public int RecordFps = 30;
         public int RecordReduction = 0;
@@ -116,6 +118,7 @@ public static class UmaHeadlessExport
                         break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaVariant": options.Variant = Next(); break;
+                    case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaRecordVmd": options.RecordVmd = Next(); break;
                     case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
                     case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
@@ -230,6 +233,13 @@ public static class UmaHeadlessExport
                     if (main.Characters.Count == 0) return;
 
                     Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets");
+
+                    if (options.MorphNameMode >= 0)
+                    {
+                        Config.Instance.PmxMorphNameMode = (PmxMorphNameMode)options.MorphNameMode;
+                        Debug.Log($"{Tag} morph naming mode overridden to {Config.Instance.PmxMorphNameMode} "
+                                  + $"({(int)Config.Instance.PmxMorphNameMode})");
+                    }
 
                     if (options.ListChars)
                     {

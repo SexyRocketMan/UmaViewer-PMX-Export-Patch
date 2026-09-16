@@ -220,9 +220,12 @@ public class ModelExporter
 
     private static Morph[] ReadMorph(List<Renderer> renderers)
     {
+        // Naming is decided in one place so exported models and exported motions agree, see MorphNaming.
+        var mode = Config.Instance != null ? Config.Instance.PmxMorphNameMode : PmxMorphNameMode.Unified;
+
         // Morph name -> accumulated per-vertex offsets. Keyed by name so a morph that exists on
         // several meshes (e.g. the same eyebrow morph baked onto M_Face and M_Mayu) can either be
-        // kept apart (tagged names) or merged (short names) depending on PmxMorphNameMode.
+        // kept apart (tagged names) or merged (the unified/short spellings) depending on the mode.
         Dictionary<string, Morph> morphsByName = new Dictionary<string, Morph>();
         Dictionary<string, Dictionary<int, Vector3>> morphOffsets = new Dictionary<string, Dictionary<int, Vector3>>();
         List<string> morphOrder = new List<string>();
@@ -250,15 +253,16 @@ public class ModelExporter
                 mesh.GetBlendShapeFrameVertices(i, 0, deltaVertices, deltaNormals, deltaTangents);
 
                 string rawName = mesh.GetBlendShapeName(i);
+                MorphNaming.TryParse(rawName, null, out MorphNaming.Parts parts);
 
-                foreach (string morphName in ExportedMorphNames(rawName))
+                foreach (string morphName in MorphNaming.NamesFor(rawName, null, mode))
                 {
                     if (!morphsByName.TryGetValue(morphName, out Morph targetMorph))
                     {
                         targetMorph = new Morph();
                         targetMorph.Name = targetMorph.NameEn = morphName;
                         targetMorph.Type = MorphType.MorphTypeVertex;
-                        targetMorph.Category = GetMorphCategory(morphName);
+                        targetMorph.Category = GetMorphCategory(parts);
                         targetMorph.MorphDatas = new VertexMorphData[0];
                         morphsByName[morphName] = targetMorph;
                         morphOffsets[morphName] = new Dictionary<int, Vector3>();
@@ -296,58 +300,19 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// Strips the "(Tag)[Mesh]" suffix that AddBlendShape appends to every morph it bakes.
+    /// Morph categories come from the parsed family, not from the spelling of the exported name:
+    /// the unified spelling renames "EyeBrow_*" to "Brow_*", which a name sniff would classify as
+    /// "other".
     /// </summary>
-    private static string ToShortMorphName(string rawName)
+    private static MorphCategory GetMorphCategory(MorphNaming.Parts parts)
     {
-        string cleanName = rawName;
-
-        int parenIndex = cleanName.IndexOf('(');
-        if (parenIndex > 0) cleanName = cleanName.Substring(0, parenIndex);
-        int bracketIndex = cleanName.IndexOf('[');
-        if (bracketIndex > 0) cleanName = cleanName.Substring(0, bracketIndex);
-
-        // Strip Blender duplicate suffixes just in case
-        if (cleanName.Contains(".00"))
+        switch (parts != null ? parts.Family : null)
         {
-            cleanName = cleanName.Substring(0, cleanName.LastIndexOf('.'));
+            case "Mouth": return MorphCategory.MorphCatMouth;
+            case "EyeBrow": return MorphCategory.MorphCatEyebrow;
+            case "Eye": return MorphCategory.MorphCatEye;
+            default: return MorphCategory.MorphCatOther;
         }
-
-        return cleanName.Trim();
-    }
-
-    /// <summary>
-    /// The morph names a single Unity blend shape is exported under.
-    /// The "(Tag)[Mesh]" suffix is part of the morph name contract that the Blender uma_addon
-    /// addon matches on by exact name (e.g. "Eye_20_R(XRange)[M_Face]" in its "Refine Structure"
-    /// operator), so it must not be stripped unconditionally - stripping it silently breaks the
-    /// eye controls that operator builds. See <see cref="PmxMorphNameMode"/>.
-    /// </summary>
-    private static IEnumerable<string> ExportedMorphNames(string rawName)
-    {
-        var mode = Config.Instance != null ? Config.Instance.PmxMorphNameMode : PmxMorphNameMode.BlenderCompatible;
-
-        if (mode == PmxMorphNameMode.ShortEnglish)
-        {
-            yield return ToShortMorphName(rawName);
-            yield break;
-        }
-
-        yield return rawName;
-
-        if (mode == PmxMorphNameMode.Both)
-        {
-            string shortName = ToShortMorphName(rawName);
-            if (shortName != rawName) yield return shortName;
-        }
-    }
-
-    private static MorphCategory GetMorphCategory(string name)
-    {
-        if (name.Contains("Mouth_")) return MorphCategory.MorphCatMouth;
-        if (name.Contains("EyeBrow_")) return MorphCategory.MorphCatEyebrow;
-        if (name.Contains("Eye_")) return MorphCategory.MorphCatEye;
-        return MorphCategory.MorphCatOther;
     }
 
     private static Bone[] ReadBones(List<Transform> bonelist)

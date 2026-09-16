@@ -46,8 +46,8 @@ public class Config
     public string VmdUseEnglishMorphNamesTip = "True = uses the same morph names as exported models, false = uses japanese names";
     public bool VmdUseEnglishMorphNames = true;
 
-    public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the Blender addon matches on (Eye_2_L(CloseA)[M_Face]); 1 = short english names, matches the vmd morph names (Eye_2_L); 2 = both, tagged morphs plus short english aliases";
-    public PmxMorphNameMode PmxMorphNameMode = PmxMorphNameMode.BlenderCompatible;
+    public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and vmd motions. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but is too long for a vmd morph name; 1 = short english names (Eye_2_L); 2 = both, tagged morphs plus short english aliases; 3 = unified, descriptive and vmd sized (Brow_WaraiA_R)";
+    public PmxMorphNameMode PmxMorphNameMode = PmxMorphNameMode.Unified;
 
     public string AntiAliasingTip = "Display, screenshot antialiasing level. 0 - no AA, 1 - 2x MSAA, 2 - 4x MSAA, 3 - 8x MSAA";
     public int AntiAliasing = 2;
@@ -282,8 +282,9 @@ public enum PmxMorphNameMode
 {
     /// <summary>
     /// Keeps the "(Tag)[Mesh]" suffix produced for every morph (e.g. "Eye_20_R(XRange)[M_Face]").
-    /// This is what the original UmaViewer exported and what the Blender uma_addon's
-    /// "Refine Structure" operator looks up by exact name, so it is the compatible default.
+    /// This is what the original UmaViewer exported and what the stock Blender uma_addon looks up by
+    /// exact name, but it is 27-30 bytes and a vmd morph name field only holds 15, so motions cannot
+    /// drive these morphs. Kept for compatibility with the stock addon.
     /// </summary>
     BlenderCompatible = 0,
 
@@ -291,7 +292,14 @@ public enum PmxMorphNameMode
     ShortEnglish = 1,
 
     /// <summary>Emits both the tagged and the short name for every morph.</summary>
-    Both = 2
+    Both = 2,
+
+    /// <summary>
+    /// Descriptive, unique and within the vmd byte limit: english group + romaji tag + side
+    /// (e.g. "Brow_WaraiA_R", "Eye_XRange_L"). One name for the model and the motion, see
+    /// <see cref="MorphNaming"/>. Default.
+    /// </summary>
+    Unified = 3
 }
 
 [Serializable]
