@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
@@ -208,7 +208,9 @@ public class UnityCameraVMDRecorder : MonoBehaviour
     /// 呼び出す際は先にStopRecordingを呼び出すこと
     /// </summary>
     /// <param name="filePath">保存先の絶対ファイルパス</param>
-    public void SaveVMD(string filePath = null, int KeyReductionLevel = 1)
+    /// <param name="keyReductionLevel">1 = every frame, 2 = every other frame, ... 0 (default) keeps
+    /// whatever level is already set on the component.</param>
+    public void SaveVMD(string filePath = null, int keyReductionLevel = 0)
     {
         filePath ??= $"{Application.dataPath}{FileSavePath}/{string.Format("Camera_{0}.vmd", DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"))}";
         if (IsRecording)
@@ -217,6 +219,9 @@ public class UnityCameraVMDRecorder : MonoBehaviour
             return;
         }
 
+        // The parameter must not share a name with the field, or it shadows it and the level set on the
+        // component is silently ignored.
+        if (keyReductionLevel > 0) { KeyReductionLevel = keyReductionLevel; }
         if (KeyReductionLevel <= 0) { KeyReductionLevel = 1; }
 
         const string modelName = "カメラ・照明";

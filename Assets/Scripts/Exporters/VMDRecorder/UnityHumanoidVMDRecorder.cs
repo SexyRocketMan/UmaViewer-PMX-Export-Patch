@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using System.IO;
@@ -782,7 +782,9 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     /// </summary>
     /// <param name="modelName">VMDファイルに記載される専用モデル名</param>
     /// <param name="filePath">保存先の絶対ファイルパス</param>
-    public void SaveVMD(string modelName, string filePath, int KeyReductionLevel = 1)
+    /// <param name="keyReductionLevel">1 = every frame, 2 = every other frame, ... 0 (default) keeps
+    /// whatever level is already set on the component (see <see cref="SaveLiveVMD"/>).</param>
+    public void SaveVMD(string modelName, string filePath, int keyReductionLevel = 0)
     {
         if (IsRecording)
         {
@@ -790,6 +792,9 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             return;
         }
 
+        // The parameter must not share a name with the field: SaveLiveVMD assigns the field and then
+        // calls this method, and a shadowing parameter defaulted it back to 1.
+        if (keyReductionLevel > 0) { KeyReductionLevel = keyReductionLevel; }
         if (KeyReductionLevel <= 0) { KeyReductionLevel = 1; }
 
         Debug.Log(transform.name + "VMDファイル作成開始");

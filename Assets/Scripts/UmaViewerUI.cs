@@ -1120,6 +1120,19 @@ public class UmaViewerUI : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Records one clean loop of the animation that is currently playing and saves it, so the result
+    /// needs no trimming in Blender.
+    ///
+    /// The recording is done by <see cref="UnityHumanoidVMDRecorder.RecordCurrentLoop"/>: it leaves the
+    /// animation playing at a pinned frame length, samples once per frame and copies the first frame
+    /// over the last, so the frame count is exactly clip.length * fps + 1 and the loop closes exactly.
+    ///
+    /// Do not reset or seek the animators first. Seeking them with Animator.Play resets every bone the
+    /// played clip does not animate (writeDefaultValues), which is what made an earlier version of this
+    /// button record a single frozen pose - and sampling before the animator ran once put a rest-pose
+    /// frame at the start of the motion.
+    /// </summary>
     public void AutoRecordVMD()
     {
         var container = Builder.CurrentUMAContainer;
@@ -1129,63 +1142,66 @@ public class UmaViewerUI : MonoBehaviour
             return;
         }
 
-        var animator = container.UmaAnimator;
-        var animator_face = container.UmaFaceAnimator;
-        var animator_cam = Builder.AnimationCameraAnimator;
-
-        // Reset animation to 0 and pause=
-        animator.speed = 0f;
-        animator.Play(0, 0, 0f);
-        animator.Play(0, 2, 0f);
-        
-        if (animator_cam != null && animator_cam.runtimeAnimatorController)
+        var rootbone = container.transform.Find("Position");
+        if (rootbone == null)
         {
-            animator_cam.speed = 0f;
-            animator_cam.Play(0, -1, 0f);
-        }
-        
-        if (animator_face != null)
-        {
-            animator_face.speed = 0f;
-            animator_face.Play(0, 0, 0f);
-            animator_face.Play(0, 1, 0f);
+            ShowMessage("Model has no 'Position' bone to record from", UIMessageType.Error);
+            return;
         }
 
-        animator.Update(0f);
-        if (animator_cam != null) animator_cam.Update(0f);
-        if (animator_face != null) animator_face.Update(0f);
-
-        RecordVMD(); 
-
-        // Resume playback at the user's selected speed
-        float targetSpeed = AnimationSettings.SpeedSlider.value;
-        animator.speed = targetSpeed;
-        if (animator_cam != null) animator_cam.speed = targetSpeed;
-        if (animator_face != null) animator_face.speed = targetSpeed;
-
-        ShowMessage("Auto-recording started. Please do not interact until finished.", UIMessageType.Success);
-
-        // Monitor and finish automatically
-        StartCoroutine(AutoRecordWaitAndFinishCoroutine());
-    }
-
-    private IEnumerator AutoRecordWaitAndFinishCoroutine()
-    {
-        var container = Builder.CurrentUMAContainer;
-        if (container == null || container.UmaAnimator == null) yield break;
-
-        var animator = container.UmaAnimator;
-        
-        // Wait while the animation is actively playing and hasn't reached the end
-        while (container != null && animator != null && animator.speed > 0f && animator.GetCurrentAnimatorStateInfo(0).normalizedTime < 1f)
+        var clip = container.UmaAnimator.GetCurrentAnimatorClipInfo(0)
+            .Select(info => info.clip).FirstOrDefault(c => c != null);
+        if (clip == null)
         {
-            yield return null;
+            ShowMessage("No animation is playing", UIMessageType.Error);
+            return;
         }
 
-        // Wait for FixedUpdate cycles after hitting 1.0.
-        yield return new WaitForFixedUpdate();
-        //yield return new WaitForFixedUpdate();
-        RecordVMD(); 
+        var buttonText = AnimationSettings.VMDButton.GetComponentInChildren<TextMeshProUGUI>();
+        var recorder = rootbone.GetComponent<UnityHumanoidVMDRecorder>();
+        if (recorder == null)
+        {
+            recorder = rootbone.gameObject.AddComponent<UnityHumanoidVMDRecorder>();
+        }
+        recorder.KeyReductionLevel = Config.Instance.VmdKeyReductionLevel;
+        recorder.Initialize();
+
+        var camera = Builder.AnimationCamera;
+        UnityCameraVMDRecorder cameraRecorder = null;
+        if (camera && camera.enabled)
+        {
+            cameraRecorder = camera.GetComponent<UnityCameraVMDRecorder>();
+            if (cameraRecorder == null) cameraRecorder = camera.gameObject.AddComponent<UnityCameraVMDRecorder>();
+            cameraRecorder.Initialize();
+            cameraRecorder.StartRecording();
+        }
+
+        if (buttonText != null) buttonText.text = "Recording loop...";
+        ShowMessage($"Recording one loop of {clip.name} ({clip.length:F2}s). Please do not interact.", UIMessageType.Default);
+
+        StartCoroutine(recorder.RecordCurrentLoop(clip, 30, () =>
+        {
+            if (buttonText != null) buttonText.text = "Record VMD";
+
+            var extensions = new[] {
+                new ExtensionFilter("Vocaloid Motion Data", "vmd"),
+                new ExtensionFilter("All Files", "*" )
+            };
+
+            string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file", Application.dataPath, container.name, extensions);
+            if (!string.IsNullOrEmpty(path))
+            {
+                recorder.SaveVMD(container.name, path);
+                ShowMessage($"VMD is saved in {path}", UIMessageType.Success);
+            }
+
+            if (cameraRecorder != null && cameraRecorder.IsRecording)
+            {
+                cameraRecorder.StopRecording();
+                string cameraPath = StandaloneFileBrowser.SaveFilePanel("Save the camera VMD file", Application.dataPath, $"{container.name}_Camera", extensions);
+                if (!string.IsNullOrEmpty(cameraPath)) cameraRecorder.SaveVMD(cameraPath);
+            }
+        }));
     }
 
     public void UpdateLiveMode(int val)
