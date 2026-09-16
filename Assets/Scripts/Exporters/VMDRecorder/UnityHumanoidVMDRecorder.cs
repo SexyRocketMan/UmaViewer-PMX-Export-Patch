@@ -631,6 +631,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         StartRecording();
         try
         {
+            // Initialize() disables the animator, resets the pose and re-enables it; depending on where
+            // the frame boundary falls, the pose read here can still be that rest pose, which is the
+            // single T-pose-looking frame that used to appear at the start of a recording (measured:
+            // a 0.85 rotation jump out of frame 0 against a typical step of 0.24). Force one evaluation
+            // so the pose is animation driven before anything is sampled.
+            foreach (var layer in layers)
+            {
+                layer.Animator.Update(0f);
+            }
+
             for (int frame = 0; frame <= totalFrames; frame++)
             {
                 // One fixed step advances the animation by exactly 1/fps (captureDeltaTime is pinned),

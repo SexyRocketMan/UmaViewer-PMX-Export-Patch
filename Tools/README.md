@@ -71,6 +71,37 @@ Props/scenes export through the same CLI (`-umaProp` takes an asset path or a un
     -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 ```
 
+### Which scenes are actually affected
+
+`UmaContainerProp` applies no material fixes at all, so a scene renders with whatever its bundle
+ships. `-umaScanProps` loads a set of scenes in turn and prints one line of material health each, so
+the broken ones can be found instead of guessed:
+
+```powershell
+./Tools/headless_export.ps1 -ScanProps "3d/env/home" -ScanCount 12
+```
+
+Each line has `renderers`, material `slots`, how many are `textureless` (no `_MainTex`), how many
+materials have no `_MainTex` property at all, how many have a missing shader, and what the texture set
+resolver did (`textureSet=<variant> of [...] fixed=<slots>`). Measured so far:
+
+| scene | slots | textureless before | after the resolver |
+|---|---|---|---|
+| `home10001/main/pfb_env_home10001_main000_000` | 20 | **12** (every `base01` surface) | 1 (a runtime mirror) |
+| `cutin1049_00/pfb_env_cutin1049_00_00_room00` | 20 | 0 | nothing to do |
+| `race00000/race00000_8000/pfb_env_race00000_8000_000` | 1 | 0 | nothing to do |
+
+So this is specific to scenes where the game assigns a texture set at runtime, not universal, and the
+resolver correctly does nothing elsewhere.
+
+### Known harmless warning
+
+Importing a recorded motion prints `WARNING: not found bone Ankle_L_IK` (and `Ankle_R_IK`). The
+recorder calls the foot IK bones `Ankle_L_IK`/`Ankle_R_IK`, while the model's own bones are
+`Ankle_L_IK_Handle` (17 bytes, which does not fit a vmd's 15 byte name field). The exported PMX
+contains **no IK constrained bones at all** (`pmx_inspect.py bones` prints no `IK->`), so that track
+has nothing to drive and dropping it changes nothing.
+
 ## Morph naming (one name for the model and the motion)
 
 `MorphNaming` is the single source of truth for morph names, used by both `ModelExporter` (the .pmx)

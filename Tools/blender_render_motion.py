@@ -22,7 +22,7 @@ import shutil
 import sys
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 MMD_TOOLS = "bl_ext.blender_org.mmd_tools"
 
@@ -45,6 +45,9 @@ def parse_args():
     parser.add_argument("--view", default="upper", choices=["upper", "head", "full"],
                         help="what to frame the camera on")
     parser.add_argument("--yaw", type=float, default=18.0, help="camera rotation around the model, degrees")
+    parser.add_argument("--apose", type=float, default=38.5,
+                        help="rotate the arms from the model's T-pose rest into the A-pose the recorder "
+                             "captures against (UnityHumanoidVMDRecorder uses 38.5); 0 disables it")
     parser.add_argument("--json", default="")
     return parser.parse_args(argv)
 
@@ -73,7 +76,48 @@ def import_motion(path, scale, armature):
         obj.select_set(False)
     armature.select_set(True)
     bpy.context.view_layer.objects.active = armature
-    bpy.ops.mmd_tools.import_vmd(filepath=path, scale=scale)
+    # "Treat Current Pose as Rest Pose": the recorder captures its reference pose with the arms already
+    # rotated into an A-pose, so the motion only lands correctly if that pose is the rest pose.
+    bpy.ops.mmd_tools.import_vmd(filepath=path, scale=scale, use_pose_mode=True)
+
+
+def rotate_about_armature_axis(pose_bone, degrees, axis="Y"):
+    """Rotate a pose bone in place, around an armature-space axis through its own head."""
+    matrix = pose_bone.matrix.copy()
+    head = matrix.translation.copy()
+    rotation = (Matrix.Translation(head)
+                @ Matrix.Rotation(math.radians(degrees), 4, axis)
+                @ Matrix.Translation(-head))
+    pose_bone.matrix = rotation @ matrix
+
+
+def apply_apose(armature, degrees):
+    """Pose the arms from the T-pose rest into an A-pose, picking the direction that lowers the hands.
+
+    The recorder rotates the upper arms by 38.5 degrees before it captures its ghosts, so a motion
+    recorded from the viewer is authored against an A-pose. Which way to rotate depends on the bone
+    axes the importer produced, so this measures instead of guessing.
+    """
+    if degrees <= 0:
+        return 0.0
+    view_layer = bpy.context.view_layer
+    for index, arm_name in enumerate(("Arm_L", "Arm_R")):
+        arm = armature.pose.bones.get(arm_name)
+        if arm is None:
+            continue
+        wrist = armature.pose.bones.get(arm_name.replace("Arm", "Wrist"))
+        if wrist is None:
+            continue
+
+        arm.rotation_mode = "QUATERNION"
+        before = (armature.matrix_world @ wrist.head).z
+        rotate_about_armature_axis(arm, degrees)
+        view_layer.update()
+        after = (armature.matrix_world @ wrist.head).z
+        if after > before:  # wrong way, go twice the other way round
+            rotate_about_armature_axis(arm, -2 * degrees)
+            view_layer.update()
+    return degrees
 
 
 def world_bounds(objects):
@@ -213,6 +257,10 @@ def main():
     scene = bpy.context.scene
     if args.vmd:
         try:
+            if args.apose > 0 and armature is not None:
+                apply_apose(armature, args.apose)
+                result["apose_degrees"] = args.apose
+                print(f"   arms posed to A-pose by {args.apose} degrees before the motion import")
             import_motion(args.vmd, args.scale, armature)
             print(f"   motion applied, scene frames {scene.frame_start}..{scene.frame_end}")
         except Exception as exc:  # noqa: BLE001

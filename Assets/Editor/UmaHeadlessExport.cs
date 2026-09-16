@@ -31,6 +31,9 @@ using UnityEngine;
 ///   -umaListChars        print every character id together with its costume ids, then exit
 ///   -umaListCostumes     print the costume ids of -umaChar, then exit
 ///   -umaListProps &lt;f&gt;    print prop/scene assets whose name contains &lt;f&gt; (empty = all), then exit
+///   -umaScanProps &lt;f&gt;    load every prop/scene matching &lt;f&gt; in turn and report its material health
+///                        (textureless slots, missing shaders, resolved texture set), then exit
+///   -umaScanCount &lt;n&gt;    how many props to scan, default 10
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short, 2 both, 3 unified)
@@ -65,6 +68,7 @@ public static class UmaHeadlessExport
     private const string KeyVmdDone = "UmaHeadlessExport.VmdDone";
     private const string KeyVmdFrames = "UmaHeadlessExport.VmdFrames";
     private const string KeyMotionLoaded = "UmaHeadlessExport.MotionLoaded";
+    private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
 
     private enum Stage
     {
@@ -91,6 +95,8 @@ public static class UmaHeadlessExport
         public bool ListCostumes;
         public bool ListProps;
         public string ListPropsFilter = "";
+        public string ScanProps = "";
+        public int ScanCount = 10;
         public bool DumpMaterials;
         public string Variant = "";
         public int MorphNameMode = -1;
@@ -126,6 +132,8 @@ public static class UmaHeadlessExport
                         // not another -umaX switch
                         if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListPropsFilter = argv[++i];
                         break;
+                    case "-umaScanProps": options.ScanProps = Next(); break;
+                    case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
@@ -154,6 +162,8 @@ public static class UmaHeadlessExport
 
     private static int _settleFramesLeft;
     private static DateTime _playModeEnteredUtc;
+    private static DateTime _runStartedUtc;
+    private static int _playModeRetries;
 
     /// <summary>Entry point for -executeMethod.</summary>
     public static void Run()
@@ -171,10 +181,11 @@ public static class UmaHeadlessExport
         }
 
         if (!options.ListChars && !options.ListCostumes && !options.ListProps
+            && string.IsNullOrEmpty(options.ScanProps)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
-                           + "or -umaListChars / -umaListCostumes / -umaListProps");
+                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaScanProps");
             EditorApplication.Exit(2);
             return;
         }
@@ -189,6 +200,8 @@ public static class UmaHeadlessExport
         SessionState.SetString(KeyOptions, JsonUtility.ToJson(options));
         SessionState.SetString(KeyDeadline, DateTime.UtcNow.AddSeconds(options.TimeoutSeconds).Ticks.ToString());
         SessionState.SetString(KeyOutPath, "");
+        _runStartedUtc = DateTime.UtcNow;
+        _playModeRetries = 0;
         CurrentStage = Stage.WaitPlayMode;
 
         Debug.Log($"{Tag} opening scene {options.ScenePath}");
@@ -231,11 +244,28 @@ public static class UmaHeadlessExport
             switch (stage)
             {
                 case Stage.WaitPlayMode:
-                    if (!EditorApplication.isPlaying) return;
-                    _playModeEnteredUtc = DateTime.UtcNow;
-                    Debug.Log($"{Tag} play mode entered");
-                    CurrentStage = Stage.WaitStartup;
-                    break;
+                    if (EditorApplication.isPlaying)
+                    {
+                        _playModeEnteredUtc = DateTime.UtcNow;
+                        Debug.Log($"{Tag} play mode entered");
+                        CurrentStage = Stage.WaitStartup;
+                        break;
+                    }
+
+                    // Entering play mode is cancelled by a script recompile while the editor is starting,
+                    // which otherwise leaves the run sitting here until the timeout.
+                    if ((DateTime.UtcNow - _runStartedUtc).TotalSeconds > 20)
+                    {
+                        _playModeRetries++;
+                        if (_playModeRetries > 6)
+                        {
+                            Fail("play mode never started; a script change while the editor was starting cancels it");
+                            return;
+                        }
+                        Debug.Log($"{Tag} play mode has not started yet, asking again ({_playModeRetries})");
+                        EditorApplication.EnterPlaymode();
+                    }
+                    return;
 
                 case Stage.WaitStartup:
                 {
@@ -274,6 +304,31 @@ public static class UmaHeadlessExport
                     {
                         PrintProps(options.ListPropsFilter);
                         Succeed();
+                        return;
+                    }
+
+                    if (!string.IsNullOrEmpty(options.ScanProps))
+                    {
+                        int index = SessionState.GetInt(KeyScanIndex, 0);
+                        var candidates = ScanCandidates(options.ScanProps, options.ScanCount);
+                        if (candidates.Count == 0)
+                        {
+                            Fail($"no props match '{options.ScanProps}'");
+                            return;
+                        }
+                        if (index >= candidates.Count)
+                        {
+                            Debug.Log($"{Tag} scanned {candidates.Count} prop(s)");
+                            Succeed();
+                            return;
+                        }
+
+                        var entry = candidates[index];
+                        SessionState.SetInt(KeyScanIndex, index + 1);
+                        builder.UnloadProp();
+                        builder.LoadProp(entry);
+                        var container = builder.CurrentOtherContainer;
+                        Debug.Log($"{Tag} [{index + 1}/{candidates.Count}] {entry.Name}  {SummarizeMaterials(container)}");
                         return;
                     }
 
@@ -571,6 +626,48 @@ public static class UmaHeadlessExport
         var row = UmaDatabaseController.Instance?.CharaData?.FirstOrDefault(item => Convert.ToInt32(item["id"]) == id);
         if (row == null) return null;
         return new CharaEntry { Id = id, Name = row["charaname"].ToString(), EnName = "" };
+    }
+
+    /// <summary>Props/scenes to scan, most useful ones first, capped at <paramref name="count"/>.</summary>
+    private static List<UmaDatabaseEntry> ScanCandidates(string filter, int count)
+    {
+        return UmaViewerMain.Instance.AbList.Values
+            .Where(e => e.Name.StartsWith("3d/env", StringComparison.OrdinalIgnoreCase))
+            .Where(e => Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
+            .Where(e => e.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            .Where(e => File.Exists(e.Path)) // do not spend the scan on assets that were never downloaded
+            .OrderBy(e => e.Name)
+            .Take(Mathf.Max(1, count))
+            .ToList();
+    }
+
+    /// <summary>One line describing whether a loaded prop/scene will render with its textures.</summary>
+    private static string SummarizeMaterials(UmaContainer container)
+    {
+        if (container == null) return "!! no container";
+        var renderers = container.GetComponentsInChildren<Renderer>(true);
+        int slots = 0, textureless = 0, noMainTexProperty = 0, missingShader = 0;
+        var shaders = new HashSet<string>();
+        foreach (var renderer in renderers)
+        {
+            foreach (var material in renderer.sharedMaterials)
+            {
+                slots++;
+                if (material == null) { textureless++; continue; }
+                string shaderName = material.shader != null ? material.shader.name : "<none>";
+                shaders.Add(shaderName);
+                if (material.shader == null || shaderName == "Hidden/InternalErrorShader") { missingShader++; continue; }
+                if (!material.HasProperty("_MainTex")) { noMainTexProperty++; continue; }
+                if (material.GetTexture("_MainTex") == null) textureless++;
+            }
+        }
+
+        var textureSet = (container as UmaContainerProp)?.TextureSet;
+        string resolved = textureSet != null && textureSet.Variants.Count > 0
+            ? $"textureSet={textureSet.CurrentVariant} of [{string.Join(",", textureSet.Variants)}] fixed={textureSet.AppliedSlots}"
+            : "textureSet=none";
+        return $"renderers={renderers.Length} slots={slots} textureless={textureless} "
+               + $"noMainTexProp={noMainTexProperty} missingShader={missingShader} shaders={shaders.Count} {resolved}";
     }
 
     /// <summary>The container the current run is operating on (character or prop/scene).</summary>

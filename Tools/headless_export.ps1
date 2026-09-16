@@ -27,6 +27,8 @@ param(
     [switch]$ListCostumes,
     [switch]$ListProps,
     [string]$ListPropsFilter = "",
+    [string]$ScanProps = "",
+    [int]$ScanCount = 10,
     [switch]$DumpMaterials,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
@@ -58,10 +60,44 @@ function Find-UnityExe {
     throw "Could not find Unity.exe. Pass -UnityExe explicitly."
 }
 
+function Get-ProjectUnityProcesses {
+    param([string]$Project)
+    Get-CimInstance Win32_Process -Filter "Name = 'Unity.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Project*" }
+}
+
+function Clear-StaleUnityLock {
+    param([string]$Project)
+    $lock = Join-Path $Project "Temp/UnityLockfile"
+    if (-not (Test-Path $lock)) { return }
+    if (Get-ProjectUnityProcesses -Project $Project) { return }
+    Remove-Item $lock -Force -ErrorAction SilentlyContinue
+    Write-Host "Removed a stale Unity lockfile left by an earlier run." -ForegroundColor Yellow
+}
+
+function Wait-UnityExit {
+    <#
+      Unity's launcher returns (and the runner writes its result) before the editor process has fully
+      released the project. Starting the next run while that is still happening fails with "project
+      already open in another instance", so wait for it when chaining exports.
+    #>
+    param([string]$Project, [int]$Seconds = 120)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $running = Get-ProjectUnityProcesses -Project $Project
+        $lock = Join-Path $Project "Temp/UnityLockfile"
+        if (-not $running -and -not (Test-Path $lock)) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    Write-Host "A Unity process still holds $Project after $Seconds s." -ForegroundColor Yellow
+    return $false
+}
+
 if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
+Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ScanProps -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -94,6 +130,9 @@ if ($ListCostumes) { $arguments += "-umaListCostumes" }
 if ($ListProps) {
     $arguments += "-umaListProps"
     if ($ListPropsFilter) { $arguments += $ListPropsFilter }
+}
+if ($ScanProps) {
+    $arguments += @("-umaScanProps", $ScanProps, "-umaScanCount", $ScanCount)
 }
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
 if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
@@ -141,4 +180,6 @@ if ($marker.Line -match "FAILED") {
     exit 1
 }
 
+# leave the project free for the next run in a chain (run_workflow.ps1 starts several)
+[void](Wait-UnityExit -Project $ProjectPath)
 exit 0

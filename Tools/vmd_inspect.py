@@ -158,6 +158,28 @@ def cmd_motion(paths: list[str], args) -> int:
         elif moving_pos == 0:
             print(f"   note: no bone translates, only {moving_rot} rotate")
 
+        # A recording whose first frame is an outlier pose (a T-pose or a rest pose captured before the
+        # animation started) shows up as one huge step out of frame 0 and a matching one at the loop seam.
+        frames = sorted({k.frame for k in motion.bone_keys})
+        if len(frames) >= 4:
+            steps = []
+            for index in range(len(frames) - 1):
+                worst = 0.0
+                for keys in per_bone.values():
+                    by_frame = {k.frame: k.rotation for k in keys}
+                    a, b = by_frame.get(frames[index]), by_frame.get(frames[index + 1])
+                    if a is None or b is None:
+                        continue
+                    worst = max(worst, min(max(abs(x - y) for x, y in zip(a, b)),
+                                           max(abs(x + y) for x, y in zip(a, b))))
+                steps.append(worst)
+            typical = sorted(steps[1:])[len(steps[1:]) // 2]
+            print(f"   first step {steps[0]:.4f}, seam step {steps[-1]:.4f}, typical step {typical:.4f}")
+            if steps[0] > args.first_step_factor * typical and steps[0] - typical > 0.02:
+                print(f"   !! the first frame is {steps[0] / typical:.1f}x the typical step: it looks like a "
+                      f"pose the animation never had (a T-pose or rest pose captured before playback)")
+                ok = False
+
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -260,6 +282,9 @@ def main() -> int:
     motion.add_argument("--position-tolerance", type=float, default=1e-4)
     motion.add_argument("--rotation-tolerance", type=float, default=1e-4)
     motion.add_argument("--min-rotating-bones", type=int, default=2)
+    motion.add_argument("--first-step-factor", type=float, default=2.5,
+                        help="how much bigger than a typical step the first frame may be before it "
+                             "counts as a pose pop")
     loop = sub.add_parser("loop")
     loop.add_argument("paths", nargs="+")
     loop.add_argument("--tolerance", type=float, default=1e-4,

@@ -132,6 +132,14 @@ def cmd_frames(args) -> int:
           f"{last['distinct_colours']}")
 
     if len(files) >= 3:
+        second = load(os.path.join(directory, files[1]))
+        jump, jump_changed = mean_abs_difference(load(os.path.join(directory, files[0])), second)
+        print(f"   start: first vs second frame differ by {jump:.4f} mean ({100 * jump_changed:.1f}% of pixels)")
+        if jump > args.max_first_frame_jump:
+            failures.append(f"the first frame differs from the second by {jump:.4f} "
+                            f"(> {args.max_first_frame_jump}): that is a pose pop, typically a T-pose "
+                            f"recorded before the animation started, or a rest pose mismatch")
+
         middle = load(os.path.join(directory, files[len(files) // 2]))
         difference, changed = mean_abs_difference(load(os.path.join(directory, files[0])), middle)
         print(f"   motion: first vs middle differ by {difference:.4f} mean ({100 * changed:.1f}% of pixels)")
@@ -190,6 +198,9 @@ def main() -> int:
         p.add_argument("--min-value", type=float, default=0.05)
         p.add_argument("--min-motion", type=float, default=0.0005)
         p.add_argument("--max-loop-difference", type=float, default=0.01)
+        p.add_argument("--max-first-frame-jump", type=float, default=0.02,
+                       help="how much the first frame may differ from the second; a bigger jump means "
+                            "the first frame caught a pose the animation never had (T-pose pop)")
         p.add_argument("--report", type=int, default=6)
 
     p = sub.add_parser("frames"); p.add_argument("target"); add_thresholds(p)

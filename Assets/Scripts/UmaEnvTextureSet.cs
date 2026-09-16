@@ -43,7 +43,7 @@ public class UmaEnvTextureSet : MonoBehaviour
     private class Slot
     {
         public Material Material;
-        public string Suffix;
+        public string Key;
     }
 
     private readonly List<Slot> _slots = new List<Slot>();
@@ -114,67 +114,123 @@ public class UmaEnvTextureSet : MonoBehaviour
             return;
         }
 
-        // The stem is derived from the asset name, but the variant token of the name is unreliable
-        // across scene families, so try both readings and keep whichever resolves something.
-        foreach (string stem in CandidateStems(assetName))
+        // Each textureless material is resolved against the scene it belongs to, which is written in the
+        // material's own name - not necessarily the prefab's. The home scenes all share
+        // "mtl_env_home10001_main000_000_base01", so looking textures up under the loading prefab's stem
+        // ("..._main003") finds nothing and the surface stays white.
+        var missing = new List<(string Material, string Stem, string Suffix)>();
+        foreach (var pair in textureless)
         {
-            var resolved = BuildVariants(main, stem, stuckWithoutTextureSlot);
-            if (resolved.Count == 0) continue;
-
-            Stem = stem;
-            foreach (var pair in resolved) _variants[pair.Key] = pair.Value;
-
-            foreach (string materialName in stuckWithoutTextureSlot)
+            if (TrySplitMaterialName(pair.Key, out string materialStem, out string suffix))
             {
-                string suffix = MaterialSuffix(materialName, stem);
-                if (string.IsNullOrEmpty(suffix)) continue;
-                if (!_variants.Values.Any(v => v.ContainsKey(suffix)))
+                missing.Add((pair.Key, materialStem, suffix));
+                continue;
+            }
+            // fall back to the prefab's name for materials that do not follow the convention
+            foreach (string stem in CandidateStems(assetName))
+            {
+                string fallbackSuffix = MaterialSuffix(pair.Key, stem);
+                if (!string.IsNullOrEmpty(fallbackSuffix))
                 {
-                    UnresolvedSlots.Add($"{materialName} (no texture set named '..._{suffix}')");
-                    continue;
-                }
-                foreach (var renderer in GetComponentsInChildren<Renderer>(true))
-                {
-                    foreach (var material in renderer.sharedMaterials)
-                    {
-                        if (material == null || material.name != materialName) continue;
-                        if (material.GetTexture("_MainTex") != null) continue;
-                        _slots.Add(new Slot { Material = material, Suffix = suffix });
-                    }
+                    missing.Add((pair.Key, stem, fallbackSuffix));
+                    break;
                 }
             }
+        }
 
-            if (_slots.Count == 0) continue;
-
-            Variants = _variants.Keys.ToList();
-            // prefer the variant that fills the most slots, then the lowest code (212 before 214)
-            Variants = Variants
-                .OrderByDescending(v => _variants[v].Count(k => _slots.Any(s => s.Suffix == k.Key)))
-                .ThenBy(v => v, StringComparer.Ordinal)
-                .ToList();
-
-            if (!string.IsNullOrEmpty(preferredVariant) && _variants.ContainsKey(preferredVariant))
+        foreach (string stem in missing.Select(m => m.Stem).Distinct())
+        {
+            foreach (var pair in BuildVariants(main, stem, missing.Where(m => m.Stem == stem).Select(m => m.Suffix).ToList()))
             {
-                ApplyVariant(preferredVariant);
+                if (!_variants.TryGetValue(pair.Key, out var byKey))
+                {
+                    byKey = new Dictionary<string, UmaDatabaseEntry>();
+                    _variants[pair.Key] = byKey;
+                }
+                foreach (var entry in pair.Value) byKey[entry.Key] = entry.Value;
             }
-            else
-            {
-                if (!string.IsNullOrEmpty(preferredVariant))
-                    Debug.LogWarning($"[UmaEnvTextureSet] variant '{preferredVariant}' does not exist for {Stem}, available: {string.Join(", ", Variants)}");
-                ApplyVariant(Variants[0]);
-            }
+            if (Stem.Length == 0) Stem = stem;
+            else if (Stem != stem) Stem += $", {stem}";
+        }
 
-            Debug.Log($"[UmaEnvTextureSet] {name}: resolved {AppliedSlots}/{_slots.Count} textureless material slot(s) "
-                      + $"to variant '{CurrentVariant}' of [{string.Join(", ", Variants)}]");
-            if (UnresolvedSlots.Count > 0)
-                Debug.Log($"[UmaEnvTextureSet] {name}: no texture set for {string.Join("; ", UnresolvedSlots)}");
+        foreach (var (materialName, stem, suffix) in missing)
+        {
+            string key = SlotKey(stem, suffix);
+            if (!_variants.Values.Any(v => v.ContainsKey(key)))
+            {
+                UnresolvedSlots.Add($"{materialName} (no texture set named '{stem}_{{variant}}_{suffix}')");
+                continue;
+            }
+            foreach (var renderer in GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material == null || material.name != materialName) continue;
+                    if (material.GetTexture("_MainTex") != null) continue;
+                    _slots.Add(new Slot { Material = material, Key = key });
+                }
+            }
+        }
+
+        if (_slots.Count == 0)
+        {
+            Debug.Log($"[UmaEnvTextureSet] {name}: no texture sets found for {missing.Count} textureless material(s) "
+                      + $"({string.Join(", ", missing.Select(m => m.Material).Take(6))})");
             enabled = false;
             return;
         }
 
-        Debug.Log($"[UmaEnvTextureSet] {name}: no texture sets found for {stuckWithoutTextureSlot.Count} textureless material(s) "
-                  + $"({string.Join(", ", stuckWithoutTextureSlot.Take(6))})");
+        Variants = _variants.Keys.ToList();
+        // prefer the variant that fills the most slots, then the lowest code (212 before 214)
+        Variants = Variants
+            .OrderByDescending(v => _variants[v].Count(k => _slots.Any(s => s.Key == k.Key)))
+            .ThenBy(v => v, StringComparer.Ordinal)
+            .ToList();
+
+        if (!string.IsNullOrEmpty(preferredVariant) && _variants.ContainsKey(preferredVariant))
+        {
+            ApplyVariant(preferredVariant);
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(preferredVariant))
+                Debug.LogWarning($"[UmaEnvTextureSet] variant '{preferredVariant}' does not exist for {Stem}, available: {string.Join(", ", Variants)}");
+            ApplyVariant(Variants[0]);
+        }
+
+        Debug.Log($"[UmaEnvTextureSet] {name}: resolved {AppliedSlots}/{_slots.Count} textureless material slot(s) "
+                  + $"to variant '{CurrentVariant}' of [{string.Join(", ", Variants)}] (stems: {Stem})");
+        if (UnresolvedSlots.Count > 0)
+            Debug.Log($"[UmaEnvTextureSet] {name}: no texture set for {string.Join("; ", UnresolvedSlots)}");
         enabled = false;
+    }
+
+    private static string SlotKey(string stem, string suffix) => $"{stem}|{suffix}";
+
+    /// <summary>
+    /// "mtl_env_home10001_main000_000_base01" -&gt; ("env_home10001_main000", "base01"). The variant token
+    /// ("000" here, "212" in the texture sets) sits between the scene stem and the suffix.
+    /// </summary>
+    private static bool TrySplitMaterialName(string materialName, out string stem, out string suffix)
+    {
+        stem = suffix = null;
+        if (string.IsNullOrEmpty(materialName)) return false;
+
+        string name = materialName.StartsWith("mtl_", StringComparison.OrdinalIgnoreCase)
+            ? materialName.Substring(4)
+            : materialName;
+        int paren = name.IndexOf('('); // strip "(Instance)" and similar
+        if (paren > 0) name = name.Substring(0, paren).Trim();
+
+        var parts = name.Split('_');
+        for (int i = parts.Length - 2; i >= 1; i--)
+        {
+            if (parts[i].Length > 4 || !parts[i].All(char.IsDigit)) continue;
+            stem = string.Join("_", parts.Take(i));
+            suffix = string.Join("_", parts.Skip(i + 1));
+            return stem.Length > 0 && suffix.Length > 0;
+        }
+        return false;
     }
 
     private void ApplyVariant(string variant)
@@ -183,8 +239,8 @@ public class UmaEnvTextureSet : MonoBehaviour
         AppliedSlots = 0;
         foreach (var slot in _slots)
         {
-            if (!sets.TryGetValue(slot.Suffix, out var entry)) continue;
-            var texture = LoadTexture(variant, slot.Suffix, entry);
+            if (!sets.TryGetValue(slot.Key, out var entry)) continue;
+            var texture = LoadTexture(variant, slot.Key, entry);
             if (texture == null) continue;
             slot.Material.SetTexture("_MainTex", texture);
             AppliedSlots++;
@@ -192,9 +248,9 @@ public class UmaEnvTextureSet : MonoBehaviour
         CurrentVariant = variant;
     }
 
-    private Texture2D LoadTexture(string variant, string suffix, UmaDatabaseEntry entry)
+    private Texture2D LoadTexture(string variant, string slotKey, UmaDatabaseEntry entry)
     {
-        string key = $"{variant}|{suffix}";
+        string key = $"{variant}|{slotKey}";
         if (_textureCache.TryGetValue(key, out var cached)) return cached;
 
         Texture2D texture = null;
@@ -218,18 +274,13 @@ public class UmaEnvTextureSet : MonoBehaviour
         return texture;
     }
 
-    /// <summary>All texture sets that exist for the given textureless materials, by variant then suffix.</summary>
+    /// <summary>All texture sets that exist for the given stems and suffixes, by variant then slot key.</summary>
     private static Dictionary<string, Dictionary<string, UmaDatabaseEntry>> BuildVariants(
-        UmaViewerMain main, string stem, List<string> materialNames)
+        UmaViewerMain main, string stem, List<string> suffixes)
     {
-        var suffixes = materialNames
-            .Select(n => MaterialSuffix(n, stem))
-            .Where(s => !string.IsNullOrEmpty(s))
-            .Distinct()
-            .ToList();
-
+        var wanted = suffixes.Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
         var result = new Dictionary<string, Dictionary<string, UmaDatabaseEntry>>();
-        if (suffixes.Count == 0) return result;
+        if (wanted.Count == 0) return result;
 
         string prefix = $"tex_{stem}_";
         foreach (var entry in main.AbList.Values)
@@ -239,19 +290,19 @@ public class UmaEnvTextureSet : MonoBehaviour
             if (!file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
 
             string rest = file.Substring(prefix.Length);
-            foreach (string suffix in suffixes)
+            foreach (string suffix in wanted)
             {
                 string postfix = $"_{suffix}";
                 if (!rest.EndsWith(postfix, StringComparison.OrdinalIgnoreCase)) continue;
                 if (rest.Length <= postfix.Length) continue;
 
                 string variant = rest.Substring(0, rest.Length - postfix.Length);
-                if (!result.TryGetValue(variant, out var bySuffix))
+                if (!result.TryGetValue(variant, out var byKey))
                 {
-                    bySuffix = new Dictionary<string, UmaDatabaseEntry>();
-                    result[variant] = bySuffix;
+                    byKey = new Dictionary<string, UmaDatabaseEntry>();
+                    result[variant] = byKey;
                 }
-                bySuffix[suffix] = entry;
+                byKey[SlotKey(stem, suffix)] = entry;
                 break;
             }
         }
