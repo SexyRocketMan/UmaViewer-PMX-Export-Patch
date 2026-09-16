@@ -11,6 +11,9 @@
     ./Tools/headless_export.ps1 -ListChars
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_rac_type01_run02_stride -RecordVmd D:/out/run.vmd
+    # let a one shot animation run to its end first, the state the viewer is in when a user records
+    # after the animation finished (batch mode alone gets nowhere near the end of the clip)
+    ./Tools/headless_export.ps1 -Char 1001 -Motion anm_res_chr1001_001 -PlaySeconds 8 -RecordVmd D:/out/res.vmd
     ./Tools/headless_export.ps1 -ListProps home10001
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
@@ -38,6 +41,7 @@ param(
     [switch]$APose,
     [int]$Timeout = 600,
     [int]$ExtraFrames = 30,
+    [double]$PlaySeconds = 0,
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
     [string]$UnityExe = "",
     [string]$LogPath = ""
@@ -142,6 +146,7 @@ if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordRedu
 if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 if ($APose) { $arguments += "-umaAPose" }
+if ($PlaySeconds -gt 0) { $arguments += @("-umaPlaySeconds", $PlaySeconds) }
 
 Write-Host "Unity  : $UnityExe"
 Write-Host "Project: $ProjectPath"

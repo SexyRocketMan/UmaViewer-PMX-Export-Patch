@@ -152,8 +152,14 @@ def cmd_motion(paths: list[str], args) -> int:
         print(f"   bones: {moving_pos}/{len(per_bone)} move positionally (worst {worst_pos:.5f}), "
               f"{moving_rot}/{len(per_bone)} rotate (worst {worst_rot:.5f})")
         print(f"   morphs: {len(moving_morphs)}/{len(morph_spans)} change")
-        if moving_pos == 0 and moving_rot < args.min_rotating_bones:
-            print("   !! the motion is static: nothing moves, so the recording sampled a frozen pose")
+        # A frozen recording is not necessarily one where *nothing* moves: a physics driven bone or two
+        # drift even when the sampled pose is the same every frame, so count how much of the rig moves.
+        moving = max(moving_pos, moving_rot)
+        if moving < args.min_moving_bones:
+            print(f"   !! only {moving}/{len(per_bone)} bones move: the recording sampled a frozen pose. A one "
+                  f"shot animation that had already finished is parked on its last frame, which is what a "
+                  f"recording started after the animation ended used to capture. Pass "
+                  f"--min-moving-bones 0 if the clip really is static.")
             ok = False
         elif moving_pos == 0:
             print(f"   note: no bone translates, only {moving_rot} rotate")
@@ -281,7 +287,9 @@ def main() -> int:
     motion.add_argument("paths", nargs="+")
     motion.add_argument("--position-tolerance", type=float, default=1e-4)
     motion.add_argument("--rotation-tolerance", type=float, default=1e-4)
-    motion.add_argument("--min-rotating-bones", type=int, default=2)
+    motion.add_argument("--min-moving-bones", type=int, default=3,
+                        help="how many bones have to move before the recording counts as animated; a "
+                             "frozen recording still drifts a physics bone or two")
     motion.add_argument("--first-step-factor", type=float, default=2.5,
                         help="how much bigger than a typical step the first frame may be before it "
                              "counts as a pose pop")

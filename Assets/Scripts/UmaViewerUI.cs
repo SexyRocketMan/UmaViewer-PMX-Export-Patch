@@ -1072,10 +1072,12 @@ public class UmaViewerUI : MonoBehaviour
                     new ExtensionFilter("All Files", "*" )
                 };
 
-                string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file", Application.dataPath, container.name, extensions);
+                string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file",
+                    Config.Instance.MotionSaveFolder(Application.dataPath), container.name, extensions);
                 if (!string.IsNullOrEmpty(path))
                 {
                     recorder.SaveVMD(container.name, path, Config.Instance.VmdKeyReductionLevel);
+                    Config.Instance.RememberMotionSave(path);
                     Debug.Log($"File successfully saved to: {path}");
                     ShowMessage($"VMD is saved in {path}", UIMessageType.Success);
                 }
@@ -1089,17 +1091,17 @@ public class UmaViewerUI : MonoBehaviour
                 {
                     var cameraRecorder = camera.GetComponent<UnityCameraVMDRecorder>();
                     cameraRecorder.StopRecording();
-                    path = StandaloneFileBrowser.SaveFilePanel("Save the camera VMD file", Application.dataPath, $"{container.name}_Camera", extensions);
-                    if (!string.IsNullOrEmpty(path))
+                    string cameraPath = CameraVmdPath(path);
+                    if (!string.IsNullOrEmpty(cameraPath))
                     {
-                        cameraRecorder.SaveVMD(path);
-                        Debug.Log($"File successfully saved to: {path}");
-                        ShowMessage($"Camera VMD is saved in {path}", UIMessageType.Success);
+                        cameraRecorder.SaveVMD(cameraPath);
+                        Debug.Log($"File successfully saved to: {cameraPath}");
+                        ShowMessage($"Camera VMD is saved in {cameraPath}", UIMessageType.Success);
                     }
                     else
                     {
-                        Debug.Log($"Camera VMD save cancelled");
-                        ShowMessage($"Camera VMD save cancelled", UIMessageType.Warning);
+                        Debug.Log($"Camera VMD not saved: the motion was not saved, so there is no folder to put it in");
+                        ShowMessage($"Camera VMD not saved: no folder was chosen for the motion", UIMessageType.Warning);
                     }
                     
                 }
@@ -1180,8 +1182,8 @@ public class UmaViewerUI : MonoBehaviour
             cameraRecorder.StartRecording();
         }
 
-        if (buttonText != null) buttonText.text = "Recording loop...";
-        ShowMessage($"Recording one loop of {clip.name} ({clip.length:F2}s). Please do not interact.", UIMessageType.Default);
+        if (buttonText != null) buttonText.text = "Recording...";
+        ShowMessage($"Recording {clip.name} ({clip.length:F2}s). Please do not interact.", UIMessageType.Default);
 
         StartCoroutine(recorder.RecordCurrentLoop(clip, 30, () =>
         {
@@ -1192,20 +1194,44 @@ public class UmaViewerUI : MonoBehaviour
                 new ExtensionFilter("All Files", "*" )
             };
 
-            string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file", Application.dataPath, container.name, extensions);
+            string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file",
+                Config.Instance.MotionSaveFolder(Application.dataPath), container.name, extensions);
             if (!string.IsNullOrEmpty(path))
             {
                 recorder.SaveVMD(container.name, path);
+                Config.Instance.RememberMotionSave(path);
                 ShowMessage($"VMD is saved in {path}", UIMessageType.Success);
             }
 
             if (cameraRecorder != null && cameraRecorder.IsRecording)
             {
                 cameraRecorder.StopRecording();
-                string cameraPath = StandaloneFileBrowser.SaveFilePanel("Save the camera VMD file", Application.dataPath, $"{container.name}_Camera", extensions);
-                if (!string.IsNullOrEmpty(cameraPath)) cameraRecorder.SaveVMD(cameraPath);
+                // the camera motion belongs with the character motion, so it is saved next to it under a
+                // "cam" tag instead of asking for a second path
+                string cameraPath = CameraVmdPath(path);
+                if (!string.IsNullOrEmpty(cameraPath))
+                {
+                    cameraRecorder.SaveVMD(cameraPath);
+                    ShowMessage($"VMD is saved in {path} and {cameraPath}", UIMessageType.Success);
+                }
+                else
+                {
+                    Debug.Log("[VMD] camera recording discarded: the motion was not saved");
+                }
             }
         }));
+    }
+
+    /// <summary>
+    /// Where the camera motion of a recording goes: next to the character motion, with a "cam" tag
+    /// ("run.vmd" and "run_cam.vmd"), so one recording is one dialog and two files.
+    /// </summary>
+    private static string CameraVmdPath(string motionPath)
+    {
+        if (string.IsNullOrEmpty(motionPath)) return null;
+        string folder = Path.GetDirectoryName(motionPath);
+        string name = Path.GetFileNameWithoutExtension(motionPath) + "_cam.vmd";
+        return string.IsNullOrEmpty(folder) ? name : Path.Combine(folder, name);
     }
 
     public void UpdateLiveMode(int val)

@@ -68,9 +68,17 @@ tag `patch` · 2026-03-30 — the first release of this fork
 - **Props and scenes stop rendering white**: environment texture sets are resolved from the asset database and
   can be switched from a row in the materials panel, so a home/live/race scene shows its real textures instead
   of flat white. Exports now also warn about every material slot they could not resolve.
-- **One clean loop, recorded by a button**: `Record VMD` now records exactly one loop of the playing animation
-  (frame count = length × fps + 1, last frame repeats the first) with a pinned timestep and without the
-  T-pose frame that used to sneak in at the start. No trimming or retiming in Blender afterwards.
+- **One clean loop, recorded by a button**: `Record VMD` records exactly one pass over the playing
+  animation, rewinding to its first frame first (frame count = length × fps + 1). A looping clip closes on
+  itself, so the motion loops without a jump; a one shot keeps its own ending. No trimming or retiming in
+  Blender afterwards, and no T-pose frame sneaking in at the start.
+- **One shot animations record properly**: a clip that has already finished is parked on its last frame and
+  Unity never advances a finished state, so recording after the animation ended used to write that single
+  pose for every frame - a motion that does not move at all. That is fixed by the rewind, which keeps the
+  pose the viewer is showing for every bone the clip does not animate.
+- **The camera motion lands next to the motion**: one save dialog, `<name>.vmd` plus `<name>_cam.vmd`.
+- **The file dialogs remember where you last saved** - models and motions separately, and across restarts
+  (`Config.json` → `LastModelFolder` / `LastMotionFolder`).
 - **Optional A-pose rest pose**: an exported model can be written with both upper arms rotated into the
   38.5° A-pose that recorded motions are relative to, so model and motion line up in Blender without posing
   anything by hand and without importing the motion with *Use current pose as rest pose*. It is **off by
@@ -94,7 +102,7 @@ tag `patch` · 2026-03-30 — the first release of this fork
 | `Database not found` on a newer game version | Refreshed database key *(Agemasen 2)* |
 | Blender `Refine Structure` kills the eye bones | Fixed - eye controls are built *(unreleased)* |
 | Scenes/props render and export with untextured (white) materials | Environment texture sets resolved + switchable *(unreleased)* |
-| Recorded motions need trimming, retiming, or a manual T→A rest pose | Button records one clean loop; optional A-pose rest pose *(unreleased)* |
+| Recorded motions need trimming, retiming, or a manual T→A rest pose | Button records one clean loop, one shots included; optional A-pose rest pose *(unreleased)* |
 | Exporting means clicking through the UI | Headless CLI + end-to-end workflow script *(unreleased)* |
 
 Known upstream behaviour that is **not** a bug: after importing a motion you may see

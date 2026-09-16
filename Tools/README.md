@@ -127,14 +127,14 @@ leaves them alone rather than guessing a texture.
 Two things to know when comparing a render against what you see in Blender by hand:
 
 * The recorder used to emit one frame at the start that was a rest pose (a T-pose with the arm offset
-  stacked on it). `RecordClipLoop` now forces an animator evaluation before the first sample, so frame
-  0 is an animated pose. `vmd_inspect.py motion` fails on that artefact ("the first frame is Nx the
-  typical step"), and `render_stats.py frames` does the same at the pixel level: it compares the step
-  from the first to the second frame against the median step of the same sequence (2.5x by default),
-  not against a fixed number. That distinction matters, because the recorder does not seek - a loop can
-  legitimately start mid-stride, and then its "first step" is simply a normal step of a fast animation
-  (measured: 0.0208 against a 0.0233 typical step). `--max-first-frame-jump 0.02` restores the old
-  absolute check for cases where that is what you want.
+  stacked on it). `RecordClipLoop` now rewinds the clip to its first frame and forces an animator
+  evaluation before the first sample, so frame 0 is the clip's own first pose. `vmd_inspect.py motion`
+  fails on that artefact ("the first frame is Nx the typical step"), and `render_stats.py frames` does the
+  same at the pixel level: it compares the step from the first to the second frame against the median step
+  of the same sequence (2.5x by default) rather than against a fixed number, because a fast animation
+  legitimately steps a long way between its first and second frame (measured: 0.0208 against a 0.0233
+  median step). `--max-first-frame-jump 0.02` restores the old absolute check for cases where that is what
+  you want.
 * The recorder captures its reference pose with the arms already rotated into an **A-pose** (38.5
   degrees, `UmaAPose.Degrees`). A motion therefore only lands correctly if that is the rest pose:
   `blender_render_motion.py` poses the arms into an A-pose and imports the vmd with `use_pose_mode`
@@ -257,26 +257,47 @@ literal string now go through it. Its `NAMING.md` has the details.
 
 
 
-`UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one loop of a clip without
-seeking the animators: the clip keeps playing at normal speed, `Time.captureDeltaTime` is pinned to the
-frame length so the animation - and cloth/hair - advance by exactly one frame per sample, and one vmd
-frame is sampled per `WaitForFixedUpdate` through `SampleFrame()`. Seeking with
-`Animator.Play(hash, layer, 0f)` is deliberately avoided: on a state with `writeDefaultValues` it resets
-every bone the clip does not animate, which is what left an earlier attempt as a single frozen rest pose.
-That gives:
+`UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one pass over a clip. The
+clip is rewound to its start first, then left playing at normal speed, `Time.captureDeltaTime` is pinned
+to the frame length so the animation - and cloth/hair - advance by exactly one frame per sample, and one
+vmd frame is sampled per `WaitForFixedUpdate` through `SampleFrame()`. That gives:
 
 * a frame count of exactly `clip.length * fps + 1`,
-* a last frame that repeats the first pose, so the motion loops without a visible jump.
+* for a looping clip, a last frame that repeats the first pose, so the motion loops without a jump,
+* for a one shot clip, a last frame that is the clip's end pose instead.
 
-Because nothing is seeked, the recording starts at whatever phase the animation happens to be in, not at
-the clip's first frame - for a looping clip that only decides where the loop begins. It also means two
-recordings of the same clip are not bit-identical: measured over two runs of the stride motion, root and
-IK handle positions differ by up to 0.05 / 0.37 units while every rotation that actually deforms the mesh
-agrees to 4e-4. `-umaRecordMode realtime` keeps the legacy path (one wall-clock `FixedUpdate` per frame,
-no pinned step); that one drifts against the animator, which is what made the first and last frames
-disagree. `SaveVMD` also used to skip the final frame whenever the key reduction did not divide it, and the
-level parameter used to shadow the field, so every save used level 1 - both are fixed, and key reduction
-is verified by checking that the reduced file is an identical subset of the full one.
+Rewinding is what makes a one shot animation recordable: a clip that has already finished is parked on its
+last frame and Unity does not advance a finished state, so a recording started there (the state the viewer
+is in when a user hits record after the animation ended) repeated one pose for every frame. Seeking with
+`Animator.Play(hash, layer, 0f)` enters the state again, and a state with "write default values" resets
+every bone its clip does not animate - which is what wrecked an earlier seek attempt (measured: 21 of 52
+bones rotating instead of 49). The pose is therefore snapshotted before the seek and put back right after
+it, and one animator evaluation lays the clip's own curves on top: the clip decides the bones it animates,
+everything else keeps the pose the viewer was showing.
+
+Whether a recording closes on itself is decided by the clip (`AnimationClip.isLooping`, or a `_loop` name
+the viewer itself goes by) and confirmed against the data: the last frame is forced onto the first only if
+the clip declares a loop or the sampled motion ends where it started (within 0.05 quaternion / 0.5 units).
+Measured on character 1001: the race result one shot ends 0.82 from its start so it keeps its own ending,
+the running cycle sits at 0.23 but is declared a loop, the idles at 0.10. `AnimatorStateInfo.loop` cannot
+be used for this - it reports true for every state in this rig.
+
+Because of the rewind a recording is reproducible: two runs of the stride cycle produced identical bone
+tracks (every shared key compared to 0.000000), and two runs of a one shot identical except the very last
+frame, which sits on the clip's end boundary. `-umaPlaySeconds` therefore no longer changes what gets
+recorded, it only changes when the recording starts.
+
+`-umaPlaySeconds <s>` lets the loaded motion play for that much wall clock time before the export or
+recording starts. Batch mode burns through editor frames in milliseconds, so without it a one shot
+animation never reaches its end and the parked-state bug cannot be reproduced - with it, the recording
+above is the regression test for exactly that, and `vmd_inspect.py motion` fails when a recording only
+moves a bone or two (it used to pass as long as *something* twitched).
+
+`-umaRecordMode realtime` keeps the legacy path (one wall-clock `FixedUpdate` per frame, no pinned step);
+that one drifts against the animator, which is what made the first and last frames disagree. `SaveVMD`
+also used to skip the final frame whenever the key reduction did not divide it, and the level parameter
+used to shadow the field, so every save used level 1 - both are fixed, and key reduction is verified by
+checking that the reduced file is an identical subset of the full one.
 
 Record and validate headlessly:
 
@@ -284,10 +305,16 @@ Record and validate headlessly:
 ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -RecordVmd D:/out/loop.vmd -RecordFps 30
 uv run Tools/vmd_inspect.py summary D:/out/loop.vmd
 uv run Tools/vmd_inspect.py loop    D:/out/loop.vmd     # frame 0 == last frame for every bone
+
+# a one shot: let it finish first, then check that the recording still animates
+./Tools/headless_export.ps1 -Char 1001 -Motion anm_res_chr1001_001 -PlaySeconds 8 -RecordVmd D:/out/res.vmd
+uv run Tools/vmd_inspect.py motion  D:/out/res.vmd
 ```
 
 Only physics driven bones (cloth, hair) can still differ slightly between the first and last frame -
 `loop` reports the worst deviation so that stays visible (`--rotation-tolerance` defaults to 1e-3).
+`vmd_inspect.py loop` is expected to fail on a one shot recording: its last frame is the animation's
+ending, not a repeat of the first pose, which is exactly what the check reports.
 
 
 

@@ -44,6 +44,10 @@ using UnityEngine;
 ///                        FixedUpdate sampler, useful to compare behaviour)
 ///   -umaTimeout &lt;sec&gt;    abort after this many seconds, default 600
 ///   -umaExtraFrames &lt;n&gt;  frames to let the model settle before exporting, default 30
+///   -umaPlaySeconds &lt;s&gt; let the loaded motion play for this much wall clock time before exporting or
+///                        recording (default 0). Batch mode burns through editor frames in milliseconds,
+///                        so without this a one shot animation never reaches its end - which is the state
+///                        the viewer is in when a user records after the animation finished.
 ///
 /// Exit code is 0 on success, non zero on failure (the log line prefixed with [UmaHeadlessExport]
 /// explains why).
@@ -109,6 +113,7 @@ public static class UmaHeadlessExport
         public double TimeoutSeconds = 600;
         public double BootTimeoutSeconds = 120;
         public int ExtraFrames = 30;
+        public double PlaySeconds = 0;
 
         public static Options Parse(string[] argv)
         {
@@ -147,6 +152,7 @@ public static class UmaHeadlessExport
                     case "-umaTimeout": options.TimeoutSeconds = double.Parse(Next()); break;
                     case "-umaBootTimeout": options.BootTimeoutSeconds = double.Parse(Next()); break;
                     case "-umaExtraFrames": options.ExtraFrames = int.Parse(Next()); break;
+                    case "-umaPlaySeconds": options.PlaySeconds = double.Parse(Next()); break;
                     default: break; // ignore everything else Unity/the shell passes through
                 }
             }
@@ -164,6 +170,7 @@ public static class UmaHeadlessExport
     }
 
     private static int _settleFramesLeft;
+    private static double _playDeadline;
     private static DateTime _playModeEnteredUtc;
     private static DateTime _runStartedUtc;
     private static int _playModeRetries;
@@ -438,6 +445,14 @@ public static class UmaHeadlessExport
                         Debug.Log($"{Tag} now playing '{CurrentClip(target.UmaAnimator)?.name}'");
                         SessionState.SetInt(KeyMotionLoaded, 1);
                         _settleFramesLeft = options.ExtraFrames; // let the new clip settle before sampling
+                        // batch mode runs editor updates back to back, so frames alone are no time at all:
+                        // PlaySeconds is what lets a one shot animation actually reach its end
+                        _playDeadline = EditorApplication.timeSinceStartup + options.PlaySeconds;
+                        return;
+                    }
+
+                    if (options.PlaySeconds > 0 && EditorApplication.timeSinceStartup < _playDeadline)
+                    {
                         return;
                     }
 

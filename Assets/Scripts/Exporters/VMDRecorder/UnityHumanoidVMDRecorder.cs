@@ -560,18 +560,21 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     }
 
     /// <summary>
-    /// Records exactly one loop of <paramref name="clip"/>.
+    /// Records exactly one pass over <paramref name="clip"/>.
     ///
-    /// The animation is left playing normally and the frame length is pinned with
+    /// The clip is rewound to its start first, then left playing normally with the frame length pinned by
     /// <see cref="Time.captureDeltaTime"/>, so the animator advances exactly one vmd frame per rendered
-    /// frame and one sample is taken per frame. The closing frame is then copied from the first frame,
-    /// so the motion loops exactly.
+    /// frame and one sample is taken per frame. For a looping clip the closing frame is copied from the
+    /// first frame, so the motion loops exactly; for a one shot clip the end pose is kept instead.
     ///
-    /// Do not call <see cref="Animator.Play(int, int, float)"/> on the character's layers to seek to the
-    /// start of the clip: a state with "write default values" resets every bone its clip does not
-    /// animate, so seeking the layers snaps the whole body back to its rest pose and the recording
-    /// comes out almost frozen (measured: 21 of 52 bones rotating instead of 49). The recording
-    /// therefore starts at the current playback position, which still closes into a seamless loop.
+    /// Rewinding matters because a one shot clip that has already finished is parked on its last frame and
+    /// the animator never advances a finished state - a recording started there used to repeat one pose for
+    /// every frame. <see cref="Animator.Play(int, int, float)"/> enters the state again, and a state with
+    /// "write default values" resets every bone its clip does not animate, which is why seeking used to
+    /// wreck a recording (measured: 21 of 52 bones rotating instead of 49). The pose is therefore
+    /// snapshotted and put back right after the seek, and one animator evaluation lays the clip's own
+    /// curves on top of it: the clip decides the bones it animates, everything else keeps the pose the
+    /// viewer was showing.
     ///
     /// The player loop runs one frame per recorded frame, so cloth/hair physics keep working. Physics
     /// driven bones are the one part that cannot be made identical to the first frame.
@@ -583,6 +586,13 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
         int totalFrames = Mathf.Max(1, Mathf.RoundToInt(clip.length * fps));
         var layers = SnapshotLayers(animators);
+        // Whether the motion loops is decided by the clip, and the sampled motion gets the last word. Unity
+        // already marks the uma motions correctly - the stride cycle and the idles report isLooping, the
+        // race result animations do not - and the umbrella "_loop" suffix is what the viewer itself goes by
+        // (UmaContainerCharacter picks the looping state for those). AnimatorStateInfo.loop is useless here:
+        // measured true for every state in this rig, body, tail, position and face alike.
+        bool declaredLoop = clip.isLooping
+                            || clip.name.IndexOf("_loop", StringComparison.OrdinalIgnoreCase) >= 0;
         var previousSpeeds = new Dictionary<Animator, float>();
         var previousCulling = new Dictionary<Animator, AnimatorCullingMode>();
         foreach (var animator in (animators ?? new Animator[0]).Where(a => a != null).Distinct())
@@ -602,16 +612,32 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
         ManualSampling = true;
         int movingBones = 0;
+        bool looping = declaredLoop;
+
+        // Rewind to the start of the clip (see the remarks above): the pose is saved, every recorded layer
+        // is put back on time 0, the pose is restored and one animator evaluation applies the clip on top.
+        var poseBeforeSeek = SnapshotBonePose();
+        foreach (var layer in layers)
+        {
+            layer.Animator.Play(layer.StateHash, layer.Layer, 0f);
+        }
+        RestoreBonePose(poseBeforeSeek);
+
         StartRecording();
         try
         {
             // Initialize() disables the animator, resets the pose and re-enables it; depending on where
             // the frame boundary falls the pose can still be that rest pose here, which is the T-pose
             // frame that used to show up at the start of a recording. Force one evaluation so the pose
-            // is animation driven before anything is sampled.
+            // is animation driven before anything is sampled. This is also what puts the clip's own
+            // curves back over the pose the seek reset.
             foreach (var layer in layers)
             {
                 layer.Animator.Update(0f);
+                var state = layer.Animator.GetCurrentAnimatorStateInfo(layer.Layer);
+                Debug.Log($"[VMD] layer {layer.Layer} ({layer.Animator.name}) starts at "
+                          + $"{state.normalizedTime:F3} of '{clip.name}', playing "
+                          + $"{string.Join(", ", layer.Animator.GetCurrentAnimatorClipInfo(layer.Layer).Select(i => i.clip != null ? i.clip.name : "<null>"))}");
             }
 
             for (int frame = 0; frame <= totalFrames; frame++)
@@ -623,7 +649,13 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 SampleFrame();
             }
 
-            CloseRecordedLoop();
+            LoopSeam(out float seamRotation, out float seamPosition);
+            bool closes = declaredLoop || (seamRotation <= LoopSeamRotation && seamPosition <= LoopSeamPosition);
+            Debug.Log($"[VMD] '{clip.name}': {totalFrames + 1} frames, seam rotation {seamRotation:F5} "
+                      + $"position {seamPosition:F5}, closed on itself {closes} "
+                      + $"(declared loop {declaredLoop}, tolerances {LoopSeamRotation}/{LoopSeamPosition})");
+            if (closes) CloseRecordedLoop();
+            looping = closes;
             // StopRecording swaps the dictionaries out, so measure the motion before that happens
             movingBones = CountMovingBones();
         }
@@ -642,14 +674,101 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             StopRecording();
         }
 
-        Debug.Log($"[VMD] recorded one loop of '{clip.name}': {frameNumberSaved} frames "
-                  + $"({clip.length:F3}s @ {fps}fps), {movingBones} bone(s) move, last frame repeats the first pose");
+        Debug.Log($"[VMD] recorded {(looping ? "one loop" : "one pass")} of '{clip.name}': {frameNumberSaved} frames "
+                  + $"({clip.length:F3}s @ {fps}fps), {movingBones} bone(s) move, "
+                  + (looping ? "last frame repeats the first pose"
+                             : "one shot clip, so the last frame is its end pose"));
         if (movingBones == 0)
         {
             Debug.LogWarning("[VMD] the recorded motion contains no bone movement at all - the animation "
                              + "may not be playing (some clips, e.g. a resting idle, really are static).");
         }
         onFinished?.Invoke();
+    }
+
+    /// <summary>
+    /// How far the last sampled frame may be from the first one and still count as a cycle worth closing,
+    /// used only when the clip does not declare itself a loop: a quaternion component delta and a position
+    /// delta over every recorded bone. Measured on character 1001: a race result one shot ends 0.82
+    /// (rotation) from its start, a running cycle closes to 0.23 but is declared a loop, and a looping
+    /// idle closes to 0.10. The thresholds sit below all of those, so this only ever fires for an unmarked
+    /// clip that genuinely ends where it started.
+    /// </summary>
+    private const float LoopSeamRotation = 0.05f;
+    private const float LoopSeamPosition = 0.5f;
+
+    /// <summary>
+    /// How far the last sampled frame is from the first one, over every recorded bone: the worst quaternion
+    /// component delta and the worst position delta. A cyclic animation comes back to where it started, a
+    /// one shot ends somewhere else - which is what decides whether forcing the first pose onto the last
+    /// frame is a seamless loop or a destroyed ending.
+    /// </summary>
+    private void LoopSeam(out float worstRotation, out float worstPosition)
+    {
+        worstRotation = 0f;
+        worstPosition = 0f;
+        foreach (var pair in positionDictionary)
+        {
+            var positions = pair.Value;
+            if (positions == null || positions.Count < 2) continue;
+            worstPosition = Mathf.Max(worstPosition,
+                Vector3.Distance(positions[0], positions[positions.Count - 1]));
+        }
+        foreach (var pair in rotationDictionary)
+        {
+            var rotations = pair.Value;
+            if (rotations == null || rotations.Count < 2) continue;
+            worstRotation = Mathf.Max(worstRotation,
+                QuaternionDelta(rotations[0], rotations[rotations.Count - 1]));
+        }
+    }
+
+    private static float QuaternionDelta(Quaternion a, Quaternion b)
+    {
+        float direct = Mathf.Max(Mathf.Max(Mathf.Abs(a.x - b.x), Mathf.Abs(a.y - b.y)),
+                                 Mathf.Max(Mathf.Abs(a.z - b.z), Mathf.Abs(a.w - b.w)));
+        float flipped = Mathf.Max(Mathf.Max(Mathf.Abs(a.x + b.x), Mathf.Abs(a.y + b.y)),
+                                  Mathf.Max(Mathf.Abs(a.z + b.z), Mathf.Abs(a.w + b.w)));
+        return Mathf.Min(direct, flipped);
+    }
+
+    /// <summary>A recorded bone's local pose, so a seek can put back what it resets.</summary>
+    private struct BonePose
+    {
+        public Transform Bone;
+        public Vector3 Position;
+        public Quaternion Rotation;
+    }
+
+    /// <summary>
+    /// The local pose of every bone this recorder writes, taken before a seek. Entering an animator state
+    /// with "write default values" resets the bones its clip does not animate, and those are exactly the
+    /// bones a recording would lose without this - see <see cref="RecordClipLoop"/>.
+    /// </summary>
+    private List<BonePose> SnapshotBonePose()
+    {
+        var poses = new List<BonePose>(BoneDictionary.Count);
+        foreach (var pair in BoneDictionary)
+        {
+            if (pair.Value == null) continue;
+            poses.Add(new BonePose
+            {
+                Bone = pair.Value,
+                Position = pair.Value.localPosition,
+                Rotation = pair.Value.localRotation
+            });
+        }
+        return poses;
+    }
+
+    private static void RestoreBonePose(List<BonePose> poses)
+    {
+        foreach (var pose in poses)
+        {
+            if (pose.Bone == null) continue;
+            pose.Bone.localPosition = pose.Position;
+            pose.Bone.localRotation = pose.Rotation;
+        }
     }
 
     /// <summary>
@@ -716,12 +835,13 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     {
         public Animator Animator;
         public int Layer;
+        /// <summary>Short name hash of the state, which is what <see cref="Animator.Play(int, int, float)"/> takes.</summary>
         public int StateHash;
     }
 
     /// <summary>
-    /// Every layer that currently plays something, so the recording can put all of them back on an
-    /// exact normalized time (the uma character drives body, face and camera on several layers).
+    /// Every layer that currently plays something, so the recording can rewind all of them to the start of
+    /// their clip (the uma character drives body, face and camera on several layers).
     /// </summary>
     private static List<RecordedLayer> SnapshotLayers(Animator[] animators)
     {
@@ -737,7 +857,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 {
                     Animator = animator,
                     Layer = layer,
-                    StateHash = state.fullPathHash
+                    StateHash = state.shortNameHash
                 });
             }
         }

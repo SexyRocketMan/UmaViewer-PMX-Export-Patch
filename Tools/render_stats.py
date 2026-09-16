@@ -132,11 +132,11 @@ def cmd_frames(args) -> int:
           f"{last['distinct_colours']}")
 
     if len(files) >= 3:
-        # A recording starts wherever the animation happens to be (the recorder does not seek, see
-        # Tools/README.md), so how big the first step is depends on the phase the loop starts in: a run
-        # cycle that starts in the middle of the stride legitimately moves a lot between frame 1 and 2.
-        # What a pose pop looks like instead is a first step far above the steps around it, so compare it
-        # against the median step of the same recording - the same relative check vmd_inspect motion does.
+        # A pop is not simply a big step: the recording now starts on the clip's own first frame, and a
+        # fast animation legitimately moves a long way between its first and second frame (measured 0.0208
+        # against a 0.0233 median step). What a pose pop looks like is a first step far above the steps
+        # around it, so compare it against the median step of the same recording - the same relative check
+        # vmd_inspect motion does.
         steps = []
         for name_a, name_b in zip(files, files[1:]):
             steps.append(mean_abs_difference(load(os.path.join(directory, name_a)),

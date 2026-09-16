@@ -41,6 +41,12 @@ public class Config
     public string VmdKeyReductionLevelTip = "Affects the recording quality: 1 = record every frame, 2 = record every two frames, and so on.";
     public int VmdKeyReductionLevel = 1;
 
+    public string LastModelFolderTip = "Folder the PMX export dialog opens in. Updated after every export, so the next one starts where the last one went.";
+    public string LastModelFolder = "";
+
+    public string LastMotionFolderTip = "Folder the VMD save dialogs open in. Updated after every save, so the next one starts where the last one went.";
+    public string LastMotionFolder = "";
+
     public string VmdUseEnglishBoneNamesTip = "True = uses the same bone names as exported models, false = uses japanese names";
     public bool VmdUseEnglishBoneNames = true;
     public string VmdUseEnglishMorphNamesTip = "True = uses the same morph names as exported models, false = uses japanese names";
@@ -231,6 +237,51 @@ public class Config
         {
             UmaViewerUI.Instance.ShowMessage("The configuration has changed. Please restart the application.", UIMessageType.Default);
         }
+    }
+
+    /// <summary>
+    /// Folder a model export dialog should open in: the one the last export went to, so the dialog comes
+    /// back to the same place both within a session and after a restart. Falls back to
+    /// <paramref name="fallback"/> the first time (or if that folder has since been deleted).
+    /// </summary>
+    public string ModelSaveFolder(string fallback)
+    {
+        return Directory.Exists(LastModelFolder) ? LastModelFolder : fallback;
+    }
+
+    /// <summary>Same for the vmd save dialogs.</summary>
+    public string MotionSaveFolder(string fallback)
+    {
+        return Directory.Exists(LastMotionFolder) ? LastMotionFolder : fallback;
+    }
+
+    /// <summary>Remembers where a model was exported to, for the next dialog.</summary>
+    public void RememberModelSave(string filePath)
+    {
+        RememberFolder(ref LastModelFolder, filePath);
+    }
+
+    /// <summary>Remembers where a motion was saved, for the next dialog.</summary>
+    public void RememberMotionSave(string filePath)
+    {
+        RememberFolder(ref LastMotionFolder, filePath);
+    }
+
+    private void RememberFolder(ref string field, string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return;
+        string folder;
+        try
+        {
+            folder = Path.GetDirectoryName(filePath);
+        }
+        catch (Exception)
+        {
+            return; // a path the runtime refuses to parse is not worth a crash on the way out of a save
+        }
+        if (string.IsNullOrEmpty(folder) || folder == field) return;
+        field = folder;
+        UpdateConfig(false);
     }
 
     private string ByteArrayToHex(byte[] byteArray)
