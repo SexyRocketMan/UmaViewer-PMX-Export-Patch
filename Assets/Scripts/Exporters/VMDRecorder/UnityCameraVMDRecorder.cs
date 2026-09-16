@@ -208,10 +208,9 @@ public class UnityCameraVMDRecorder : MonoBehaviour
     /// 呼び出す際は先にStopRecordingを呼び出すこと
     /// </summary>
     /// <param name="filePath">保存先の絶対ファイルパス</param>
-    public void SaveVMD()
+    public void SaveVMD(string filePath = null, int KeyReductionLevel = 1)
     {
-        string fileName = $"{Application.dataPath}{FileSavePath}/{string.Format("Camera_{0}.vmd", DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"))}";
-        Directory.CreateDirectory(Application.dataPath + FileSavePath);
+        filePath ??= $"{Application.dataPath}{FileSavePath}/{string.Format("Camera_{0}.vmd", DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"))}";
         if (IsRecording)
         {
             Debug.Log(targetCameraTransform.name + "VMD保存前にレコーディングをストップしてください。");
@@ -228,7 +227,7 @@ public class UnityCameraVMDRecorder : MonoBehaviour
         Debug.Log(targetCameraTransform.name + "VMDファイル作成開始");
 
         //ファイルの書き込み
-        using (FileStream fileStream = new FileStream(fileName, FileMode.Create))
+        using (FileStream fileStream = new FileStream(filePath, FileMode.Create))
         using (BinaryWriter binaryWriter = new BinaryWriter(fileStream))
         {
             try
@@ -527,17 +526,6 @@ public class UnityCameraVMDRecorder : MonoBehaviour
                 binaryWriter.Close();
             }
         }
-    }
-    /// <summary>
-    /// VMDを作成する
-    /// 呼び出す際は先にStopRecordingを呼び出すこと
-    /// </summary>
-    /// <param name="filePath">保存先の絶対ファイルパス</param>
-    /// <param name="keyReductionLevel">キーの書き込み頻度を減らして容量を減らす</param>
-    public void SaveVMD(string filePath, int keyReductionLevel)
-    {
-        KeyReductionLevel = keyReductionLevel;
-        SaveVMD();
     }
 }
 

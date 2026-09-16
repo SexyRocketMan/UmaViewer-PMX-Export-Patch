@@ -115,14 +115,14 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             }
             else
             {
-                Debug.LogWarning($"Bone name lookup failed for {boneName}");
-            }
+            Debug.LogWarning($"Bone name lookup failed for {boneName}");
+        }
         }
         
         // Default: Use Japanese names (original behavior)
         string boneNameString = boneName.ToString();
         if (boneName == BoneNames.全ての親 && UseCenterAsParentOfAll)
-        {
+    {
             boneNameString = CenterNameString;
         }
         if (boneName == BoneNames.センター && UseCenterAsParentOfAll)
@@ -356,29 +356,6 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
         foreach (BoneNames boneName in BoneDictionary.Keys)
         {
-
-            // Debug fuckery - remove me, hello??
-            /*
-            if (boneName == BoneNames.首)
-            {
-                var neckBone = BoneDictionary[boneName];
-                var parent = neckBone.parent;
-                
-                Debug.Log($"[VMD Neck Debug] Frame {FrameNumber}");
-                Debug.Log($"  localPosition: {neckBone.localPosition}");
-                Debug.Log($"  parent.lossyScale: {parent?.lossyScale}");
-                Debug.Log($"  parent.name: {parent?.name}");
-                Debug.Log($"  IsMini: {UmaViewerBuilder.Instance.CurrentUMAContainer.IsMini}, BodyScale: {UmaViewerBuilder.Instance.CurrentUMAContainer.BodyScale}");
-                
-                // What the "true" scaled local position would be
-                if (parent != null)
-                {
-                    var scaledLocal = Vector3.Scale(neckBone.localPosition, parent.lossyScale);
-                    Debug.Log($"  scaled local (visual offset): {scaledLocal}");
-                }
-            }
-            */
-
             if (BoneDictionary[boneName] == null)
             {
                 continue;
@@ -589,15 +566,15 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     /// Records exactly one loop of <paramref name="clip"/>.
     ///
     /// The animation is left playing normally and the frame length is pinned with
-    /// <see cref="Time.captureDeltaTime"/>, so one fixed step advances it by exactly 1/fps, and one
-    /// sample is taken per step. The closing frame is then copied from the first frame, so the motion
-    /// loops exactly. Sampling right after the fixed step matters: sampling after Update instead reads
-    /// a pose the character's IK has partly reset, which loses most of the limb rotation.
+    /// <see cref="Time.captureDeltaTime"/>, so the animator advances exactly one vmd frame per rendered
+    /// frame and one sample is taken per frame. The closing frame is then copied from the first frame,
+    /// so the motion loops exactly.
     ///
     /// Do not call <see cref="Animator.Play(int, int, float)"/> on the character's layers to seek to the
     /// start of the clip: a state with "write default values" resets every bone its clip does not
-    /// animate, so seeking snaps the whole body back to rest and the recording comes out nearly frozen.
-    /// The recording therefore starts at the current playback position, which still closes seamlessly.
+    /// animate, so seeking the layers snaps the whole body back to its rest pose and the recording
+    /// comes out almost frozen (measured: 21 of 52 bones rotating instead of 49). The recording
+    /// therefore starts at the current playback position, which still closes into a seamless loop.
     ///
     /// The player loop runs one frame per recorded frame, so cloth/hair physics keep working. Physics
     /// driven bones are the one part that cannot be made identical to the first frame.
@@ -632,10 +609,9 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         try
         {
             // Initialize() disables the animator, resets the pose and re-enables it; depending on where
-            // the frame boundary falls, the pose read here can still be that rest pose, which is the
-            // single T-pose-looking frame that used to appear at the start of a recording (measured:
-            // a 0.85 rotation jump out of frame 0 against a typical step of 0.24). Force one evaluation
-            // so the pose is animation driven before anything is sampled.
+            // the frame boundary falls the pose can still be that rest pose here, which is the T-pose
+            // frame that used to show up at the start of a recording. Force one evaluation so the pose
+            // is animation driven before anything is sampled.
             foreach (var layer in layers)
             {
                 layer.Animator.Update(0f);
@@ -645,7 +621,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             {
                 // One fixed step advances the animation by exactly 1/fps (captureDeltaTime is pinned),
                 // and sampling right after it keeps the same phase as the legacy FixedUpdate sampler -
-                // sampling after Update instead reads a pose that the character's IK has partly reset.
+                // sampling after Update instead reads a pose the character's IK has partly reset.
                 if (frame > 0) yield return new WaitForFixedUpdate();
                 SampleFrame();
             }
@@ -748,7 +724,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
     /// <summary>
     /// Every layer that currently plays something, so the recording can put all of them back on an
-    /// exact normalized time (the uma character drives body and face on several layers).
+    /// exact normalized time (the uma character drives body, face and camera on several layers).
     /// </summary>
     private static List<RecordedLayer> SnapshotLayers(Animator[] animators)
     {
@@ -806,7 +782,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     /// </summary>
     /// <param name="modelName">VMDファイルに記載される専用モデル名</param>
     /// <param name="filePath">保存先の絶対ファイルパス</param>
-    public void SaveVMD(string modelName, string filePath)
+    public void SaveVMD(string modelName, string filePath, int KeyReductionLevel = 1)
     {
         if (IsRecording)
         {
@@ -1011,36 +987,20 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         if (boneGhost != null)
         {   
             // Mini-umas motion export cause an exception here
-            try
+            foreach(var pair in boneGhost.GhostDictionary)
             {
-               foreach(var pair in boneGhost.GhostDictionary)
+                try 
                 {
-                    Destroy(pair.Value.ghost.gameObject);
+                    if (pair.Value.ghost != null) Destroy(pair.Value.ghost.gameObject);
                 } 
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"Failed to destroy some boneGhost pairs");
+                catch (Exception ex) 
+                {
+                    Debug.LogWarning($"Failed to destroy ghost for {pair.Key}: {ex.Message}");
+                }
             }
             
         }
         Destroy(this);
-    }
-
-    /// <summary>
-    /// VMDを作成する
-    /// 呼び出す際は先にStopRecordingを呼び出すこと
-    /// </summary>
-    /// <param name="modelName">VMDファイルに記載される専用モデル名</param>
-    /// <param name="filePath">保存先の絶対ファイルパス</param>
-    /// <param name="keyReductionLevel">キーの書き込み頻度を減らして容量を減らす</param>
-    public void SaveVMD(string modelName, int keyReductionLevel = 3)
-    {
-        string fileName = $"{Application.dataPath}{FileSavePath}/{modelName} {DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss")}.vmd";
-        //string.Format("UMA_{0}.vmd", )
-        Directory.CreateDirectory(Application.dataPath + FileSavePath);
-        KeyReductionLevel = keyReductionLevel;
-        SaveVMD(modelName, fileName);
     }
 
     public void SaveLiveVMD(LiveEntry liveEntry, DateTime time ,string modelName, int keyReductionLevel = 3)
@@ -1321,10 +1281,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 {
                     foreach (var v in val.UMAMorph)
                     {
-                        if(v.Equals(name))
-                        {
-                            return val.MMDMorph;
-                        }
+                        if(v.Equals(name)) return val.MMDMorph;
                     }
                 }
             }

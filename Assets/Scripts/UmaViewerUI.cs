@@ -12,6 +12,7 @@ using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 //修改(载入通用服装ColorSet相关)(保存当前选中的颜色配置到TXT文件)
 using System.Text;
+using SFB;
 
 public class UmaViewerUI : MonoBehaviour
 {
@@ -1052,12 +1053,6 @@ public class UmaViewerUI : MonoBehaviour
         var camera = Builder.AnimationCamera;
         var buttonText = AnimationSettings.VMDButton.GetComponentInChildren<TextMeshProUGUI>();
 
-        if (!container /*|| container.IsMini*/) // mini uma cockblock removed, added a facial target null check in MorphRecorder ctor. When something goes horribly wrong, put it back
-        {
-            buttonText.text = string.Format("<color=#FF0000>{0}</color>", "Need Normal UMA");
-            return;
-        }
-
         var rootbone = container.transform.Find("Position");
         Debug.Log($"[VMD Debug] Position scale: {rootbone.localScale}, IsMini: {container.IsMini}, BodyScale: {container.BodyScale}");
 
@@ -1065,17 +1060,46 @@ public class UmaViewerUI : MonoBehaviour
         {
             if (recorder.IsRecording)
             {
+                recorder.StopRecording();
+                buttonText.text = "Saving";
+
+                var extensions = new [] {
+                    new ExtensionFilter("Vocaloid Motion Data", "vmd"),
+                    new ExtensionFilter("All Files", "*" )
+                };
+
+                string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file", Application.dataPath, container.name, extensions);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    recorder.SaveVMD(container.name, path, Config.Instance.VmdKeyReductionLevel);
+                    Debug.Log($"File successfully saved to: {path}");
+                    ShowMessage($"VMD is saved in {path}", UIMessageType.Success);
+                }
+                else
+                {
+                    Debug.Log($"VMD save cancelled");
+                    ShowMessage($"VMD save cancelled", UIMessageType.Warning);
+                }
+
                 if (camera.enabled)
                 {
                     var cameraRecorder = camera.GetComponent<UnityCameraVMDRecorder>();
                     cameraRecorder.StopRecording();
-                    cameraRecorder.SaveVMD();
+                    path = StandaloneFileBrowser.SaveFilePanel("Save the camera VMD file", Application.dataPath, $"{container.name}_Camera", extensions);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        cameraRecorder.SaveVMD(path);
+                        Debug.Log($"File successfully saved to: {path}");
+                        ShowMessage($"Camera VMD is saved in {path}", UIMessageType.Success);
+                    }
+                    else
+                    {
+                        Debug.Log($"Camera VMD save cancelled");
+                        ShowMessage($"Camera VMD save cancelled", UIMessageType.Warning);
+                    }
+                    
                 }
-                recorder.StopRecording();
-                buttonText.text = "Saving";
-                recorder.SaveVMD(container.name, Config.Instance.VmdKeyReductionLevel);
-                buttonText.text = "Record VMD";
-                ShowMessage($"VMD is saved in {Path.GetFullPath(Application.dataPath + UnityHumanoidVMDRecorder.FileSavePath)}", UIMessageType.Success);
+                buttonText.text = "Record VMD"; 
             }
         }
         else
@@ -1094,6 +1118,74 @@ public class UmaViewerUI : MonoBehaviour
                 buttonText.text = "Recording...";
             }
         }
+    }
+
+    public void AutoRecordVMD()
+    {
+        var container = Builder.CurrentUMAContainer;
+        if (!container || !container.UmaAnimator)
+        {
+            ShowMessage("No model loaded!", UIMessageType.Error);
+            return;
+        }
+
+        var animator = container.UmaAnimator;
+        var animator_face = container.UmaFaceAnimator;
+        var animator_cam = Builder.AnimationCameraAnimator;
+
+        // Reset animation to 0 and pause=
+        animator.speed = 0f;
+        animator.Play(0, 0, 0f);
+        animator.Play(0, 2, 0f);
+        
+        if (animator_cam != null && animator_cam.runtimeAnimatorController)
+        {
+            animator_cam.speed = 0f;
+            animator_cam.Play(0, -1, 0f);
+        }
+        
+        if (animator_face != null)
+        {
+            animator_face.speed = 0f;
+            animator_face.Play(0, 0, 0f);
+            animator_face.Play(0, 1, 0f);
+        }
+
+        animator.Update(0f);
+        if (animator_cam != null) animator_cam.Update(0f);
+        if (animator_face != null) animator_face.Update(0f);
+
+        RecordVMD(); 
+
+        // Resume playback at the user's selected speed
+        float targetSpeed = AnimationSettings.SpeedSlider.value;
+        animator.speed = targetSpeed;
+        if (animator_cam != null) animator_cam.speed = targetSpeed;
+        if (animator_face != null) animator_face.speed = targetSpeed;
+
+        ShowMessage("Auto-recording started. Please do not interact until finished.", UIMessageType.Success);
+
+        // Monitor and finish automatically
+        StartCoroutine(AutoRecordWaitAndFinishCoroutine());
+    }
+
+    private IEnumerator AutoRecordWaitAndFinishCoroutine()
+    {
+        var container = Builder.CurrentUMAContainer;
+        if (container == null || container.UmaAnimator == null) yield break;
+
+        var animator = container.UmaAnimator;
+        
+        // Wait while the animation is actively playing and hasn't reached the end
+        while (container != null && animator != null && animator.speed > 0f && animator.GetCurrentAnimatorStateInfo(0).normalizedTime < 1f)
+        {
+            yield return null;
+        }
+
+        // Wait for FixedUpdate cycles after hitting 1.0.
+        yield return new WaitForFixedUpdate();
+        //yield return new WaitForFixedUpdate();
+        RecordVMD(); 
     }
 
     public void UpdateLiveMode(int val)

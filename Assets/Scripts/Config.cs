@@ -39,7 +39,7 @@ public class Config
     public WorkMode WorkMode = WorkMode.Default;
 
     public string VmdKeyReductionLevelTip = "Affects the recording quality: 1 = record every frame, 2 = record every two frames, and so on.";
-    public int VmdKeyReductionLevel = 2;
+    public int VmdKeyReductionLevel = 1;
 
     public string VmdUseEnglishBoneNamesTip = "True = uses the same bone names as exported models, false = uses japanese names";
     public bool VmdUseEnglishBoneNames = true;
