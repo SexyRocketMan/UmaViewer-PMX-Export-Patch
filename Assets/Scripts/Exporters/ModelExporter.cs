@@ -336,14 +336,67 @@ public class ModelExporter
             pmxbone.Movable = true;
             pmxbone.Rotatable = true;
             pmxbone.Controllable = true;
-            pmxbone.ChildBoneVal = new Bone.ChildBone()
-            {
-                ChildUseId = true,
-                Index = (bone.childCount > 0 ? bonelist.IndexOf(bone.GetChild(0)) : -1)
-            };
+            // A PMX bone's tail is either the index of one of its children or an absolute position. The uma
+            // rig has no tails, so a usable child's head becomes the tail - that is what makes Blender draw
+            // the bone along its chain. Leaves of the rig (finger tips, hair and tail ends) have no such
+            // child, and their "_Handle" helpers sit at the same position as the bone itself, so those get
+            // an explicit tail along the bone's own axis instead.
+            Transform pmxChild = PMXTailChild(bone, bonelist);
+            pmxbone.ChildBoneVal = pmxChild != null
+                ? new Bone.ChildBone()
+                {
+                    ChildUseId = true,
+                    Index = bonelist.IndexOf(pmxChild)
+                }
+                : new Bone.ChildBone()
+                {
+                    ChildUseId = false,
+                    Index = -1,
+                    Offset = LeafTail(bone)
+                };
             pmxbones.Add(pmxbone);
         }
         return pmxbones.ToArray();
+    }
+
+    /// <summary>
+    /// The child whose head should be this bone's tail, or null when nothing usable is below it. Children
+    /// that were filtered out of the export (the Col_* colliders), "_Handle" helpers and children sitting
+    /// at the bone's own position all describe no direction at all - a tail like that leaves Blender
+    /// drawing the bone straight up instead of along the finger or hair strand it belongs to.
+    /// </summary>
+    private static Transform PMXTailChild(Transform bone, List<Transform> bonelist)
+    {
+        for (int i = 0; i < bone.childCount; i++)
+        {
+            Transform child = bone.GetChild(i);
+            if (bonelist.IndexOf(child) < 0) continue;
+            if (child.name.Contains("_Handle")) continue;
+            if ((child.position - bone.position).sqrMagnitude < 1e-10f) continue;
+            return child;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The tail offset for a bone with nothing usable below it: its own axis - measured on the uma rig, a
+    /// bone's local up is exactly the direction its chain runs in - at half the length of the segment that
+    /// leads to it, so a finger tip carries on the finger instead of standing up. A root with nothing above
+    /// it falls back to a short stub along the same axis.
+    ///
+    /// The value is an offset from the bone's own position, not a position: mmd_tools reads it as
+    /// <c>tail = head + offset</c> (core/pmx/importer.py), and its own exporter writes it the same way.
+    /// </summary>
+    private static Vector3 LeafTail(Transform bone)
+    {
+        float length = 0.1f;
+        Transform parent = bone.parent;
+        if (parent != null)
+        {
+            float segment = (bone.position - parent.position).magnitude;
+            if (segment > 1e-5f) length = segment * 0.5f;
+        }
+        return bone.up * length;
     }
 
     private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model)
