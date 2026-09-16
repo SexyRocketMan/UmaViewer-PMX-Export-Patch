@@ -24,6 +24,8 @@ using UnityEngine;
 ///   -umaCostume &lt;id&gt;     costume id, e.g. "00". Defaults to the first costume of the character
 ///   -umaProp &lt;path&gt;      instead of a character, load and export a prop / scene asset path or name
 ///                        (see -umaListProps)
+///   -umaMotion &lt;path&gt;    load a specific motion onto the character before exporting/recording
+///                        (e.g. 3d/motion/racemain/body/type01/anm_rac_type01_run02_stride)
 ///   -umaOut &lt;path&gt;       .pmx file to write. Defaults to &lt;project&gt;/HeadlessExports/&lt;char&gt;_&lt;costume&gt;.pmx
 ///   -umaScene &lt;path&gt;     scene to boot, default Assets/Scenes/Version2.unity
 ///   -umaListChars        print every character id together with its costume ids, then exit
@@ -34,6 +36,8 @@ using UnityEngine;
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short, 2 both, 3 unified)
 ///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
 ///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
+///   -umaRecordMode &lt;m&gt;   deterministic (default, one pinned frame per sample) or realtime (the legacy
+///                        FixedUpdate sampler, useful to compare behaviour)
 ///   -umaTimeout &lt;sec&gt;    abort after this many seconds, default 600
 ///   -umaExtraFrames &lt;n&gt;  frames to let the model settle before exporting, default 30
 ///
@@ -59,6 +63,8 @@ public static class UmaHeadlessExport
     private const string KeyVmdPath = "UmaHeadlessExport.VmdPath";
     private const string KeyVmdStarted = "UmaHeadlessExport.VmdStarted";
     private const string KeyVmdDone = "UmaHeadlessExport.VmdDone";
+    private const string KeyVmdFrames = "UmaHeadlessExport.VmdFrames";
+    private const string KeyMotionLoaded = "UmaHeadlessExport.MotionLoaded";
 
     private enum Stage
     {
@@ -80,6 +86,7 @@ public static class UmaHeadlessExport
         public string CostumeId = "";
         public string OutPath = "";
         public string Prop = "";
+        public string Motion = "";
         public bool ListChars;
         public bool ListCostumes;
         public bool ListProps;
@@ -90,7 +97,9 @@ public static class UmaHeadlessExport
         public string RecordVmd = "";
         public int RecordFps = 30;
         public int RecordReduction = 0;
+        public string RecordMode = "deterministic";
         public double TimeoutSeconds = 600;
+        public double BootTimeoutSeconds = 120;
         public int ExtraFrames = 30;
 
         public static Options Parse(string[] argv)
@@ -108,6 +117,7 @@ public static class UmaHeadlessExport
                     case "-umaOut": options.OutPath = Next(); break;
                     case "-umaScene": options.ScenePath = Next(); break;
                     case "-umaProp": options.Prop = Next(); break;
+                    case "-umaMotion": options.Motion = Next(); break;
                     case "-umaListChars": options.ListChars = true; break;
                     case "-umaListCostumes": options.ListCostumes = true; break;
                     case "-umaListProps":
@@ -122,7 +132,9 @@ public static class UmaHeadlessExport
                     case "-umaRecordVmd": options.RecordVmd = Next(); break;
                     case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
                     case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
+                    case "-umaRecordMode": options.RecordMode = Next(); break;
                     case "-umaTimeout": options.TimeoutSeconds = double.Parse(Next()); break;
+                    case "-umaBootTimeout": options.BootTimeoutSeconds = double.Parse(Next()); break;
                     case "-umaExtraFrames": options.ExtraFrames = int.Parse(Next()); break;
                     default: break; // ignore everything else Unity/the shell passes through
                 }
@@ -141,6 +153,7 @@ public static class UmaHeadlessExport
     }
 
     private static int _settleFramesLeft;
+    private static DateTime _playModeEnteredUtc;
 
     /// <summary>Entry point for -executeMethod.</summary>
     public static void Run()
@@ -219,6 +232,7 @@ public static class UmaHeadlessExport
             {
                 case Stage.WaitPlayMode:
                     if (!EditorApplication.isPlaying) return;
+                    _playModeEnteredUtc = DateTime.UtcNow;
                     Debug.Log($"{Tag} play mode entered");
                     CurrentStage = Stage.WaitStartup;
                     break;
@@ -228,11 +242,19 @@ public static class UmaHeadlessExport
                     var main = UmaViewerMain.Instance;
                     var builder = UmaViewerBuilder.Instance;
                     if (main == null || builder == null) return;
-                    // UmaViewerMain.Start() fills the shader list as its very last step.
-                    if (builder.ShaderList == null || builder.ShaderList.Count == 0) return;
-                    if (main.Characters.Count == 0) return;
 
-                    Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets");
+                    // UmaViewerMain.Start() ends by loading the shader list, but it also downloads the
+                    // english translations from GitHub first - on a slow or blocked network that never
+                    // completes, so fall through after a while instead of hanging forever.
+                    bool fullyBooted = builder.ShaderList != null && builder.ShaderList.Count > 0;
+                    bool usable = main.AbList != null && main.AbList.Count > 0;
+                    double bootSeconds = (DateTime.UtcNow - _playModeEnteredUtc).TotalSeconds;
+
+                    if (!usable || (!fullyBooted && bootSeconds < options.BootTimeoutSeconds)) return;
+
+                    Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets, "
+                              + $"{builder.ShaderList.Count} shaders"
+                              + (fullyBooted ? "" : $" (after {bootSeconds:F0}s without the startup download finishing)"));
 
                     if (options.MorphNameMode >= 0)
                     {
@@ -281,7 +303,7 @@ public static class UmaHeadlessExport
                         break;
                     }
 
-                    var chara = main.Characters.FirstOrDefault(c => c.Id == options.CharId);
+                    var chara = FindCharacter(options.CharId);
                     if (chara == null)
                     {
                         Fail($"character {options.CharId} not found");
@@ -326,6 +348,34 @@ public static class UmaHeadlessExport
 
                 case Stage.Settle:
                     if (_settleFramesLeft-- > 0) return;
+
+                    if (!string.IsNullOrEmpty(options.Motion) && SessionState.GetInt(KeyMotionLoaded, 0) == 0)
+                    {
+                        var target = CurrentContainer() as UmaContainerCharacter;
+                        if (target == null)
+                        {
+                            Fail("-umaMotion needs a character");
+                            return;
+                        }
+                        var main = UmaViewerMain.Instance;
+                        if (!main.AbList.TryGetValue(options.Motion, out var motionEntry))
+                        {
+                            motionEntry = main.AbMotions.FirstOrDefault(e =>
+                                e.Name.IndexOf(options.Motion, StringComparison.OrdinalIgnoreCase) >= 0);
+                        }
+                        if (motionEntry == null)
+                        {
+                            Fail($"motion '{options.Motion}' not found; try a substring of the asset path");
+                            return;
+                        }
+                        Debug.Log($"{Tag} loading motion {motionEntry.Name}");
+                        target.LoadAnimation(motionEntry);
+                        Debug.Log($"{Tag} now playing '{CurrentClip(target.UmaAnimator)?.name}'");
+                        SessionState.SetInt(KeyMotionLoaded, 1);
+                        _settleFramesLeft = options.ExtraFrames; // let the new clip settle before sampling
+                        return;
+                    }
+
                     CurrentStage = string.IsNullOrEmpty(options.RecordVmd) ? Stage.Export : Stage.RecordVmd;
                     break;
 
@@ -371,10 +421,32 @@ public static class UmaHeadlessExport
                             return;
                         }
                         SessionState.SetInt(KeyVmdStarted, 1);
-                        Debug.Log($"{Tag} recording one loop of '{clip.name}' ({clip.length:F3}s) at {options.RecordFps}fps");
-                        recorder.StartCoroutine(recorder.RecordCurrentLoop(clip, options.RecordFps,
-                            () => SessionState.SetInt(KeyVmdDone, 1)));
+                        Debug.Log($"{Tag} recording one loop of '{clip.name}' ({clip.length:F3}s) at {options.RecordFps}fps "
+                                  + $"in {options.RecordMode} mode");
+
+                        if (options.RecordMode == "realtime")
+                        {
+                            // the legacy path: let the animator play normally and let FixedUpdate sample
+                            int frames = Mathf.Max(1, Mathf.RoundToInt(clip.length * options.RecordFps));
+                            SessionState.SetInt(KeyVmdFrames, frames);
+                            Time.fixedDeltaTime = 1f / options.RecordFps;
+                            character.UmaAnimator.speed = 1f;
+                            recorder.StartRecording();
+                        }
+                        else
+                        {
+                            recorder.StartCoroutine(recorder.RecordCurrentLoop(clip, options.RecordFps,
+                                () => SessionState.SetInt(KeyVmdDone, 1)));
+                        }
                         return;
+                    }
+
+                    if (options.RecordMode == "realtime")
+                    {
+                        int wanted = SessionState.GetInt(KeyVmdFrames, 30) + 1;
+                        if (recorder.FrameNumber < wanted) return; // still sampling
+                        recorder.StopRecording();
+                        SessionState.SetInt(KeyVmdDone, 1);
                     }
 
                     if (SessionState.GetInt(KeyVmdDone, 0) == 0) return; // still recording
@@ -483,6 +555,22 @@ public static class UmaHeadlessExport
             if (clips != null && clips.Length > 0 && clips[0].clip != null) return clips[0].clip;
         }
         return null;
+    }
+
+    /// <summary>
+    /// A character entry by id, taking it from the already built list when the viewer finished its
+    /// startup, and otherwise building the minimal entry from the database so a headless run does not
+    /// depend on the startup download completing.
+    /// </summary>
+    private static CharaEntry FindCharacter(int id)
+    {
+        var main = UmaViewerMain.Instance;
+        var known = main.Characters.FirstOrDefault(c => c.Id == id);
+        if (known != null) return known;
+
+        var row = UmaDatabaseController.Instance?.CharaData?.FirstOrDefault(item => Convert.ToInt32(item["id"]) == id);
+        if (row == null) return null;
+        return new CharaEntry { Id = id, Name = row["charaname"].ToString(), EnName = "" };
     }
 
     /// <summary>The container the current run is operating on (character or prop/scene).</summary>

@@ -113,6 +113,55 @@ def read_vmd(path: str) -> Motion:
     return motion
 
 
+def cmd_motion(paths: list[str], args) -> int:
+    """Does the motion actually move? A frozen clip still has the right frame count and still loops."""
+    ok = True
+    for path in paths:
+        motion = read_vmd(path)
+        print(f"== {path} (model {motion.model_name!r})")
+        if not motion.bone_keys:
+            print("   !! no bone keyframes")
+            ok = False
+            continue
+
+        per_bone: dict[str, list[BoneKey]] = {}
+        for key in motion.bone_keys:
+            per_bone.setdefault(key.name, []).append(key)
+
+        worst_pos = worst_rot = 0.0
+        moving_pos = moving_rot = 0
+        for name, keys in per_bone.items():
+            keys.sort(key=lambda k: k.frame)
+            base_pos, base_rot = keys[0].position, keys[0].rotation
+            pos = max(math.dist(base_pos, k.position) for k in keys)
+            rot = max(min(max(abs(a - b) for a, b in zip(base_rot, k.rotation)),
+                          max(abs(a + b) for a, b in zip(base_rot, k.rotation))) for k in keys)
+            worst_pos = max(worst_pos, pos)
+            worst_rot = max(worst_rot, rot)
+            if pos > args.position_tolerance:
+                moving_pos += 1
+            if rot > args.rotation_tolerance:
+                moving_rot += 1
+
+        morph_spans = {}
+        for key in motion.morph_keys:
+            low, high = morph_spans.get(key.name, (key.weight, key.weight))
+            morph_spans[key.name] = (min(low, key.weight), max(high, key.weight))
+        moving_morphs = {n: span for n, span in morph_spans.items() if span[1] - span[0] > 1e-4}
+
+        print(f"   bones: {moving_pos}/{len(per_bone)} move positionally (worst {worst_pos:.5f}), "
+              f"{moving_rot}/{len(per_bone)} rotate (worst {worst_rot:.5f})")
+        print(f"   morphs: {len(moving_morphs)}/{len(morph_spans)} change")
+        if moving_pos == 0 and moving_rot < args.min_rotating_bones:
+            print("   !! the motion is static: nothing moves, so the recording sampled a frozen pose")
+            ok = False
+        elif moving_pos == 0:
+            print(f"   note: no bone translates, only {moving_rot} rotate")
+
+    print("PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def cmd_summary(paths: list[str], args) -> int:
     for path in paths:
         motion = read_vmd(path)
@@ -205,6 +254,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
     summary = sub.add_parser("summary"); summary.add_argument("paths", nargs="+")
+    motion = sub.add_parser("motion",
+                            help="check that the motion actually moves and is not a frozen pose")
+    motion.add_argument("paths", nargs="+")
+    motion.add_argument("--position-tolerance", type=float, default=1e-4)
+    motion.add_argument("--rotation-tolerance", type=float, default=1e-4)
+    motion.add_argument("--min-rotating-bones", type=int, default=2)
     loop = sub.add_parser("loop")
     loop.add_argument("paths", nargs="+")
     loop.add_argument("--tolerance", type=float, default=1e-4,
@@ -213,7 +268,7 @@ def main() -> int:
                       help="max quaternion deviation between the first and last frame "
                            "(1e-3 ~ 0.1 degrees; physics driven bones never close exactly)")
     args = parser.parse_args()
-    return {"summary": cmd_summary, "loop": cmd_loop}[args.cmd](args.paths, args)
+    return {"summary": cmd_summary, "loop": cmd_loop, "motion": cmd_motion}[args.cmd](args.paths, args)
 
 
 if __name__ == "__main__":

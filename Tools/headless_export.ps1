@@ -1,26 +1,38 @@
 <#
 .SYNOPSIS
-    Export a PMX model (or list characters/costumes) from UmaViewer without the GUI.
+    Export a PMX model, a VMD motion, or prop/scene info from UmaViewer without the GUI.
 
 .DESCRIPTION
     Drives Assets/Editor/UmaHeadlessExport.cs through Unity in batch mode: the viewer scene is
-    opened, its normal startup runs in play mode, the requested character/costume is loaded and
-    written to a .pmx, exactly like the "Export Model" button does - just without any clicking.
-
-.EXAMPLE
-    ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx
+    opened, its normal startup runs in play mode, then the requested asset is loaded and exported
+    exactly like the in-app buttons do - just without any clicking.
 
 .EXAMPLE
     ./Tools/headless_export.ps1 -ListChars
+    ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx
+    ./Tools/headless_export.ps1 -Char 1001 -Motion anm_rac_type01_run02_stride -RecordVmd D:/out/run.vmd
+    ./Tools/headless_export.ps1 -ListProps home10001
+    ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
 [CmdletBinding()]
 param(
     [int]$Char = -1,
     [string]$Costume = "",
     [string]$Out = "",
+    [string]$Motion = "",
+    [string]$Prop = "",
+    [string]$Variant = "",
     [string]$Scene = "",
     [switch]$ListChars,
     [switch]$ListCostumes,
+    [switch]$ListProps,
+    [string]$ListPropsFilter = "",
+    [switch]$DumpMaterials,
+    [string]$RecordVmd = "",
+    [int]$RecordFps = 30,
+    [int]$RecordReduction = 0,
+    [ValidateSet("deterministic", "realtime")][string]$RecordMode = "deterministic",
+    [int]$MorphNameMode = -1,
     [int]$Timeout = 600,
     [int]$ExtraFrames = 30,
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
@@ -49,8 +61,9 @@ function Find-UnityExe {
 if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 
-if (-not $ListChars -and -not $ListCostumes -and $Char -lt 0) {
-    throw "Pass -Char <id>, or -ListChars / -ListCostumes."
+$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $Char -ge 0 -or $Prop -or $RecordVmd
+if (-not $doingSomething) {
+    throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
 if (-not $LogPath) {
     $logDir = Join-Path $ProjectPath "Logs"
@@ -68,24 +81,64 @@ $arguments = @(
 )
 if ($Char -ge 0) { $arguments += @("-umaChar", $Char) }
 if ($Costume) { $arguments += @("-umaCostume", $Costume) }
-if ($Out) { $arguments += @("-umaOut", (New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out)).FullName + "\" + (Split-Path -Leaf $Out)) }
+if ($Out) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
+    $arguments += @("-umaOut", (Join-Path (Resolve-Path (Split-Path -Parent $Out)) (Split-Path -Leaf $Out)))
+}
+if ($Motion) { $arguments += @("-umaMotion", $Motion) }
+if ($Prop) { $arguments += @("-umaProp", $Prop) }
+if ($Variant) { $arguments += @("-umaVariant", $Variant) }
 if ($Scene) { $arguments += @("-umaScene", $Scene) }
 if ($ListChars) { $arguments += "-umaListChars" }
 if ($ListCostumes) { $arguments += "-umaListCostumes" }
+if ($ListProps) {
+    $arguments += "-umaListProps"
+    if ($ListPropsFilter) { $arguments += $ListPropsFilter }
+}
+if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
+if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
+if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
+if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordReduction) }
+if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
+if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 
 Write-Host "Unity  : $UnityExe"
 Write-Host "Project: $ProjectPath"
 Write-Host "Log    : $LogPath"
 Write-Host ""
 
-& $UnityExe @arguments
-$exit = $LASTEXITCODE
+& $UnityExe @arguments | Out-Null
+$launcherExit = $LASTEXITCODE
+
+# Unity's launcher process can exit before the editor it spawned has finished, so the process exit
+# code is not proof of anything: wait for the runner's own result marker in the log instead.
+$marker = $null
+$deadline = (Get-Date).AddSeconds($Timeout + 120)
+while ((Get-Date) -lt $deadline) {
+    if (Test-Path $LogPath) {
+        $marker = Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\] (OK|FAILED)" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($marker) { break }
+    }
+    Start-Sleep -Seconds 2
+}
 
 if (Test-Path $LogPath) {
-    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]" |
+    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]" |
         Where-Object { $_.Line -notmatch "StackTraceUtility|DebugLogHandler|Logger:Log|Debug:Log" } |
         ForEach-Object { $_.Line.Trim() }
 }
+
 Write-Host ""
-Write-Host "Unity exit code: $exit"
-exit $exit
+if (-not $marker) {
+    Write-Host "No result marker in the log (timeout after $($Timeout + 120)s, launcher exit $launcherExit)." -ForegroundColor Red
+    Write-Host "See $LogPath" -ForegroundColor Red
+    exit 1
+}
+
+if ($marker.Line -match "FAILED") {
+    Write-Host "The export FAILED, see the log above and $LogPath" -ForegroundColor Red
+    exit 1
+}
+
+exit 0

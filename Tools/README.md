@@ -11,6 +11,33 @@ regression tested from a terminal (and from CI).
 | `pmx_inspect.py` | Blender-free PMX inspector/differ (`summary`, `bones`, `weights`, `morphs`, `diff`, `check`). |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator (`summary`, `loop`). |
 | `blender_verify_vmd.py` | Imports a PMX + VMD in Blender and checks the motion's morph keyframes survive. |
+| `blender_render_motion.py` | Imports a PMX (+VMD) and renders the upper body / full body as a coloured PNG sequence. |
+| `render_stats.py` | Checks rendered frames numerically: not black, not empty, not flat white, motion plays, loop closes. |
+| `run_workflow.ps1` | The whole chain in one command: export -> record -> check -> render -> encode -> check. |
+
+## The whole chain in one command
+
+```powershell
+# model + one loop of a running motion + a coloured mp4, every step verified
+./Tools/run_workflow.ps1 -Char 1001 -Costume 00 -Motion anm_rac_type01_run02_stride -View full
+
+# just a model and a motion, no render
+./Tools/run_workflow.ps1 -Char 1002 -Costume 00 -SkipRender
+```
+
+It stops on the first failing step with a non zero exit code, so it doubles as a regression gate for
+the export path. Outputs land in `HeadlessExports/` (`<name>.pmx`, `<name>.vmd`, `<name>.mp4`,
+`<name>_frames/`, `<name>_still.png`, plus the `Texture2D/` folder the pmx refers to).
+
+**Pick a moving motion.** The clip the viewer loads by default is an idle whose bone rotations are
+essentially zero - `anm_eve_chr1001_00_idle01_loop` measured 0 of 52 bones moving, so it makes a
+useless test and a dull video. `-Motion anm_rac_type01_run02_stride` (or any other substring of a
+motion asset path) is a much better baseline; `vmd_inspect.py motion` fails loudly on a static clip.
+
+`render_stats.py` is what replaces "just look at it", since a headless agent cannot see the frames:
+it reports subject coverage, distinct colours, saturation and background, and compares first/middle/
+last frames for motion and loop closure. Measured on the stride render: 12.7k distinct colours,
+first vs middle 0.038 mean (motion plays), first vs last **0.0000** (loops exactly).
 
 ## Quick start
 

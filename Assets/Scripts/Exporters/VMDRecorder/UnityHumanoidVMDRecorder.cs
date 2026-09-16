@@ -586,19 +586,21 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     }
 
     /// <summary>
-    /// Records exactly one loop of <paramref name="clip"/> by stepping the animation to exact
-    /// normalized times instead of sampling whatever the render loop happens to produce.
+    /// Records exactly one loop of <paramref name="clip"/>.
     ///
-    /// Every recorded frame lands on frame/fps seconds, the frame count is exactly
-    /// clip.length * fps + 1, and the last frame repeats the first pose - which is what makes a single
-    /// button produce a cleanly looping motion that needs no trimming in Blender. Sampling in real
-    /// time drifts against the animation (FixedUpdate count vs. animator time), which is why the start
-    /// and end frames used to disagree.
+    /// The animation is left playing normally and the frame length is pinned with
+    /// <see cref="Time.captureDeltaTime"/>, so one fixed step advances it by exactly 1/fps, and one
+    /// sample is taken per step. The closing frame is then copied from the first frame, so the motion
+    /// loops exactly. Sampling right after the fixed step matters: sampling after Update instead reads
+    /// a pose the character's IK has partly reset, which loses most of the limb rotation.
     ///
-    /// The player loop still advances one frame per recorded frame with
-    /// <see cref="Time.captureDeltaTime"/> pinned to the frame length, so cloth/hair physics keep
-    /// working. Physics driven bones are the one part that will not be identical between the first and
-    /// last frame.
+    /// Do not call <see cref="Animator.Play(int, int, float)"/> on the character's layers to seek to the
+    /// start of the clip: a state with "write default values" resets every bone its clip does not
+    /// animate, so seeking snaps the whole body back to rest and the recording comes out nearly frozen.
+    /// The recording therefore starts at the current playback position, which still closes seamlessly.
+    ///
+    /// The player loop runs one frame per recorded frame, so cloth/hair physics keep working. Physics
+    /// driven bones are the one part that cannot be made identical to the first frame.
     /// </summary>
     public IEnumerator RecordClipLoop(AnimationClip clip, int fps, Animator[] animators, Action onFinished = null)
     {
@@ -608,10 +610,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         int totalFrames = Mathf.Max(1, Mathf.RoundToInt(clip.length * fps));
         var layers = SnapshotLayers(animators);
         var previousSpeeds = new Dictionary<Animator, float>();
+        var previousCulling = new Dictionary<Animator, AnimatorCullingMode>();
         foreach (var animator in (animators ?? new Animator[0]).Where(a => a != null).Distinct())
         {
             previousSpeeds[animator] = animator.speed;
-            animator.speed = 0f; // the pose is set explicitly, the animator must not advance on its own
+            animator.speed = 1f; // normal playback, one pinned frame length per sample
+
+            // A culled animator is not evaluated at all, so a model that is off screen (or a headless
+            // run with nothing rendering it) would record a frozen pose.
+            previousCulling[animator] = animator.cullingMode;
+            animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
         }
 
         float previousCaptureDeltaTime = Time.captureDeltaTime;
@@ -619,22 +627,22 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         Time.fixedDeltaTime = 1f / fps;
 
         ManualSampling = true;
+        int movingBones = 0;
         StartRecording();
         try
         {
             for (int frame = 0; frame <= totalFrames; frame++)
             {
-                // the last frame repeats the first pose exactly, so the motion loops seamlessly
-                float normalizedTime = frame == totalFrames ? 0f : frame / (float)totalFrames;
-                foreach (var layer in layers)
-                {
-                    layer.Animator.Play(layer.StateHash, layer.Layer, normalizedTime);
-                    layer.Animator.Update(0f);
-                }
-
-                yield return null; // run one frame so cloth/hair physics advance with it
+                // One fixed step advances the animation by exactly 1/fps (captureDeltaTime is pinned),
+                // and sampling right after it keeps the same phase as the legacy FixedUpdate sampler -
+                // sampling after Update instead reads a pose that the character's IK has partly reset.
+                if (frame > 0) yield return new WaitForFixedUpdate();
                 SampleFrame();
             }
+
+            CloseRecordedLoop();
+            // StopRecording swaps the dictionaries out, so measure the motion before that happens
+            movingBones = CountMovingBones();
         }
         finally
         {
@@ -644,12 +652,71 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             {
                 if (pair.Key != null) pair.Key.speed = pair.Value;
             }
+            foreach (var pair in previousCulling)
+            {
+                if (pair.Key != null) pair.Key.cullingMode = pair.Value;
+            }
             StopRecording();
         }
 
         Debug.Log($"[VMD] recorded one loop of '{clip.name}': {frameNumberSaved} frames "
-                  + $"({clip.length:F3}s @ {fps}fps), last frame repeats the first pose");
+                  + $"({clip.length:F3}s @ {fps}fps), {movingBones} bone(s) move, last frame repeats the first pose");
+        if (movingBones == 0)
+        {
+            Debug.LogWarning("[VMD] the recorded motion contains no bone movement at all - the animation "
+                             + "may not be playing (some clips, e.g. a resting idle, really are static).");
+        }
         onFinished?.Invoke();
+    }
+
+    /// <summary>
+    /// Copies the first sampled frame over the last one for every bone and morph, so the motion closes
+    /// exactly instead of merely ending close to where it started.
+    /// </summary>
+    private void CloseRecordedLoop()
+    {
+        foreach (BoneNames boneName in BoneDictionary.Keys)
+        {
+            if (positionDictionary.TryGetValue(boneName, out var positions) && positions.Count > 1)
+            {
+                positions[positions.Count - 1] = positions[0];
+            }
+            if (rotationDictionary.TryGetValue(boneName, out var rotations) && rotations.Count > 1)
+            {
+                rotations[rotations.Count - 1] = rotations[0];
+            }
+        }
+
+        if (morphRecorder == null) return;
+        foreach (var driver in morphRecorder.MorphDrivers.Values)
+        {
+            var values = driver.ValueList;
+            if (values.Count > 1) values[values.Count - 1] = values[0];
+        }
+    }
+
+    /// <summary>How many bones actually move over the recorded loop (the closing frame is ignored).</summary>
+    private int CountMovingBones()
+    {
+        int moving = 0;
+        foreach (BoneNames boneName in BoneDictionary.Keys)
+        {
+            if (!positionDictionary.TryGetValue(boneName, out var positions)) continue;
+            if (positions.Count < 3) continue;
+
+            Vector3 first = positions[0];
+            Quaternion firstRotation = rotationDictionary.TryGetValue(boneName, out var rotations) && rotations.Count > 0
+                ? rotations[0]
+                : Quaternion.identity;
+
+            for (int i = 1; i < positions.Count - 1; i++)
+            {
+                if (Vector3.Distance(first, positions[i]) > 1e-5f) { moving++; break; }
+                if (rotations != null && i < rotations.Count
+                    && Quaternion.Angle(firstRotation, rotations[i]) > 0.01f) { moving++; break; }
+            }
+        }
+        return moving;
     }
 
     /// <summary>Records one loop of whatever the current character is playing.</summary>
