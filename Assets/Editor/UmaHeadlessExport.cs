@@ -502,7 +502,8 @@ public static class UmaHeadlessExport
                         }
                         SessionState.SetInt(KeyVmdStarted, 1);
                         Debug.Log($"{Tag} recording one loop of '{clip.name}' ({clip.length:F3}s) at {options.RecordFps}fps "
-                                  + $"in {options.RecordMode} mode");
+                                  + $"in {options.RecordMode} mode; the save dialog would suggest "
+                                  + $"'{ExportNaming.MotionFile(character, clip)}.vmd'");
 
                         if (options.RecordMode == "realtime")
                         {
@@ -582,6 +583,7 @@ public static class UmaHeadlessExport
                     Debug.Log($"{Tag} exporting to {exportPath}");
                     if (container is UmaContainerCharacter character)
                     {
+                        Debug.Log($"{Tag} the save dialog would suggest '{ExportNaming.CharacterName(character)}.pmx'");
                         ModelExporter.ExportModel(character, exportPath);
                     }
                     else

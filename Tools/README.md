@@ -255,6 +255,16 @@ one new `utils/naming.py` resolves a shape key by `(group, tag, side)` in whiche
 uses, plus optional `naming_overrides.json`, and the three operators that matched morph names by
 literal string now go through it. Its `NAMING.md` has the details.
 
+"Refine Structure" builds the eye controls from the four eye range morphs and then merges the
+`Eye_L`/`Eye_R` weights into `Head`, which is why the eyes are driven by the control shape keys and their
+driver bones afterwards rather than by the eye bones alone. The fork resolves those morphs before it
+touches anything and **refuses the whole eye fix if any of the four is missing**, leaving the vertex
+groups alone: the stock operator deleted them either way, so a model whose morphs could not be found (an
+unknown naming spelling, a model imported without morphs, or a stale addon) ended up with eye bones that
+rotate and move nothing. Verified both ways on a real export - with the morphs renamed away, the eyes keep
+working (`Eye_L` still moves 22 vertices) and the operator reports which names it was looking for, while a
+normal model still gets all 8 control keys.
+
 
 
 `UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one pass over a clip. The

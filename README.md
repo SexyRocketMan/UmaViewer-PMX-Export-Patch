@@ -79,6 +79,9 @@ tag `patch` · 2026-03-30 — the first release of this fork
 - **The camera motion lands next to the motion**: one save dialog, `<name>.vmd` plus `<name>_cam.vmd`.
 - **The file dialogs remember where you last saved** - models and motions separately, and across restarts
   (`Config.json` → `LastModelFolder` / `LastMotionFolder`).
+- **Sensible default file names**: the dialogs suggest the uma's own name plus the tail of the animation
+  instead of the container id - `special_week_stride.vmd` for Special Week running
+  `anm_rac_type01_run02_stride`, `special_week.pmx` for the model.
 - **Optional A-pose rest pose**: an exported model can be written with both upper arms rotated into the
   38.5° A-pose that recorded motions are relative to, so model and motion line up in Blender without posing
   anything by hand and without importing the motion with *Use current pose as rest pose*. It is **off by

@@ -1073,7 +1073,8 @@ public class UmaViewerUI : MonoBehaviour
                 };
 
                 string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file",
-                    Config.Instance.MotionSaveFolder(Application.dataPath), container.name, extensions);
+                    Config.Instance.MotionSaveFolder(Application.dataPath),
+                    ExportNaming.MotionFile(container, container.OverrideController["clip_2"]), extensions);
                 if (!string.IsNullOrEmpty(path))
                 {
                     recorder.SaveVMD(container.name, path, Config.Instance.VmdKeyReductionLevel);
@@ -1195,7 +1196,8 @@ public class UmaViewerUI : MonoBehaviour
             };
 
             string path = StandaloneFileBrowser.SaveFilePanel("Save the VMD file",
-                Config.Instance.MotionSaveFolder(Application.dataPath), container.name, extensions);
+                Config.Instance.MotionSaveFolder(Application.dataPath),
+                ExportNaming.MotionFile(container, clip), extensions);
             if (!string.IsNullOrEmpty(path))
             {
                 recorder.SaveVMD(container.name, path);
