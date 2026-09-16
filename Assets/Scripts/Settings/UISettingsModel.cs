@@ -4,6 +4,7 @@ using SFB;
 
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 public class UISettingsModel : MonoBehaviour
 {
@@ -15,6 +16,19 @@ public class UISettingsModel : MonoBehaviour
     [SerializeField] private Toggle _lookAtCamera;
     [SerializeField] private Toggle _faceOverride;
     [SerializeField] private Slider _outlineWidthSlider;
+
+    /// <summary>
+    /// Export options. Both are optional: an unassigned control only means the row is not in the scene,
+    /// <see cref="Config.json"/> still works and the exporter still follows it.
+    /// </summary>
+    [SerializeField] private Toggle _aPoseRestPose;
+    [SerializeField] private TMP_Dropdown _morphNameMode;
+
+    /// <summary>
+    /// Optional dedicated prefab for the texture set rows in the materials panel; falls back to the
+    /// container toggle prefab the character/material lists use when it is not assigned.
+    /// </summary>
+    [SerializeField] private UmaUIContainer _textureSetRowPrefab;
 
     public ScrollRect MaterialsList;
 
@@ -97,6 +111,43 @@ public class UISettingsModel : MonoBehaviour
         Shader.SetGlobalFloat("_GlobalOutlineWidth", val);
     }
 
+    /// <summary>
+    /// Shows what <see cref="Config.json"/> currently says in the export controls, so a row can never
+    /// disagree with what the exporter will actually do. Called from <see cref="UmaViewerUI.Start"/>;
+    /// every control is optional.
+    /// </summary>
+    public void ApplySettings()
+    {
+        if (_aPoseRestPose != null) _aPoseRestPose.SetIsOnWithoutNotify(Config.Instance.PmxAPoseRestPose);
+        if (_morphNameMode != null) _morphNameMode.SetValueWithoutNotify((int)Config.Instance.PmxMorphNameMode);
+    }
+
+    /// <summary>
+    /// Export models with the arms in the A-pose that recorded motions are relative to, so a recorded
+    /// vmd lines up without posing the model in Blender first - see <see cref="UmaAPose"/>.
+    /// </summary>
+    public void EnableAPoseRestPose(bool enable)
+    {
+        if (Config.Instance.PmxAPoseRestPose == enable) return;
+        Config.Instance.PmxAPoseRestPose = enable;
+        Debug.Log($"[Export] exported models will {(enable ? "use the A-pose" : "keep the T-pose")} rest pose");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    /// <summary>
+    /// Naming of morphs in exported models and motions. Dropdown order matches
+    /// <see cref="PmxMorphNameMode"/>: 0 tagged (Blender addon), 1 short english, 2 both, 3 unified.
+    /// </summary>
+    public void ChangeMorphNameMode(int mode)
+    {
+        var wanted = (PmxMorphNameMode)Mathf.Clamp(mode, 0, (int)PmxMorphNameMode.Unified);
+        if (Config.Instance.PmxMorphNameMode == wanted) return;
+        Config.Instance.PmxMorphNameMode = wanted;
+        Debug.Log($"[Export] morph names are now '{wanted}' ({(int)wanted}); "
+                  + "models and motions use the same spelling, so re-export models after changing this");
+        Config.Instance.UpdateConfig(false);
+    }
+
     /// <summary>Prefix of the generated texture set rows, so they can be cleared again.</summary>
     public const string TextureSetRowPrefix = "TextureSetRow_";
 
@@ -124,7 +175,8 @@ public class UISettingsModel : MonoBehaviour
         foreach (string variant in textureSet.Variants)
         {
             bool isCurrent = variant == textureSet.CurrentVariant;
-            var row = Instantiate(UmaViewerUI.Instance.UmaContainerTogglePrefab, MaterialsList.content);
+            var prefab = _textureSetRowPrefab != null ? _textureSetRowPrefab : UmaViewerUI.Instance.UmaContainerTogglePrefab;
+            var row = Instantiate(prefab, MaterialsList.content);
             row.name = TextureSetRowPrefix + variant;
             row.Name = $"Texture set {variant}"
                        + (isCurrent ? $" - active ({textureSet.AppliedSlots} slots)" : "")

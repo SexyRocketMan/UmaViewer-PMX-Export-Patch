@@ -130,6 +130,10 @@ public class UmaViewerUI : MonoBehaviour
     private void Start()
     {
         OtherSettings.ApplySettings();
+        // reflect Config.json in the export/recording rows, so nothing on screen disagrees with what the
+        // exporter and the recorder will actually do
+        ModelSettings?.ApplySettings();
+        AnimationSettings?.ApplySettings();
         CameraSettings.AAModeDropdown.SetValueWithoutNotify(Config.Instance.AntiAliasing);
         AssetSettings.LoadedAssetsClear();
         UmaAssetManager.OnLoadedBundleUpdate += AssetSettings.LoadedAssetsAdd;

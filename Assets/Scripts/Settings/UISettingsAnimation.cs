@@ -14,6 +14,41 @@ public class UISettingsAnimation : MonoBehaviour
     public Slider SpeedSlider;
     public Button VMDButton;
 
+    /// <summary>
+    /// Recording quality row: how many sampled frames are skipped when the vmd is written (1 = every
+    /// frame). Both controls are optional.
+    /// </summary>
+    [SerializeField] private Slider _keyReduction;
+    [SerializeField] private TextMeshProUGUI _keyReductionText;
+
+    /// <summary>
+    /// Shows what <see cref="Config.json"/> currently says, so the row cannot disagree with what a
+    /// recording will do. Called from <see cref="UmaViewerUI.Start"/>.
+    /// </summary>
+    public void ApplySettings()
+    {
+        int level = Mathf.Max(1, Config.Instance.VmdKeyReductionLevel);
+        if (_keyReduction != null) _keyReduction.SetValueWithoutNotify(level);
+        if (_keyReductionText != null) _keyReductionText.text = KeyReductionLabel(level);
+    }
+
+    /// <summary>
+    /// Slider callback for Config.VmdKeyReductionLevel. 1 records every sampled frame, 2 every other
+    /// frame, and so on - fewer keys, smaller vmd.
+    /// </summary>
+    public void ChangeVmdKeyReduction(float level)
+    {
+        int value = Mathf.Clamp(Mathf.RoundToInt(level), 1, 10);
+        if (_keyReductionText != null) _keyReductionText.text = KeyReductionLabel(value);
+        if (Config.Instance.VmdKeyReductionLevel == value) return;
+        Config.Instance.VmdKeyReductionLevel = value;
+        Debug.Log($"[VMD] recordings will key every {value} frame(s)");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    static string KeyReductionLabel(int level)
+        => level <= 1 ? "Key reduction: every frame" : $"Key reduction: every {level} frames";
+
     internal void UpdateAnimationInfo(UmaContainerCharacter umaContainer)
     {
         if (umaContainer.OverrideController["clip_2"].name != "clip_2")
