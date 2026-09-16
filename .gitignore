@@ -77,3 +77,7 @@ Config.json
 .vscode/extensions.json
 .vscode/launch.json
 .vscode/settings.json
+
+# python bytecode from the Tools/ scripts
+__pycache__/
+*.pyc
