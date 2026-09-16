@@ -88,11 +88,33 @@ resolver did (`textureSet=<variant> of [...] fixed=<slots>`). Measured so far:
 | scene | slots | textureless before | after the resolver |
 |---|---|---|---|
 | `home10001/main/pfb_env_home10001_main000_000` | 20 | **12** (every `base01` surface) | 1 (a runtime mirror) |
+| `home10001/main/pfb_env_home10001_main002_000` | 23 | **12** | 1 |
+| `home10001/main/pfb_env_home10001_main003_000` | 31 | **12** | 1 |
+| `home10001/main/pfb_env_home10001_main004_000` | 23 | **12** | 1 |
+| `home10001/main/pfb_env_home10001_main005_000` | 57 | **12** | 1 |
+| `home10001/main/pfb_env_home10001_main006_000` | 30 | **12** | 1 |
 | `cutin1049_00/pfb_env_cutin1049_00_00_room00` | 20 | 0 | nothing to do |
 | `race00000/race00000_8000/pfb_env_race00000_8000_000` | 1 | 0 | nothing to do |
 
 So this is specific to scenes where the game assigns a texture set at runtime, not universal, and the
-resolver correctly does nothing elsewhere.
+resolver correctly does nothing elsewhere. Note that all the home scenes **share** the same material
+(`mtl_env_home10001_main000_000_base01`), so the resolver keys textures off the scene named *in the
+material*, not the prefab being loaded - keying it off the prefab left main002 upwards white.
+
+### T-pose frame and rest pose
+
+Two things to know when comparing a render against what you see in Blender by hand:
+
+* The recorder used to emit one frame at the start that was a rest pose (a T-pose with the arm offset
+  stacked on it). `RecordClipLoop` now forces an animator evaluation before the first sample, so frame
+  0 is an animated pose. `vmd_inspect.py motion` fails on that artefact ("the first frame is Nx the
+  typical step") and `render_stats.py frames` fails when the first rendered frame differs from the
+  second.
+* The recorder captures its reference pose with the arms already rotated into an **A-pose** (38.5
+  degrees, `aposeDegress`). A motion therefore only lands correctly if that is the rest pose:
+  `blender_render_motion.py` poses the arms into an A-pose and imports the vmd with `use_pose_mode`
+  ("Treat Current Pose as Rest Pose"), which is the same recipe as doing it by hand in Blender. Use
+  `--apose <degrees>` if you use a different angle.
 
 ### Known harmless warning
 
