@@ -6,6 +6,7 @@ using System.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 /// <summary>
 /// Headless (batch mode) model export, so exports can be produced and regression tested without
@@ -578,6 +579,7 @@ public static class UmaHeadlessExport
                             ? SceneStem(SessionState.GetString(KeyPropName, ""))
                             : "";
                         DumpMaterials(container.gameObject, stem);
+                        DumpShaderProperties(container.gameObject, stem);
                     }
 
                     Debug.Log($"{Tag} exporting to {exportPath}");
@@ -741,6 +743,57 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag} props/scenes ({props.Count} matching '{filter}'):");
         foreach (var entry in props.Take(2000)) Debug.Log($"{Tag}   {entry.Name}");
         if (props.Count > 2000) Debug.Log($"{Tag}   ... and {props.Count - 2000} more");
+    }
+
+    /// <summary>
+    /// Every property of every shader the model uses, with the value it has on the first material seen.
+    /// This is how the parameters worth carrying into an export were identified (the ones the uma shader
+    /// actually drives), and it is how a game update that renames them will be noticed.
+    /// </summary>
+    private static void DumpShaderProperties(GameObject root, string stem)
+    {
+        var seen = new HashSet<string>();
+        foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+        {
+            foreach (var material in renderer.sharedMaterials)
+            {
+                if (material == null || material.shader == null) continue;
+                var shader = material.shader;
+                if (!seen.Add(shader.name)) continue;
+
+                Debug.Log($"{Tag} SHADER '{shader.name}' ({shader.GetPropertyCount()} properties), "
+                          + $"values from material '{material.name}'");
+                for (int i = 0; i < shader.GetPropertyCount(); i++)
+                {
+                    string name = shader.GetPropertyName(i);
+                    var type = shader.GetPropertyType(i);
+                    string value;
+                    switch (type)
+                    {
+                        case ShaderPropertyType.Float:
+                        case ShaderPropertyType.Range:
+                            value = material.GetFloat(name).ToString("F4");
+                            break;
+                        case ShaderPropertyType.Color:
+                            var colour = material.GetColor(name);
+                            value = $"({colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3})";
+                            break;
+                        case ShaderPropertyType.Vector:
+                            var vector = material.GetVector(name);
+                            value = $"({vector.x:F3},{vector.y:F3},{vector.z:F3},{vector.w:F3})";
+                            break;
+                        case ShaderPropertyType.Texture:
+                            var texture = material.GetTexture(name);
+                            value = texture != null ? texture.name : "<none>";
+                            break;
+                        default:
+                            value = material.GetInt(name).ToString();
+                            break;
+                    }
+                    Debug.Log($"{Tag}   SHADERPROP {name} | {type} | {value}");
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -85,6 +85,11 @@ tag `patch` · 2026-03-30 — the first release of this fork
   `special_week.pmx` for the model and `special_week_<costume>.pmx` when the costume has a name (the game's
   own costume titles, so the wording follows the database language; the upgraded costume, for instance,
   comes out as `special_week_upgraded.pmx`).
+- **Exported materials carry the uma shading setup**: the toon ramp and the environment map go into the MMD
+  toon and sphere slots, and the twenty shader settings an MMD material has no field for (light threshold,
+  rim, specular, character grade, outline width, ...) travel in the material comment, where the Blender
+  addon reads them back. Exports therefore shade per material instead of every material using one default -
+  see [docs/UMA_SHADER.md](docs/UMA_SHADER.md).
 - **Optional A-pose rest pose**: an exported model can be written with both upper arms rotated into the
   38.5° A-pose that recorded motions are relative to, so model and motion line up in Blender without posing
   anything by hand and without importing the motion with *Use current pose as rest pose*. It is **off by

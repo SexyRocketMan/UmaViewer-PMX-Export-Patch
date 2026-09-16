@@ -23,6 +23,13 @@ import argparse
 import math
 import re
 import sys
+
+# these tools print japanese asset names, and a windows console is not utf-8 by default
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -107,6 +114,11 @@ class Material:
     name_en: str
     face_count: int
     texture: int
+    sphere_texture: int | None = None
+    sphere_mode: int = 0
+    toon_texture: int | None = None
+    shared_toon: int | None = None
+    comment: str = ""
 
 
 @dataclass
@@ -193,13 +205,20 @@ def read_model(path: str) -> Model:
         r.vec(4); r.vec(3); r.f32(); r.vec(3)
         r.u8(); r.vec(4); r.f32()
         tex = r.index(sizes["texture"])
-        r.index(sizes["texture"]); r.u8()
-        if r.u8() == 1:
-            r.index(sizes["texture"])
+        sphere = r.index(sizes["texture"]); sphere_mode = r.u8()
+        # the toon field is a flag byte: 1 means a shared toon (a plain byte index), 0 means a texture index
+        shared_toon = r.u8()
+        if shared_toon == 1:
+            shared_toon_index = r.u8()
+            toon = None
         else:
-            r.u8()
-        text()
-        model.materials.append(Material(i, name, name_en, r.i32(), tex))
+            shared_toon_index = None
+            toon = r.index(sizes["texture"])
+        comment = text()
+        model.materials.append(Material(i, name, name_en, r.i32(), tex,
+                                        sphere_texture=sphere, sphere_mode=sphere_mode,
+                                        toon_texture=toon, shared_toon=shared_toon_index,
+                                        comment=comment))
 
     for i in range(r.i32()):
         b = Bone(i, text(), text(), r.vec(3), r.index(sizes["bone"]), 0)
@@ -281,6 +300,23 @@ def cmd_summary(paths: list[str], args) -> int:
         print(f"   verts={len(m.vertices)} indices={len(m.surfaces)} textures={len(m.textures)} "
               f"materials={len(m.materials)} bones={len(m.bones)} morphs={len(m.morph_names)}")
         print(f"   morph categories: {dict(Counter(m.morph_cats))}")
+
+    if getattr(args, "materials", False):
+        for path in paths:
+            m = read_model(path)
+            print(f"== {path}")
+            for material in m.materials:
+                texture = m.textures[material.texture] if 0 <= material.texture < len(m.textures) else None
+                sphere = (m.textures[material.sphere_texture]
+                          if material.sphere_texture is not None and 0 <= material.sphere_texture < len(m.textures)
+                          else None)
+                toon = (m.textures[material.toon_texture]
+                        if material.toon_texture is not None and 0 <= material.toon_texture < len(m.textures)
+                        else None)
+                print(f"   [{material.index:2}] {material.name!r}")
+                print(f"        texture={texture} sphere={sphere} (mode {material.sphere_mode}) toon={toon}")
+                if material.comment:
+                    print(f"        comment={material.comment}")
     return 0
 
 
@@ -455,6 +491,9 @@ def main() -> int:
         p.add_argument("paths", nargs="+")
         p.add_argument("--material")
         p.add_argument("--grep")
+        if name == "summary":
+            p.add_argument("--materials", action="store_true",
+                           help="also list every material's texture, sphere map, toon map and comment")
     p = sub.add_parser("names")
     p.add_argument("paths", nargs="+")
     p.add_argument("--require", help="comma separated morph names that must exist")

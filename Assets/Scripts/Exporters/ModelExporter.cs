@@ -6,6 +6,7 @@ using LibMMD.Unity3D;
 using LibMMD.Writer;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using UnityEngine;
@@ -399,8 +400,111 @@ public class ModelExporter
         return bone.up * length;
     }
 
-    private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model)
+    /// <summary>
+    /// The exported texture a uma material uses for one of its maps, found in the model's texture list the
+    /// same way the albedo is (by file name). Null when the material has no such map, or when the texture
+    /// did not make it into the export - the caller decides what to do without it.
+    /// </summary>
+    private static MMDTexture FindExportedTexture(RawMMDModel model, Material material, string property)
     {
+        if (material == null || !material.HasProperty(property)) return null;
+        var texture = material.GetTexture(property) as Texture2D;
+        if (texture == null) return null;
+
+        var match = model.TextureList.Find(t => t.TexturePath.Contains($"/{texture.name}.png"));
+        if (match == null)
+        {
+            Debug.LogWarning($"{Tag} {material.name}: the {property} texture '{texture.name}' is not in the "
+                             + "exported texture list, so that map is missing from the export");
+        }
+        return match;
+    }
+
+    private static float PropertyFloat(Material material, string property, float fallback)
+    {
+        return material != null && material.HasProperty(property) ? material.GetFloat(property) : fallback;
+    }
+
+    private static Color PropertyColour(Material material, string property, Color fallback)
+    {
+        return material != null && material.HasProperty(property) ? material.GetColor(property) : fallback;
+    }
+
+    /// <summary>
+    /// The uma shader parameters an MMD material has no field for, written into the material comment as one
+    /// line of key=value pairs. mmd_tools imports that comment onto the material
+    /// (<c>material.mmd_material.comment</c>), and the uma addon's Shading operator reads it back to set its
+    /// shader up with the values this model was exported with instead of its own defaults. Anything that does
+    /// not know about it sees a comment, and a property the game renames is skipped rather than breaking the
+    /// export - which is also how a rename will be noticed.
+    ///
+    /// Values use dots for decimals and commas only between the components of a colour, and the numbers are
+    /// written with the invariant culture so that a machine with a comma decimal separator cannot produce a
+    /// comment that parses as something else.
+    /// </summary>
+    private static string UmaMaterialComment(Material material, RawMMDModel model)
+    {
+        if (material == null) return "";
+
+        var comment = new StringBuilder("uma1");
+        void Number(string key, string property)
+        {
+            if (!material.HasProperty(property)) return;
+            comment.Append(' ').Append(key).Append('=')
+                   .Append(material.GetFloat(property).ToString("0.####", CultureInfo.InvariantCulture));
+        }
+        void Tint(string key, string property)
+        {
+            if (!material.HasProperty(property)) return;
+            Color colour = material.GetColor(property);
+            comment.Append(' ').Append(key).Append('=').Append(string.Join(",",
+                colour.r.ToString("0.###", CultureInfo.InvariantCulture),
+                colour.g.ToString("0.###", CultureInfo.InvariantCulture),
+                colour.b.ToString("0.###", CultureInfo.InvariantCulture),
+                colour.a.ToString("0.###", CultureInfo.InvariantCulture)));
+        }
+        void Map(string key, string property)
+        {
+            if (!material.HasProperty(property)) return;
+            var texture = material.GetTexture(property) as Texture2D;
+            if (texture == null) return;
+            comment.Append(' ').Append(key).Append('=').Append(texture.name);
+        }
+
+        // the shade ramp and the light threshold are what the Blender shader group calls "Shaded Texture"
+        // and "Light Threshold"
+        Number("toon_step", "_ToonStep");
+        Number("toon_feather", "_ToonFeather");
+        Number("specular_power", "_SpecularPower");
+        Tint("specular", "_SpecularColor");
+        Number("env_rate", "_EnvRate");
+        Number("env_bias", "_EnvBias");
+        Number("rim_step", "_RimStep");
+        Number("rim_feather", "_RimFeather");
+        Tint("rim", "_RimColor");
+        Number("rim_spec_rate", "_RimSpecRate");
+        Number("rim_shadow", "_RimShadow");
+        Number("outline_width", "_OutlineWidth");
+        Tint("outline", "_OutlineColor");
+        Tint("chara", "_CharaColor");
+        Number("saturation", "_Saturation");
+        Tint("toon_bright", "_ToonBrightColor");
+        Tint("toon_dark", "_ToonDarkColor");
+        Number("emissive_intensity", "_EmissiveIntensity");
+        Number("emissive_rim_power", "_EmissiveRimPower");
+        Number("emissive_rim_intensity", "_EmissiveRimIntensity");
+        Number("use_option_mask", "_UseOptionMaskMap");
+
+        // the maps an MMD material has no field for, by name so the addon does not have to guess file names
+        Map("triple", "_TripleMaskMap");
+        Map("option", "_OptionMaskMap");
+        Map("toon", "_ToonMap");
+        Map("env", "_EnvMap");
+        Map("emissive", "_EmissiveTex");
+        return comment.ToString();
+    }
+
+    private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model)    {
         List<Part> parts = new List<Part>();
         int baseShift = 0;
 
@@ -481,7 +585,21 @@ public class ModelExporter
                                      + "the surface will not look right (see UmaEnvTextureSet for environment scenes)");
                     mat.Texture = model.TextureList[0];
                 }
-                mat.MetaInfo = "";
+                mat.MetaInfo = UmaMaterialComment(material, model);
+
+                // MMD has one slot each for the albedo, a sphere map and a toon ramp. The uma toon ramp and
+                // environment map fit those two slots exactly, so they go there and a plain mmd_tools import
+                // shades much closer to the game without any addon. The remaining values an MMD material has
+                // fields for (specular, outline) are taken from the uma material rather than hard coded.
+                mat.Toon = FindExportedTexture(model, material, "_ToonMap");
+                mat.SubTexture = FindExportedTexture(model, material, "_EnvMap");
+                mat.SubTextureType = mat.SubTexture != null
+                    ? MMDMaterial.SubTextureTypeEnum.MatSubTexSpa
+                    : MMDMaterial.SubTextureTypeEnum.MatSubTexOff;
+                mat.SpecularColor = PropertyColour(material, "_SpecularColor", mat.SpecularColor);
+                mat.EdgeColor = PropertyColour(material, "_OutlineColor", mat.EdgeColor);
+                mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
+                mat.DrawEdge = mat.EdgeSize > 0f;
                 part.BaseShift = baseShift + mesh.GetSubMesh(i).indexStart;
                 part.TriangleIndexNum = mesh.GetSubMesh(i).indexCount;
                 parts.Add(part);

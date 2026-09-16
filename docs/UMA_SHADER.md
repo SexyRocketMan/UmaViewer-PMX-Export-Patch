@@ -95,29 +95,66 @@ intensities and the same single-colour diffuse/shaded response**, while the game
 character, per costume and per part - and on top of that the game's renderer does deferred shading with
 its own shadow maps, SSAO, bloom and tone mapping, which nothing in Blender reproduces by accident.
 
-## What can be done about it
+## What the exporter now carries
 
-1. **Carry the parameters in the material comment.** A `.pmx` material has a free-text comment field that
-   the exporter writes empty today (`MMDMaterial.MetaInfo`). Writing something like
-   `uma light_threshold=0.2 diffuse=1,1,1 shaded=0.9,0.85,0.8 rim_size=0.1 ...` would let the Shading
-   operator set the group's sockets per material instead of using the defaults for all of them. Small,
-   verifiable, no format breakage - any other viewer just ignores the comment.
-2. **Export the extra textures into the MMD slots they belong in.** The `shad_c` map is what MMD calls the
-   toon/ramp texture and the `base` map is the sphere map, but the export only references the albedo. With
-   `shad_c` as the material's toon texture and `base` as the sphere map, a plain `mmd_tools` import would
-   shade far closer to the game even without the addon, and the addon could stop guessing the file names.
-3. **Tint and rim values are per-instance.** `_MaskColor*` and the live rim values depend on the costume and
-   the scene, so they can be carried (same comment trick) but they will only be right for the state the
-   model was exported in; the honest options are to export them as they were at export time, or to leave
-   them and set them by hand.
-4. **Match the light, not just the material.** The group is built around one directional light and a
-   threshold; games look different because of the surrounding renderer. A Blender scene with a sun of about
-   the game's intensity, a modest ambient world colour and the same camera framing will land much closer
-   than tweaking material values ever will.
+The gap above is closed as far as a `.pmx` allows, in two ways.
 
-Nothing here can make a `.pmx` in EEVEE identical to the game - the rasteriser, the shadow maps and the
-post-processing differ. What is achievable is that each material reacts to light the way the game intends:
-right ramp, right threshold, right tint, right rim.
+**1. The uma maps go into the MMD slots that mean the same thing.** Every material now writes the uma toon
+ramp (`_ToonMap`, the `shad_c` texture) into the material's **toon texture** slot and the uma environment
+map (`_EnvMap`) into its **sphere map** slot with sphere mode *add* (2), and the values an MMD material has
+fields for are taken from the uma material instead of being hard coded - `_SpecularColor` into the specular
+colour, `_OutlineColor`/`_OutlineWidth` into the edge colour and size. A plain `mmd_tools` import, with no
+addon at all, therefore shades noticeably closer to the game than an albedo-only material did.
+
+The two mask maps (`_TripleMaskMap` = `base`, `_OptionMaskMap` = `ctrl`) have no MMD field of their own;
+their names travel in the comment below so nothing has to guess file names.
+
+**2. The parameters an MMD material has no field for go into the material comment.** The comment is free
+text that `mmd_tools` keeps on the imported material as `material.mmd_material.comment`, and it is written
+as one line of `key=value` pairs:
+
+```
+uma1 toon_step=0.4 toon_feather=0.001 specular_power=0.15 specular=1,0.905,0.59,1 env_rate=0.4 env_bias=5
+rim_step=0.15 rim_feather=0.001 rim=1,1,1,0.392 rim_spec_rate=1 rim_shadow=2 outline_width=0.325
+outline=0.125,0.047,0,0.098 chara=1,1,1,1 saturation=1 toon_bright=1,1,1,0 toon_dark=1,1,1,0
+emissive_intensity=1 emissive_rim_power=1 emissive_rim_intensity=1 use_option_mask=1
+triple=tex_bdy1001_00_base option=tex_bdy1001_00_ctrl toon=tex_bdy1001_00_shad_c env=tex_chr_env000
+```
+
+Numbers use the invariant culture (dots for decimals, commas only between colour components), the tag
+`uma1` marks the format, and a property the game renames is skipped rather than breaking the export - which
+is also how a rename gets noticed. Anything that does not understand the comment simply sees a comment.
+
+The Shading operator reads it back and maps it by meaning onto the shipped group:
+
+| comment key | shader group socket | why |
+|---|---|---|
+| `toon_step` | `Light Threshold` | the game's shade threshold |
+| `chara` / `saturation` | `Diffuse Color` / `Diffuse Saturation` | the character colour grade |
+| `specular` | `Highlight Color` | the highlight tint |
+| `env_rate` | `Metallic Intensity` | how much the environment map contributes |
+| `emissive_intensity` | `Emission Intensity` | emission strength |
+| `rim` (rgb + a) | `Rimlight Color` + `Rimlight Intensity` | the uma rim colour's alpha is its strength |
+| `rim_step` | `Rimlight Size` | rim width |
+| `toon_dark` / `toon_bright` | `Shaded Color` | only when the game actually applied the live grade (alpha > 0) |
+| `outline_width` | `Uma Outlines` → `Thickness` | same scale: 0.35 in the shipped group, 0.325 in the material this was measured on. The most common value across materials wins, so one part wanting a thick outline does not drag the model's outline with it |
+| `triple`, `option`, `toon`, `env`, `emissive` | the texture nodes | the file each map was exported as, so no name guessing |
+
+Verified on a real export (character 1001, costume 00): the body material takes `Light Threshold 0.4`, the
+hair `0.3` and the mayu `0.5` - the per-material variation that used to be flattened into one default - the
+face gets `Rimlight Intensity 0` because its rim colour is transparent, and the outline thickness lands on
+`0.325`. An export made before this existed still imports and shades: no comment means no settings applied,
+the textures are found by file name as before, and the outline keeps the group's own 0.35.
+
+## What still cannot be matched, and why
+
+* **Per-instance tinting.** `_MaskColor*`/`_MaskToonColor*` and the live rim values depend on the costume
+  and the scene. They can be exported as they were at export time (the comment carries the ones the shader
+  reads), but a model exported in one state cannot know about another.
+* **The renderer.** The game shades deferred with its own shadow maps, SSAO, bloom and tone mapping; the
+  `.pmx` in EEVEE does not. Matching lights and framing gets much closer than tweaking material values.
+* **Uv-driven detail** (`_DirtTex`, `_TexScrollParam`, emission scroll) has no MMD equivalent at all.
+
 
 ## Checking it
 
