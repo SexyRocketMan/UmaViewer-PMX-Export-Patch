@@ -220,8 +220,12 @@ public class ModelExporter
 
     private static Morph[] ReadMorph(List<Renderer> renderers)
     {
-        // Dictionary to group morph data by name to prevent duplicates like .001
-        Dictionary<string, Morph> groupedMorphs = new Dictionary<string, Morph>();
+        // Morph name -> accumulated per-vertex offsets. Keyed by name so a morph that exists on
+        // several meshes (e.g. the same eyebrow morph baked onto M_Face and M_Mayu) can either be
+        // kept apart (tagged names) or merged (short names) depending on PmxMorphNameMode.
+        Dictionary<string, Morph> morphsByName = new Dictionary<string, Morph>();
+        Dictionary<string, Dictionary<int, Vector3>> morphOffsets = new Dictionary<string, Dictionary<int, Vector3>>();
+        List<string> morphOrder = new List<string>();
         int vertexOffset = 0;
 
         foreach (Renderer renderer in renderers)
@@ -245,64 +249,105 @@ public class ModelExporter
                 var deltaTangents= new Vector3[vertexCount];
                 mesh.GetBlendShapeFrameVertices(i, 0, deltaVertices, deltaNormals, deltaTangents);
 
-                // 1. Get the clean English name
                 string rawName = mesh.GetBlendShapeName(i);
-                string cleanName = rawName;
-                
-                // Strip suffixes added by AddBlendShape like "(WaraiA)[M_Face]"
-                int parenIndex = cleanName.IndexOf('(');
-                if (parenIndex > 0) cleanName = cleanName.Substring(0, parenIndex);
-                int bracketIndex = cleanName.IndexOf('[');
-                if (bracketIndex > 0) cleanName = cleanName.Substring(0, bracketIndex);
-                
-                // Strip Blender duplicate suffixes just in case
-                if (cleanName.Contains(".00")) 
-                {
-                    cleanName = cleanName.Substring(0, cleanName.LastIndexOf('.'));
-                }
-                
-                cleanName = cleanName.Trim();
 
-                // 2. Group by clean name
-                if (!groupedMorphs.ContainsKey(cleanName))
+                foreach (string morphName in ExportedMorphNames(rawName))
                 {
-                    Morph newMorph = new Morph();
-                    newMorph.Name = newMorph.NameEn = cleanName;
-                    newMorph.Type = MorphType.MorphTypeVertex;
-                    
-                    // Determine category based on name
-                    if (cleanName.Contains("Mouth_")) newMorph.Category = MorphCategory.MorphCatMouth;
-                    else if (cleanName.Contains("EyeBrow_")) newMorph.Category = MorphCategory.MorphCatEyebrow;
-                    else if (cleanName.Contains("Eye_")) newMorph.Category = MorphCategory.MorphCatEye;
-                    else newMorph.Category = MorphCategory.MorphCatOther;
-                    
-                    newMorph.MorphDatas = new VertexMorphData[0]; // Initialize empty
-                    groupedMorphs[cleanName] = newMorph;
-                }
+                    if (!morphsByName.TryGetValue(morphName, out Morph targetMorph))
+                    {
+                        targetMorph = new Morph();
+                        targetMorph.Name = targetMorph.NameEn = morphName;
+                        targetMorph.Type = MorphType.MorphTypeVertex;
+                        targetMorph.Category = GetMorphCategory(morphName);
+                        targetMorph.MorphDatas = new VertexMorphData[0];
+                        morphsByName[morphName] = targetMorph;
+                        morphOffsets[morphName] = new Dictionary<int, Vector3>();
+                        morphOrder.Add(morphName);
+                    }
 
-                Morph targetMorph = groupedMorphs[cleanName];
-                
-                // 3. Create vertex data for this specific mesh
-                var newDatas = new VertexMorphData[vertexCount];
-                for (int j = 0; j < vertexCount; j++) 
-                {
-                    var data = new VertexMorphData();
-                    data.VertexIndex = vertexOffset + j; // Offset ensures vertices map to the correct mesh in the combined PMX
-                    data.Offset = deltaVertices[j];
-                    newDatas[j] = data;
+                    var offsets = morphOffsets[morphName];
+                    for (int j = 0; j < vertexCount; j++)
+                    {
+                        // Offset ensures the vertices map to the correct mesh in the combined PMX
+                        offsets[vertexOffset + j] = deltaVertices[j];
+                    }
                 }
-                
-                // 4. Combine with existing data from other meshes
-                var existingDatas = targetMorph.MorphDatas;
-                var combinedDatas = new VertexMorphData[existingDatas.Length + newDatas.Length];
-                existingDatas.CopyTo(combinedDatas, 0);
-                newDatas.CopyTo(combinedDatas, existingDatas.Length);
-                targetMorph.MorphDatas = combinedDatas;
             }
             vertexOffset += mesh.vertexCount;
         }
-        
-        return groupedMorphs.Values.ToArray();
+
+        // Materialise the accumulated offsets, ordered by vertex index so the output is deterministic.
+        foreach (string morphName in morphOrder)
+        {
+            var offsets = morphOffsets[morphName];
+            var indices = new List<int>(offsets.Keys);
+            indices.Sort();
+            var datas = new VertexMorphData[indices.Count];
+            for (int i = 0; i < indices.Count; i++)
+            {
+                datas[i] = new VertexMorphData();
+                datas[i].VertexIndex = indices[i];
+                datas[i].Offset = offsets[indices[i]];
+            }
+            morphsByName[morphName].MorphDatas = datas;
+        }
+
+        return morphOrder.Select(name => morphsByName[name]).ToArray();
+    }
+
+    /// <summary>
+    /// Strips the "(Tag)[Mesh]" suffix that AddBlendShape appends to every morph it bakes.
+    /// </summary>
+    private static string ToShortMorphName(string rawName)
+    {
+        string cleanName = rawName;
+
+        int parenIndex = cleanName.IndexOf('(');
+        if (parenIndex > 0) cleanName = cleanName.Substring(0, parenIndex);
+        int bracketIndex = cleanName.IndexOf('[');
+        if (bracketIndex > 0) cleanName = cleanName.Substring(0, bracketIndex);
+
+        // Strip Blender duplicate suffixes just in case
+        if (cleanName.Contains(".00"))
+        {
+            cleanName = cleanName.Substring(0, cleanName.LastIndexOf('.'));
+        }
+
+        return cleanName.Trim();
+    }
+
+    /// <summary>
+    /// The morph names a single Unity blend shape is exported under.
+    /// The "(Tag)[Mesh]" suffix is part of the morph name contract that the Blender uma_addon
+    /// addon matches on by exact name (e.g. "Eye_20_R(XRange)[M_Face]" in its "Refine Structure"
+    /// operator), so it must not be stripped unconditionally - stripping it silently breaks the
+    /// eye controls that operator builds. See <see cref="PmxMorphNameMode"/>.
+    /// </summary>
+    private static IEnumerable<string> ExportedMorphNames(string rawName)
+    {
+        var mode = Config.Instance != null ? Config.Instance.PmxMorphNameMode : PmxMorphNameMode.BlenderCompatible;
+
+        if (mode == PmxMorphNameMode.ShortEnglish)
+        {
+            yield return ToShortMorphName(rawName);
+            yield break;
+        }
+
+        yield return rawName;
+
+        if (mode == PmxMorphNameMode.Both)
+        {
+            string shortName = ToShortMorphName(rawName);
+            if (shortName != rawName) yield return shortName;
+        }
+    }
+
+    private static MorphCategory GetMorphCategory(string name)
+    {
+        if (name.Contains("Mouth_")) return MorphCategory.MorphCatMouth;
+        if (name.Contains("EyeBrow_")) return MorphCategory.MorphCatEyebrow;
+        if (name.Contains("Eye_")) return MorphCategory.MorphCatEye;
+        return MorphCategory.MorphCatOther;
     }
 
     private static Bone[] ReadBones(List<Transform> bonelist)

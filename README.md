@@ -21,8 +21,14 @@ I'm not sure i'll be able to maintain it, keep this in mind
 https://www.youtube.com/watch?v=zbzfF3pubjQ
 
 *UPDATE*:  
-So my dumbass somehow managed to break vertex group parenting for exported uma models - for now, I've noticed the eye bones relations are broken, but there might be more issues.  
-I'll look into it, but for Rigify-driven animation work - stick to the og version for now.  
+The exported eye bones no longer deform the mesh after the Blender `uma_addon`'s `Refine Structure`
+operator - **fixed**. The cause was the morph name shortener stripping the `(Tag)[Mesh]` suffix that
+the addon matches on by exact name (`Eye_20_R(XRange)[M_Face]`). Without those names the operator
+deletes the `Eye_L`/`Eye_R` vertex groups but never builds the replacement eye controls, so the eye
+bones go dead - while a raw import still looks completely fine. Morph naming is now selectable with
+`PmxMorphNameMode` in `Config.json` (0 = Blender/uma_addon compatible *(default)*, 1 = short english
+names for vmd matching, 2 = both) and defaults to the compatible naming again.  
+Exports can now be produced and checked from a terminal, see [Tools/README.md](Tools/README.md).
 
 # Original readme follows:  
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
