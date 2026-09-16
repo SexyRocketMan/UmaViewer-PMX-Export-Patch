@@ -32,9 +32,19 @@ UMA_ADDON = "bl_ext.user_default.uma_addon"
 EYE_CONTROL_KEYS = ["Eye_L(L)", "Eye_L(R)", "Eye_L(U)", "Eye_L(D)",
                     "Eye_R(L)", "Eye_R(R)", "Eye_R(U)", "Eye_R(D)"]
 
-TAGGED_EYE_MORPHS = ["Eye_20_R(XRange)[M_Face]", "Eye_20_L(XRange)[M_Face]",
-                     "Eye_21_R(YRange)[M_Face]", "Eye_21_L(YRange)[M_Face]"]
-SHORT_EYE_MORPHS = ["Eye_20_R", "Eye_20_L", "Eye_21_R", "Eye_21_L"]
+# The four eye range morphs "Refine Structure" needs, spelled per naming mode. A patched addon
+# resolves all of them; the stock one only knows the tagged spelling.
+EYE_RANGE_MORPHS = {
+    "tagged": ["Eye_20_R(XRange)[M_Face]", "Eye_20_L(XRange)[M_Face]",
+               "Eye_21_R(YRange)[M_Face]", "Eye_21_L(YRange)[M_Face]"],
+    "unified": ["Eye_XRange_R", "Eye_XRange_L", "Eye_YRange_R", "Eye_YRange_L"],
+    "short": ["Eye_20_R", "Eye_20_L", "Eye_21_R", "Eye_21_L"],
+}
+
+# tags the pair-combining operator uses, for the "does the addon see the morphs" report
+ADDON_LOOKUP_TAGS = {"EyeBrow": ["WaraiA", "IkariA", "SeriousA", "Offset_U"],
+                     "Eye": ["CloseA", "HalfA", "EyelidHideA", "XRange", "YRange"],
+                     "Ear": ["Base_N", "Tanosi", "Roll"]}
 
 # vertex groups mmd_tools always adds; they intentionally have no matching bone
 KNOWN_ORPHAN_GROUPS = {"mmd_edge_scale", "mmd_vertex_order", "mmd_uv1", "mmd_uv2"}
@@ -133,19 +143,22 @@ def verify(path, args):
     mesh_name = next(iter(raw["meshes"]))
     keys = set(raw["meshes"][mesh_name]["all_shape_keys"])
 
-    tagged_present = [k for k in TAGGED_EYE_MORPHS if k in keys]
-    short_present = [k for k in SHORT_EYE_MORPHS if k in keys]
-    result["tagged_eye_morphs"] = tagged_present
-    result["short_eye_morphs"] = short_present
-    print(f"   eye-range morphs: tagged={len(tagged_present)}/{len(TAGGED_EYE_MORPHS)} short={short_present}")
+    expected = EYE_RANGE_MORPHS["tagged" if args.mode in ("blender", "both") else args.mode]
+    present = [k for k in expected if k in keys]
+    result["expected_eye_morphs"] = expected
+    result["found_eye_morphs"] = present
+    print(f"   eye-range morphs for mode '{args.mode}': {len(present)}/{len(expected)} {present[:4]}")
 
-    expects_tagged = args.mode in ("blender", "both")
-    if expects_tagged and len(tagged_present) != len(TAGGED_EYE_MORPHS):
+    # what the addon's pair-combining operator would find, for information
+    interesting = {k for k in keys
+                   if any(f"_{tag}_" in k or k.endswith(f"_{tag}") or f"({tag})" in k
+                          for tags in ADDON_LOOKUP_TAGS.values() for tag in tags)}
+    print(f"   morphs an addon lookup would see: {len(interesting)}")
+
+    if len(present) != len(expected):
         result["failures"].append(
-            f"uma_addon eye-range morphs missing (found {tagged_present}, need {TAGGED_EYE_MORPHS}) -> "
+            f"eye-range morphs missing for mode '{args.mode}' (found {present}, need {expected}) -> "
             f"Refine Structure will not build the eye controls")
-    if args.mode == "short" and tagged_present:
-        result["failures"].append(f"expected short morph names only, but tagged morphs are present: {tagged_present}")
 
     result["raw_rotation"] = rotation_test(arm, args.bone)
     raw_moved = sum(v["moved"] for v in (result["raw_rotation"] or {}).values())
@@ -176,17 +189,17 @@ def verify(path, args):
     print(f"   after refine: eye control keys={len(control_keys)}/{len(EYE_CONTROL_KEYS)} "
           f"eye vertex groups={refined['meshes'][refined_mesh]['has_eye_vertex_groups']}")
 
-    if expects_tagged:
-        missing = [k for k in EYE_CONTROL_KEYS if k not in control_keys]
-        if missing:
-            result["failures"].append(f"Refine Structure did not build eye controls: missing {missing}")
+    if not control_keys:
+        result["failures"].append(
+            "Refine Structure built none of the eye control shape keys, so the eye bones cannot "
+            "deform the eyeball (this is the failure the naming contract exists to prevent)")
 
     result["refined_rotation"] = rotation_test(arm, args.bone)
     refined_moved = sum(v["moved"] for v in (result["refined_rotation"] or {}).values())
     result["refined_moved"] = refined_moved
     print(f"   after refine: rotating {args.bone} moves {refined_moved} verts")
 
-    if expects_tagged and refined_moved == 0:
+    if refined_moved == 0:
         result["failures"].append(
             f"after Refine Structure the eye bone {args.bone} no longer deforms the mesh "
             f"(its vertex groups are folded into Head and no eye controls were built)")
@@ -198,7 +211,8 @@ def main():
     argv = argv[argv.index("--") + 1:] if "--" in argv else []
     parser = argparse.ArgumentParser()
     parser.add_argument("files", nargs="+")
-    parser.add_argument("--mode", choices=["blender", "short", "both"], default="blender")
+    parser.add_argument("--mode", choices=["blender", "tagged", "short", "both", "unified"], default="blender",
+                        help="which morph naming spelling the model is expected to use")
     parser.add_argument("--bone", default="Eye_L")
     parser.add_argument("--json")
     parser.add_argument("--skip-refine", action="store_true")

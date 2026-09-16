@@ -88,6 +88,31 @@ animation curve. Measured results:
 | og tagged (stock 2.1.8) | unified | **0 / 160** ❌ (the mismatch this test exists to catch) |
 | short (mode 1) | short | **160 / 160** ✅ |
 
+### The addon side
+
+`blender_verify_pmx.py` also runs the addon's **Refine Structure**, which is the operator that used to
+kill the eye bones, so it covers both halves of the contract:
+
+```powershell
+blender --background --factory-startup --python Tools/blender_verify_pmx.py -- --mode unified D:/out/1001_00.pmx
+```
+
+`--mode` is `unified` / `tagged` (`blender`) / `short` / `both`, and selects the eye range morph
+spelling the model is expected to expose. The stock addon only resolves the tagged spelling, so the
+fork of it (see below) is what makes `unified` and `short` pass:
+
+| addon | model spelling | eye controls built | rotating `Eye_L` |
+|---|---|---|---|
+| stock | unified | **0 / 8** | **0 verts** |
+| patched | unified | 8 / 8 | 23 verts |
+| patched | tagged | 8 / 8 | 23 verts |
+| patched | short | 8 / 8 | 23 verts |
+
+The patched addon lives in its own repository (`Blender-Uma-Addon`, branch `unified-morph-naming`):
+one new `utils/naming.py` resolves a shape key by `(group, tag, side)` in whichever spelling the model
+uses, plus optional `naming_overrides.json`, and the three operators that matched morph names by
+literal string now go through it. Its `NAMING.md` has the details.
+
 
 
 `UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one loop of a clip by
