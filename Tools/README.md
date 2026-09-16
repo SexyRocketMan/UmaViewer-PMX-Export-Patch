@@ -128,8 +128,12 @@ Two things to know when comparing a render against what you see in Blender by ha
 * The recorder used to emit one frame at the start that was a rest pose (a T-pose with the arm offset
   stacked on it). `RecordClipLoop` now forces an animator evaluation before the first sample, so frame
   0 is an animated pose. `vmd_inspect.py motion` fails on that artefact ("the first frame is Nx the
-  typical step") and `render_stats.py frames` fails when the first rendered frame differs from the
-  second.
+  typical step"), and `render_stats.py frames` does the same at the pixel level: it compares the step
+  from the first to the second frame against the median step of the same sequence (2.5x by default),
+  not against a fixed number. That distinction matters, because the recorder does not seek - a loop can
+  legitimately start mid-stride, and then its "first step" is simply a normal step of a fast animation
+  (measured: 0.0208 against a 0.0233 typical step). `--max-first-frame-jump 0.02` restores the old
+  absolute check for cases where that is what you want.
 * The recorder captures its reference pose with the arms already rotated into an **A-pose** (38.5
   degrees, `UmaAPose.Degrees`). A motion therefore only lands correctly if that is the rest pose:
   `blender_render_motion.py` poses the arms into an A-pose and imports the vmd with `use_pose_mode`

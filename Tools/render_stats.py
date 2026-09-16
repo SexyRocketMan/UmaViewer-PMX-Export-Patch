@@ -132,13 +132,28 @@ def cmd_frames(args) -> int:
           f"{last['distinct_colours']}")
 
     if len(files) >= 3:
-        second = load(os.path.join(directory, files[1]))
-        jump, jump_changed = mean_abs_difference(load(os.path.join(directory, files[0])), second)
-        print(f"   start: first vs second frame differ by {jump:.4f} mean ({100 * jump_changed:.1f}% of pixels)")
-        if jump > args.max_first_frame_jump:
+        # A recording starts wherever the animation happens to be (the recorder does not seek, see
+        # Tools/README.md), so how big the first step is depends on the phase the loop starts in: a run
+        # cycle that starts in the middle of the stride legitimately moves a lot between frame 1 and 2.
+        # What a pose pop looks like instead is a first step far above the steps around it, so compare it
+        # against the median step of the same recording - the same relative check vmd_inspect motion does.
+        steps = []
+        for name_a, name_b in zip(files, files[1:]):
+            steps.append(mean_abs_difference(load(os.path.join(directory, name_a)),
+                                             load(os.path.join(directory, name_b))))
+        typical = sorted(value for value, _ in steps)[len(steps) // 2]
+        jump, jump_changed = steps[0]
+        print(f"   start: first vs second frame differ by {jump:.4f} mean ({100 * jump_changed:.1f}% of pixels), "
+              f"typical step {typical:.4f} ({jump / typical if typical else 0:.2f}x)")
+        if args.max_first_frame_jump > 0 and jump > args.max_first_frame_jump:
             failures.append(f"the first frame differs from the second by {jump:.4f} "
                             f"(> {args.max_first_frame_jump}): that is a pose pop, typically a T-pose "
                             f"recorded before the animation started, or a rest pose mismatch")
+        elif typical > 0 and jump > args.first_step_factor * typical:
+            failures.append(f"the step from the first to the second frame is {jump / typical:.1f}x the "
+                            f"typical step ({jump:.4f} vs {typical:.4f}, factor {args.first_step_factor}): "
+                            f"the motion starts with a pose pop, typically a T-pose recorded before the "
+                            f"animation started, or a rest pose mismatch")
 
         middle = load(os.path.join(directory, files[len(files) // 2]))
         difference, changed = mean_abs_difference(load(os.path.join(directory, files[0])), middle)
@@ -198,9 +213,13 @@ def main() -> int:
         p.add_argument("--min-value", type=float, default=0.05)
         p.add_argument("--min-motion", type=float, default=0.0005)
         p.add_argument("--max-loop-difference", type=float, default=0.01)
-        p.add_argument("--max-first-frame-jump", type=float, default=0.02,
-                       help="how much the first frame may differ from the second; a bigger jump means "
-                            "the first frame caught a pose the animation never had (T-pose pop)")
+        p.add_argument("--max-first-frame-jump", type=float, default=0,
+                       help="optional absolute cap on how much the first frame may differ from the "
+                            "second; 0 (default) only checks it against the typical step of the same "
+                            "recording, because a loop that starts mid-stride legitimately steps far")
+        p.add_argument("--first-step-factor", type=float, default=2.5,
+                       help="the first step may be at most this many times the median step; the default "
+                            "matches vmd_inspect motion")
         p.add_argument("--report", type=int, default=6)
 
     p = sub.add_parser("frames"); p.add_argument("target"); add_thresholds(p)
