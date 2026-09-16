@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using System.IO;
 using System;
@@ -328,7 +329,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (IsRecording && !IsLive)
+        if (IsRecording && !IsLive && !ManualSampling)
         {
             SaveFrame();
             FrameNumber++;
@@ -571,6 +572,129 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public void PauseRecording() { IsRecording = false; }
 
     /// <summary>
+    /// Skips the FixedUpdate sampler so that a caller can drive sampling itself through
+    /// <see cref="SampleFrame"/>. Used by <see cref="RecordClipLoop"/>.
+    /// </summary>
+    public bool ManualSampling { get; set; }
+
+    /// <summary>Records one frame at the current pose. Only valid while <see cref="ManualSampling"/> is set.</summary>
+    public void SampleFrame()
+    {
+        if (!IsRecording) return;
+        SaveFrame();
+        FrameNumber++;
+    }
+
+    /// <summary>
+    /// Records exactly one loop of <paramref name="clip"/> by stepping the animation to exact
+    /// normalized times instead of sampling whatever the render loop happens to produce.
+    ///
+    /// Every recorded frame lands on frame/fps seconds, the frame count is exactly
+    /// clip.length * fps + 1, and the last frame repeats the first pose - which is what makes a single
+    /// button produce a cleanly looping motion that needs no trimming in Blender. Sampling in real
+    /// time drifts against the animation (FixedUpdate count vs. animator time), which is why the start
+    /// and end frames used to disagree.
+    ///
+    /// The player loop still advances one frame per recorded frame with
+    /// <see cref="Time.captureDeltaTime"/> pinned to the frame length, so cloth/hair physics keep
+    /// working. Physics driven bones are the one part that will not be identical between the first and
+    /// last frame.
+    /// </summary>
+    public IEnumerator RecordClipLoop(AnimationClip clip, int fps, Animator[] animators, Action onFinished = null)
+    {
+        if (clip == null) throw new ArgumentNullException(nameof(clip));
+        if (fps <= 0) throw new ArgumentOutOfRangeException(nameof(fps));
+
+        int totalFrames = Mathf.Max(1, Mathf.RoundToInt(clip.length * fps));
+        var layers = SnapshotLayers(animators);
+        var previousSpeeds = new Dictionary<Animator, float>();
+        foreach (var animator in (animators ?? new Animator[0]).Where(a => a != null).Distinct())
+        {
+            previousSpeeds[animator] = animator.speed;
+            animator.speed = 0f; // the pose is set explicitly, the animator must not advance on its own
+        }
+
+        float previousCaptureDeltaTime = Time.captureDeltaTime;
+        Time.captureDeltaTime = 1f / fps;
+        Time.fixedDeltaTime = 1f / fps;
+
+        ManualSampling = true;
+        StartRecording();
+        try
+        {
+            for (int frame = 0; frame <= totalFrames; frame++)
+            {
+                // the last frame repeats the first pose exactly, so the motion loops seamlessly
+                float normalizedTime = frame == totalFrames ? 0f : frame / (float)totalFrames;
+                foreach (var layer in layers)
+                {
+                    layer.Animator.Play(layer.StateHash, layer.Layer, normalizedTime);
+                    layer.Animator.Update(0f);
+                }
+
+                yield return null; // run one frame so cloth/hair physics advance with it
+                SampleFrame();
+            }
+        }
+        finally
+        {
+            ManualSampling = false;
+            Time.captureDeltaTime = previousCaptureDeltaTime;
+            foreach (var pair in previousSpeeds)
+            {
+                if (pair.Key != null) pair.Key.speed = pair.Value;
+            }
+            StopRecording();
+        }
+
+        Debug.Log($"[VMD] recorded one loop of '{clip.name}': {frameNumberSaved} frames "
+                  + $"({clip.length:F3}s @ {fps}fps), last frame repeats the first pose");
+        onFinished?.Invoke();
+    }
+
+    /// <summary>Records one loop of whatever the current character is playing.</summary>
+    public IEnumerator RecordCurrentLoop(AnimationClip clip, int fps = 30, Action onFinished = null)
+    {
+        var character = GetComponentInParent<UmaContainerCharacter>();
+        var animators = character == null
+            ? new Animator[0]
+            : new[] { character.UmaAnimator, character.UmaFaceAnimator }.Where(a => a != null).ToArray();
+        return RecordClipLoop(clip, fps, animators, onFinished);
+    }
+
+    private class RecordedLayer
+    {
+        public Animator Animator;
+        public int Layer;
+        public int StateHash;
+    }
+
+    /// <summary>
+    /// Every layer that currently plays something, so the recording can put all of them back on an
+    /// exact normalized time (the uma character drives body and face on several layers).
+    /// </summary>
+    private static List<RecordedLayer> SnapshotLayers(Animator[] animators)
+    {
+        var layers = new List<RecordedLayer>();
+        foreach (var animator in animators ?? new Animator[0])
+        {
+            if (animator == null || animator.runtimeAnimatorController == null) continue;
+            for (int layer = 0; layer < animator.layerCount; layer++)
+            {
+                var state = animator.GetCurrentAnimatorStateInfo(layer);
+                if (state.fullPathHash == 0) continue;
+                layers.Add(new RecordedLayer
+                {
+                    Animator = animator,
+                    Layer = layer,
+                    StateHash = state.fullPathHash
+                });
+            }
+        }
+        return layers;
+    }
+
+    /// <summary>
     /// レコーディングを終了
     /// </summary>
     public void StopRecording()
@@ -647,7 +771,9 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     {
                         foreach (BoneNames boneName in Enum.GetValues(typeof(BoneNames)))
                         {
-                            if ((i % KeyReductionLevel) != 0 && boneName != BoneNames.全ての親) { continue; }
+                            // the last frame is always keyed: skipping it leaves the motion without its
+                            // closing pose, so a looping motion no longer returns to where it started
+                            if ((i % KeyReductionLevel) != 0 && i != frameNumberSaved - 1 && boneName != BoneNames.全ての親) { continue; }
                             if (!BoneDictionary.Keys.Contains(boneName)) { continue; }
                             if (BoneDictionary[boneName] == null) { continue; }
                             if (!UseParentOfAll && boneName == BoneNames.全ての親) { continue; }

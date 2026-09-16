@@ -31,6 +31,8 @@ using UnityEngine;
 ///   -umaListProps &lt;f&gt;    print prop/scene assets whose name contains &lt;f&gt; (empty = all), then exit
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
+///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
+///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
 ///   -umaTimeout &lt;sec&gt;    abort after this many seconds, default 600
 ///   -umaExtraFrames &lt;n&gt;  frames to let the model settle before exporting, default 30
 ///
@@ -53,6 +55,9 @@ public static class UmaHeadlessExport
     private const string KeyOutPath = "UmaHeadlessExport.OutPath";
     private const string KeyIsProp = "UmaHeadlessExport.IsProp";
     private const string KeyPropName = "UmaHeadlessExport.PropName";
+    private const string KeyVmdPath = "UmaHeadlessExport.VmdPath";
+    private const string KeyVmdStarted = "UmaHeadlessExport.VmdStarted";
+    private const string KeyVmdDone = "UmaHeadlessExport.VmdDone";
 
     private enum Stage
     {
@@ -61,6 +66,7 @@ public static class UmaHeadlessExport
         WaitStartup,
         WaitModel,
         Settle,
+        RecordVmd,
         Export,
         Done
     }
@@ -79,6 +85,9 @@ public static class UmaHeadlessExport
         public string ListPropsFilter = "";
         public bool DumpMaterials;
         public string Variant = "";
+        public string RecordVmd = "";
+        public int RecordFps = 30;
+        public int RecordReduction = 0;
         public double TimeoutSeconds = 600;
         public int ExtraFrames = 30;
 
@@ -107,6 +116,9 @@ public static class UmaHeadlessExport
                         break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaVariant": options.Variant = Next(); break;
+                    case "-umaRecordVmd": options.RecordVmd = Next(); break;
+                    case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
+                    case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
                     case "-umaTimeout": options.TimeoutSeconds = double.Parse(Next()); break;
                     case "-umaExtraFrames": options.ExtraFrames = int.Parse(Next()); break;
                     default: break; // ignore everything else Unity/the shell passes through
@@ -304,8 +316,70 @@ public static class UmaHeadlessExport
 
                 case Stage.Settle:
                     if (_settleFramesLeft-- > 0) return;
-                    CurrentStage = Stage.Export;
+                    CurrentStage = string.IsNullOrEmpty(options.RecordVmd) ? Stage.Export : Stage.RecordVmd;
                     break;
+
+                case Stage.RecordVmd:
+                {
+                    var container = CurrentContainer();
+                    if (container == null)
+                    {
+                        Fail("model container disappeared before recording");
+                        return;
+                    }
+                    if (!(container is UmaContainerCharacter character) || character.UmaAnimator == null)
+                    {
+                        Fail("-umaRecordVmd needs a character with an animator");
+                        return;
+                    }
+
+                    var positionBone = container.transform.Find("Position");
+                    if (positionBone == null)
+                    {
+                        Fail("character has no 'Position' bone to attach the recorder to");
+                        return;
+                    }
+
+                    var recorder = positionBone.GetComponent<UnityHumanoidVMDRecorder>();
+                    if (recorder == null)
+                    {
+                        recorder = positionBone.gameObject.AddComponent<UnityHumanoidVMDRecorder>();
+                        recorder.KeyReductionLevel = Config.Instance.VmdKeyReductionLevel;
+                        recorder.Initialize();
+                    }
+
+                    string vmdPath = Path.GetFullPath(options.RecordVmd);
+                    Directory.CreateDirectory(Path.GetDirectoryName(vmdPath));
+                    SessionState.SetString(KeyVmdPath, vmdPath);
+
+                    if (SessionState.GetInt(KeyVmdStarted, 0) == 0)
+                    {
+                        var clip = CurrentClip(character.UmaAnimator);
+                        if (clip == null)
+                        {
+                            Fail("no animation clip is playing on the character");
+                            return;
+                        }
+                        SessionState.SetInt(KeyVmdStarted, 1);
+                        Debug.Log($"{Tag} recording one loop of '{clip.name}' ({clip.length:F3}s) at {options.RecordFps}fps");
+                        recorder.StartCoroutine(recorder.RecordCurrentLoop(clip, options.RecordFps,
+                            () => SessionState.SetInt(KeyVmdDone, 1)));
+                        return;
+                    }
+
+                    if (SessionState.GetInt(KeyVmdDone, 0) == 0) return; // still recording
+
+                    if (options.RecordReduction > 0) recorder.KeyReductionLevel = options.RecordReduction;
+                    recorder.SaveVMD(container.name, vmdPath);
+                    if (!File.Exists(vmdPath) || new FileInfo(vmdPath).Length == 0)
+                    {
+                        Fail($"recording did not write {vmdPath}");
+                        return;
+                    }
+                    Debug.Log($"{Tag} OK {vmdPath} ({new FileInfo(vmdPath).Length} bytes)");
+                    Succeed();
+                    return;
+                }
 
                 case Stage.Export:
                 {
@@ -358,6 +432,18 @@ public static class UmaHeadlessExport
         {
             Fail($"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
+    }
+
+    /// <summary>The clip currently playing on the animator (first non-empty layer).</summary>
+    private static AnimationClip CurrentClip(Animator animator)
+    {
+        if (animator == null) return null;
+        for (int layer = 0; layer < animator.layerCount; layer++)
+        {
+            var clips = animator.GetCurrentAnimatorClipInfo(layer);
+            if (clips != null && clips.Length > 0 && clips[0].clip != null) return clips[0].clip;
+        }
+        return null;
     }
 
     /// <summary>The container the current run is operating on (character or prop/scene).</summary>

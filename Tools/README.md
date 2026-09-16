@@ -9,6 +9,7 @@ regression tested from a terminal (and from CI).
 | `verify_export.ps1` | Runs headless Blender + `mmd_tools` + `uma_addon` and checks that the export still imports and rigs correctly. |
 | `blender_verify_pmx.py` | The Blender side of `verify_export.ps1`. |
 | `pmx_inspect.py` | Blender-free PMX inspector/differ (`summary`, `bones`, `weights`, `morphs`, `diff`, `check`). |
+| `vmd_inspect.py` | Blender-free VMD inspector and loop validator (`summary`, `loop`). |
 
 ## Quick start
 
@@ -42,7 +43,32 @@ Props/scenes export through the same CLI (`-umaProp` takes an asset path or a un
     -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 ```
 
-## Environment texture sets
+## Motion recording (one button, no trimming)
+
+`UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one loop of a clip by
+stepping the animation to exact normalized times (`frame / totalFrames`), pinning
+`Time.captureDeltaTime` to the frame length so cloth/hair keep advancing one step per frame, and
+sampling one vmd frame per step through `SampleFrame()`. That gives:
+
+* a frame count of exactly `clip.length * fps + 1`,
+* a last frame that repeats the first pose, so the motion loops without a visible jump.
+
+Sampling in real time (one `FixedUpdate` per frame) drifts against the animator, which is what made
+the start and end frames disagree. `SaveVMD` also used to skip the final frame whenever the key
+reduction did not divide it; the last frame is now always keyed.
+
+Record and validate headlessly:
+
+```powershell
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -RecordVmd D:/out/loop.vmd -RecordFps 30
+uv run Tools/vmd_inspect.py summary D:/out/loop.vmd
+uv run Tools/vmd_inspect.py loop    D:/out/loop.vmd     # frame 0 == last frame for every bone
+```
+
+Only physics driven bones (cloth, hair) can still differ slightly between the first and last frame -
+`loop` reports the worst deviation so that stays visible (`--rotation-tolerance` defaults to 1e-3).
+
+
 
 Environment materials are frequently serialized with **no texture at all**, because the game assigns
 one of several texture sets at runtime (time of day, weather, event banner). The home screen is the
