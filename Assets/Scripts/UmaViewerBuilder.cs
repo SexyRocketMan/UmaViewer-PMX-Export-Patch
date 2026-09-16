@@ -733,6 +733,7 @@ public class UmaViewerBuilder : MonoBehaviour
         prop.LoadProp(entry);
 
         CurrentOtherContainer = prop;
+        UI.ModelSettings?.LoadTextureSetPanel(prop.TextureSet);
     }
 
     public void LoadLive(LiveEntry live, List<LiveCharacterSelect> characters)
@@ -1062,6 +1063,8 @@ public class UmaViewerBuilder : MonoBehaviour
 
     public void UnloadProp()
     {
+        UI.ModelSettings?.ClearTextureSetPanel();
+
         if (CurrentOtherContainer != null)
         {
             Destroy(CurrentOtherContainer.gameObject);

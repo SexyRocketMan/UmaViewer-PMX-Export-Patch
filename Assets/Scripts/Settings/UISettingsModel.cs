@@ -97,6 +97,53 @@ public class UISettingsModel : MonoBehaviour
         Shader.SetGlobalFloat("_GlobalOutlineWidth", val);
     }
 
+    /// <summary>Prefix of the generated texture set rows, so they can be cleared again.</summary>
+    public const string TextureSetRowPrefix = "TextureSetRow_";
+
+    /// <summary>
+    /// Lists the texture sets of the loaded prop/scene in the materials panel.
+    ///
+    /// Environment materials are usually shipped without any texture: the game picks one of several
+    /// texture sets at runtime (time of day, weather, event banner), see
+    /// <see cref="UmaEnvTextureSet"/>. Those sets live in separate bundles, so this panel is what lets
+    /// the user switch between them.
+    /// </summary>
+    public void LoadTextureSetPanel(UmaEnvTextureSet textureSet)
+    {
+        ClearTextureSetPanel();
+        if (textureSet == null || textureSet.Variants.Count < 2) return;
+        if (MaterialsList == null) return;
+
+        Debug.Log($"[UISettingsModel] offering {textureSet.Variants.Count} texture sets for {textureSet.name}: "
+                  + $"{string.Join(", ", textureSet.Variants)} (current '{textureSet.CurrentVariant}')");
+
+        foreach (string variant in textureSet.Variants)
+        {
+            var row = Instantiate(UmaViewerUI.Instance.UmaContainerTogglePrefab, MaterialsList.content);
+            row.name = TextureSetRowPrefix + variant;
+            row.Name = variant == textureSet.CurrentVariant ? $"Texture set {variant} (current)" : $"Texture set {variant}";
+            string captured = variant;
+            row.Toggle.SetIsOnWithoutNotify(variant == textureSet.CurrentVariant);
+            row.Toggle.onValueChanged.AddListener(value =>
+            {
+                if (!value) return;
+                if (!textureSet.SetVariant(captured)) return;
+                LoadTextureSetPanel(textureSet);
+                Debug.Log($"[UISettingsModel] texture set {captured} applied to {textureSet.name}");
+            });
+        }
+    }
+
+    public void ClearTextureSetPanel()
+    {
+        if (MaterialsList == null) return;
+        for (int i = MaterialsList.content.childCount - 1; i >= 0; i--)
+        {
+            var child = MaterialsList.content.GetChild(i);
+            if (child.name.StartsWith(TextureSetRowPrefix)) Destroy(child.gameObject);
+        }
+    }
+
     public void ExportModel()
     {
 #if !UNITY_ANDROID || UNITY_EDITOR

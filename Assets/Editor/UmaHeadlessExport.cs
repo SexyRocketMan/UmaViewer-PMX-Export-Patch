@@ -22,10 +22,15 @@ using UnityEngine;
 ///
 ///   -umaChar &lt;id&gt;        character id to load (see -umaListChars)
 ///   -umaCostume &lt;id&gt;     costume id, e.g. "00". Defaults to the first costume of the character
+///   -umaProp &lt;path&gt;      instead of a character, load and export a prop / scene asset path or name
+///                        (see -umaListProps)
 ///   -umaOut &lt;path&gt;       .pmx file to write. Defaults to &lt;project&gt;/HeadlessExports/&lt;char&gt;_&lt;costume&gt;.pmx
 ///   -umaScene &lt;path&gt;     scene to boot, default Assets/Scenes/Version2.unity
 ///   -umaListChars        print every character id together with its costume ids, then exit
 ///   -umaListCostumes     print the costume ids of -umaChar, then exit
+///   -umaListProps &lt;f&gt;    print prop/scene assets whose name contains &lt;f&gt; (empty = all), then exit
+///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
+///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaTimeout &lt;sec&gt;    abort after this many seconds, default 600
 ///   -umaExtraFrames &lt;n&gt;  frames to let the model settle before exporting, default 30
 ///
@@ -46,6 +51,8 @@ public static class UmaHeadlessExport
     private const string KeyStage = "UmaHeadlessExport.Stage";
     private const string KeyDeadline = "UmaHeadlessExport.Deadline";
     private const string KeyOutPath = "UmaHeadlessExport.OutPath";
+    private const string KeyIsProp = "UmaHeadlessExport.IsProp";
+    private const string KeyPropName = "UmaHeadlessExport.PropName";
 
     private enum Stage
     {
@@ -65,8 +72,13 @@ public static class UmaHeadlessExport
         public int CharId = -1;
         public string CostumeId = "";
         public string OutPath = "";
+        public string Prop = "";
         public bool ListChars;
         public bool ListCostumes;
+        public bool ListProps;
+        public string ListPropsFilter = "";
+        public bool DumpMaterials;
+        public string Variant = "";
         public double TimeoutSeconds = 600;
         public int ExtraFrames = 30;
 
@@ -84,8 +96,17 @@ public static class UmaHeadlessExport
                     case "-umaCostume": options.CostumeId = Next(); break;
                     case "-umaOut": options.OutPath = Next(); break;
                     case "-umaScene": options.ScenePath = Next(); break;
+                    case "-umaProp": options.Prop = Next(); break;
                     case "-umaListChars": options.ListChars = true; break;
                     case "-umaListCostumes": options.ListCostumes = true; break;
+                    case "-umaListProps":
+                        options.ListProps = true;
+                        // the filter is optional: only consume the next argument if it is a value,
+                        // not another -umaX switch
+                        if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListPropsFilter = argv[++i];
+                        break;
+                    case "-umaDumpMaterials": options.DumpMaterials = true; break;
+                    case "-umaVariant": options.Variant = Next(); break;
                     case "-umaTimeout": options.TimeoutSeconds = double.Parse(Next()); break;
                     case "-umaExtraFrames": options.ExtraFrames = int.Parse(Next()); break;
                     default: break; // ignore everything else Unity/the shell passes through
@@ -121,9 +142,11 @@ public static class UmaHeadlessExport
             return;
         }
 
-        if (!options.ListChars && !options.ListCostumes && options.CharId < 0)
+        if (!options.ListChars && !options.ListCostumes && !options.ListProps
+            && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
-            Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> (optionally -umaOut), or -umaListChars / -umaListCostumes");
+            Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
+                           + "or -umaListChars / -umaListCostumes / -umaListProps");
             EditorApplication.Exit(2);
             return;
         }
@@ -203,6 +226,39 @@ public static class UmaHeadlessExport
                         return;
                     }
 
+                    if (options.ListProps)
+                    {
+                        PrintProps(options.ListPropsFilter);
+                        Succeed();
+                        return;
+                    }
+
+                    if (!string.IsNullOrEmpty(options.Prop))
+                    {
+                        var propEntry = FindPropEntry(options.Prop);
+                        if (propEntry == null)
+                        {
+                            Fail($"prop '{options.Prop}' not found; use -umaListProps to search");
+                            return;
+                        }
+
+                        string propExportPath = string.IsNullOrEmpty(options.OutPath)
+                            ? Path.Combine(Path.GetDirectoryName(Application.dataPath), "HeadlessExports",
+                                           Path.GetFileName(propEntry.Name) + ".pmx")
+                            : options.OutPath;
+                        propExportPath = Path.GetFullPath(propExportPath);
+                        Directory.CreateDirectory(Path.GetDirectoryName(propExportPath));
+                        SessionState.SetString(KeyOutPath, propExportPath);
+                        SessionState.SetInt(KeyIsProp, 1);
+                        SessionState.SetString(KeyPropName, propEntry.Name);
+
+                        Debug.Log($"{Tag} loading prop {propEntry.Name}");
+                        builder.UnloadProp();
+                        builder.LoadProp(propEntry);
+                        CurrentStage = Stage.WaitModel;
+                        break;
+                    }
+
                     var chara = main.Characters.FirstOrDefault(c => c.Id == options.CharId);
                     if (chara == null)
                     {
@@ -229,6 +285,7 @@ public static class UmaHeadlessExport
                     exportPath = Path.GetFullPath(exportPath);
                     Directory.CreateDirectory(Path.GetDirectoryName(exportPath));
                     SessionState.SetString(KeyOutPath, exportPath);
+                    SessionState.SetInt(KeyIsProp, 0);
 
                     Debug.Log($"{Tag} loading character {chara.Id} ({chara.Name}) costume {costumeId}");
                     StartLoad(chara, costumeId);
@@ -238,7 +295,7 @@ public static class UmaHeadlessExport
 
                 case Stage.WaitModel:
                 {
-                    var container = UmaViewerBuilder.Instance != null ? UmaViewerBuilder.Instance.CurrentUMAContainer : null;
+                    var container = CurrentContainer();
                     if (container == null) return;
                     _settleFramesLeft = options.ExtraFrames;
                     CurrentStage = Stage.Settle;
@@ -252,15 +309,40 @@ public static class UmaHeadlessExport
 
                 case Stage.Export:
                 {
-                    var container = UmaViewerBuilder.Instance.CurrentUMAContainer;
+                    var container = CurrentContainer();
                     if (container == null)
                     {
                         Fail("model container disappeared before export");
                         return;
                     }
                     string exportPath = SessionState.GetString(KeyOutPath, "");
+
+                    if (!string.IsNullOrEmpty(options.Variant) && container is UmaContainerProp propContainer
+                        && propContainer.TextureSet != null)
+                    {
+                        bool applied = propContainer.TextureSet.SetVariant(options.Variant);
+                        Debug.Log($"{Tag} texture set variant '{options.Variant}' "
+                                  + (applied ? $"applied ({propContainer.TextureSet.CurrentVariant})"
+                                             : $"not available, current is '{propContainer.TextureSet.CurrentVariant}'"));
+                    }
+
+                    if (options.DumpMaterials)
+                    {
+                        string stem = SessionState.GetInt(KeyIsProp, 0) == 1
+                            ? SceneStem(SessionState.GetString(KeyPropName, ""))
+                            : "";
+                        DumpMaterials(container.gameObject, stem);
+                    }
+
                     Debug.Log($"{Tag} exporting to {exportPath}");
-                    ModelExporter.ExportModel(container, exportPath);
+                    if (container is UmaContainerCharacter character)
+                    {
+                        ModelExporter.ExportModel(character, exportPath);
+                    }
+                    else
+                    {
+                        ModelExporter.ExportModel(container, exportPath);
+                    }
                     if (!File.Exists(exportPath) || new FileInfo(exportPath).Length == 0)
                     {
                         Fail($"export did not write {exportPath}");
@@ -276,6 +358,234 @@ public static class UmaHeadlessExport
         {
             Fail($"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
+    }
+
+    /// <summary>The container the current run is operating on (character or prop/scene).</summary>
+    private static UmaContainer CurrentContainer()
+    {
+        var builder = UmaViewerBuilder.Instance;
+        if (builder == null) return null;
+        return SessionState.GetInt(KeyIsProp, 0) == 1 ? (UmaContainer)builder.CurrentOtherContainer : builder.CurrentUMAContainer;
+    }
+
+    /// <summary>
+    /// Finds a prop/scene entry by exact asset path, or by a case insensitive substring of the path
+    /// or of the file name.
+    /// </summary>
+    private static UmaDatabaseEntry FindPropEntry(string query)
+    {
+        var candidates = UmaViewerMain.Instance.AbList.Values.ToList();
+
+        var exact = candidates.FirstOrDefault(e => string.Equals(e.Name, query, StringComparison.OrdinalIgnoreCase));
+        if (exact != null) return exact;
+
+        var matches = candidates.Where(e => e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        if (matches.Count > 1)
+        {
+            Debug.LogWarning($"{Tag} '{query}' is ambiguous ({matches.Count} matches), using {matches[0].Name}; "
+                             + $"others: {string.Join(", ", matches.Skip(1).Take(8).Select(m => m.Name))}");
+        }
+        return matches.FirstOrDefault();
+    }
+
+    private static void PrintProps(string filter)
+    {
+        var props = UmaViewerMain.Instance.AbList.Values
+            .Where(e => e.Name.StartsWith("3d/env") && Path.GetFileName(e.Name).StartsWith("pfb_")
+                        || (e.Name.StartsWith("cutt/cutt_son") && Path.GetFileName(e.Name).StartsWith("cutt_son")))
+            .Where(e => string.IsNullOrEmpty(filter) || e.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderBy(e => e.Name)
+            .ToList();
+        Debug.Log($"{Tag} props/scenes ({props.Count} matching '{filter}'):");
+        foreach (var entry in props.Take(2000)) Debug.Log($"{Tag}   {entry.Name}");
+        if (props.Count > 2000) Debug.Log($"{Tag}   ... and {props.Count - 2000} more");
+    }
+
+    /// <summary>
+    /// Reports what the loaded model's materials actually resolved to. Props and scenes get no
+    /// material post-processing at all in UmaContainerProp, so materials the game assigns at runtime
+    /// (weather/banner texture sets) stay empty and render flat white.
+    /// </summary>
+    private static void DumpMaterials(GameObject root, string stem)
+    {
+        var renderers = root.GetComponentsInChildren<Renderer>(true);
+        var shaderCounts = new Dictionary<string, int>();
+        var problemMaterials = new List<string>();
+        var textures = new HashSet<string>();
+        int materialCount = 0;
+        int noMainTexProperty = 0;
+        int nullMainTex = 0;
+        int missingShader = 0;
+
+        foreach (var renderer in renderers)
+        {
+            foreach (var material in renderer.sharedMaterials)
+            {
+                materialCount++;
+                if (material == null)
+                {
+                    problemMaterials.Add($"{renderer.name}: <null material slot>");
+                    continue;
+                }
+
+                string shaderName = material.shader != null ? material.shader.name : "<no shader>";
+                shaderCounts[shaderName] = shaderCounts.TryGetValue(shaderName, out int count) ? count + 1 : 1;
+
+                if (material.shader == null || shaderName == "Hidden/InternalErrorShader") missingShader++;
+
+                bool hasMainTex = material.HasProperty("_MainTex");
+                if (!hasMainTex)
+                {
+                    noMainTexProperty++;
+                    Color color = material.HasProperty("_Color") ? material.color : Color.white;
+                    problemMaterials.Add($"{renderer.name} / {material.name}: shader '{shaderName}' has no _MainTex, "
+                                         + $"color {color} -> renders flat {(color == Color.white ? "WHITE" : "colour")}");
+                    continue;
+                }
+
+                var mainTex = material.mainTexture;
+                if (mainTex == null)
+                {
+                    nullMainTex++;
+                    string properties = string.Join(", ", material.GetTexturePropertyNames()
+                        .Select(p => $"{p}={(material.GetTexture(p) == null ? "null" : material.GetTexture(p).name)}"));
+                    problemMaterials.Add($"{renderer.name} / {material.name}: _MainTex is NULL (shader '{shaderName}') "
+                                         + $"texture properties: [{properties}]");
+                }
+                else
+                {
+                    textures.Add(mainTex.name);
+                }
+            }
+        }
+
+        Debug.Log($"{Tag} material dump for {root.name}: {renderers.Length} renderers, {materialCount} material slots");
+        Debug.Log($"{Tag}   distinct shaders: {shaderCounts.Count}");
+        foreach (var pair in shaderCounts.OrderByDescending(p => p.Value).Take(25))
+        {
+            Debug.Log($"{Tag}     {pair.Value,4}  {pair.Key}");
+        }
+        Debug.Log($"{Tag}   materials with no _MainTex property: {noMainTexProperty}");
+        Debug.Log($"{Tag}   materials with a NULL _MainTex  : {nullMainTex}");
+        Debug.Log($"{Tag}   materials with a missing shader : {missingShader}");
+        Debug.Log($"{Tag}   distinct main textures used      : {textures.Count}");
+        foreach (string problem in problemMaterials.Take(60)) Debug.Log($"{Tag}   ! {problem}");
+        if (problemMaterials.Count > 60) Debug.Log($"{Tag}   ! ... and {problemMaterials.Count - 60} more suspicious materials");
+
+        // components that might be assigning textures/banners at runtime
+        var behaviours = root.GetComponentsInChildren<MonoBehaviour>(true)
+            .Where(b => b != null)
+            .GroupBy(b => b.GetType().Name)
+            .OrderByDescending(g => g.Count())
+            .ToList();
+        Debug.Log($"{Tag}   components on the prefab: {string.Join(", ", behaviours.Select(g => $"{g.Key}x{g.Count()}").Take(30))}");
+
+        if (string.IsNullOrEmpty(stem)) return;
+
+        // everything the loaded bundles brought into memory that belongs to this scene - this is both
+        // the evidence that the prefab's materials are intentionally textureless and the candidate
+        // list a texture-set dropdown would offer
+        var materialAssets = Resources.FindObjectsOfTypeAll<Material>()
+            .Where(m => m.name.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderBy(m => m.name)
+            .ToList();
+        Debug.Log($"{Tag}   material assets matching '{stem}': {materialAssets.Count}");
+        foreach (var material in materialAssets.Take(40))
+        {
+            string properties = string.Join(", ", material.GetTexturePropertyNames()
+                .Select(p => $"{p}={(material.GetTexture(p) == null ? "null" : material.GetTexture(p).name)}"));
+            Debug.Log($"{Tag}     {material.name}: shader={material.shader?.name} [{properties}]");
+        }
+
+        var textureAssets = Resources.FindObjectsOfTypeAll<Texture2D>()
+            .Where(t => t.name.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0)
+            .Select(t => t.name)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
+        Debug.Log($"{Tag}   texture assets matching '{stem}': {textureAssets.Count}");
+        foreach (string texture in textureAssets.Take(80)) Debug.Log($"{Tag}     {texture}");
+
+        // The interesting question: for a material like "mtl_<stem>_000_<suffix>" that has no texture,
+        // does a "tex_<stem>_<variant>_<suffix>" texture set exist as a separate loadable asset?
+        var suffixes = Resources.FindObjectsOfTypeAll<Material>()
+            .Where(m => m.name.StartsWith($"mtl_{stem}_", StringComparison.OrdinalIgnoreCase))
+            .Where(m => m.HasProperty("_MainTex") && m.GetTexture("_MainTex") == null)
+            .Select(m => MaterialSuffix(m.name, stem))
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Distinct()
+            .ToList();
+        if (suffixes.Count > 0)
+        {
+            Debug.Log($"{Tag}   probing texture sets for textureless suffixes: {string.Join(", ", suffixes)}");
+            ProbeTextureVariants(stem, suffixes);
+        }
+    }
+
+    /// <summary>"mtl_&lt;stem&gt;_000_base01" -> "base01" (drops the 3 digit variant token).</summary>
+    private static string MaterialSuffix(string materialName, string stem)
+    {
+        string prefix = $"mtl_{stem}_";
+        if (!materialName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+        var parts = materialName.Substring(prefix.Length).Split('_');
+        return parts.Length > 1 ? string.Join("_", parts.Skip(1)) : null;
+    }
+
+    /// <summary>Enumerates the alternative texture sets for a suffix and tries to load each one.</summary>
+    private static void ProbeTextureVariants(string stem, List<string> suffixes)
+    {
+        var main = UmaViewerMain.Instance;
+        foreach (string suffix in suffixes)
+        {
+            string needle = $"tex_{stem}_";
+            var candidates = main.AbList.Values
+                .Where(e => e.Name.StartsWith("3d/env", StringComparison.OrdinalIgnoreCase))
+                .Where(e =>
+                {
+                    string file = Path.GetFileName(e.Name);
+                    return file.StartsWith(needle, StringComparison.OrdinalIgnoreCase)
+                           && file.EndsWith($"_{suffix}", StringComparison.OrdinalIgnoreCase);
+                })
+                .OrderBy(e => e.Name)
+                .ToList();
+
+            Debug.Log($"{Tag}     suffix '{suffix}': {candidates.Count} texture set(s) in the database");
+            foreach (var entry in candidates.Take(8))
+            {
+                if (!File.Exists(entry.Path))
+                {
+                    Debug.Log($"{Tag}       MISSING ON DISK {entry.Name}");
+                    continue;
+                }
+                try
+                {
+                    var texture = entry.Get<Texture2D>();
+                    Debug.Log(texture != null
+                        ? $"{Tag}       OK    {entry.Name} -> {texture.width}x{texture.height} ({texture.format})"
+                        : $"{Tag}       EMPTY {entry.Name} -> bundle has no Texture2D");
+                }
+                catch (Exception ex)
+                {
+                    Debug.Log($"{Tag}       FAIL  {entry.Name}: {ex.GetType().Name} {ex.Message}");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// "pfb_env_home10001_main000_000" -> "env_home10001_main000": the part shared by the prefab, its
+    /// materials and every texture variant set that belongs to it.
+    /// </summary>
+    private static string SceneStem(string entryName)
+    {
+        string name = Path.GetFileName(entryName);
+        if (name.StartsWith("pfb_", StringComparison.OrdinalIgnoreCase)) name = name.Substring(4);
+        var parts = name.Split('_');
+        if (parts.Length > 1 && parts[parts.Length - 1].Length <= 4 && parts[parts.Length - 1].All(char.IsDigit))
+        {
+            name = string.Join("_", parts.Take(parts.Length - 1));
+        }
+        return name;
     }
 
     private static void StartLoad(CharaEntry chara, string costumeId)

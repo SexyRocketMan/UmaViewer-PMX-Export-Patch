@@ -31,6 +31,39 @@ uv run Tools/pmx_inspect.py check D:/out/1001_00.pmx
 uv run Tools/pmx_inspect.py diff a.pmx b.pmx
 ```
 
+## Props and scenes
+
+Props/scenes export through the same CLI (`-umaProp` takes an asset path or a unique substring), and
+`-umaDumpMaterials` reports what their materials resolved to:
+
+```powershell
+./Tools/headless_export.ps1 -ListProps home10001        # find scene assets
+./Tools/headless_export.ps1 -Prop "3d/env/home/home10001/main/pfb_env_home10001_main000_000" `
+    -DumpMaterials -Variant 214 -Out D:/out/home.pmx
+```
+
+## Environment texture sets
+
+Environment materials are frequently serialized with **no texture at all**, because the game assigns
+one of several texture sets at runtime (time of day, weather, event banner). The home screen is the
+clearest example:
+
+```
+mtl_env_home10001_main000_000_base01   <- prefab bundle: _MainTex = null (12 of 20 material slots!)
+tex_env_home10001_main000_212_base01   <- 2048x2048 DXT1, separate bundle
+tex_env_home10001_main000_214_base01   <- 2048x2048 DXT1, separate bundle
+```
+
+`UmaContainerProp` only instantiated the prefab, so those materials rendered flat white and exported
+with whatever texture happened to be first in the texture list. `UmaEnvTextureSet` now resolves the
+sets that exist for every textureless material, assigns one (default: the variant covering the most
+materials, lowest code first) and exposes `Variants` / `CurrentVariant` / `SetVariant()` so
+`UISettingsModel.LoadTextureSetPanel` can offer the choice in the materials panel.
+
+Verified with `-umaDumpMaterials`: NULL `_MainTex` count drops 12 -> 1 (the remaining one is a
+runtime mirror reflection that has no texture set), and the exported PMX switches from
+`tex_..._000_base00` to the correct `tex_..._212_base01` for all `base01` materials.
+
 ## Why the verification exists: the uma_addon morph-name contract
 
 The Blender `uma_addon`'s **Refine Structure** operator
