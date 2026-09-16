@@ -394,10 +394,14 @@ public static class UmaHeadlessExport
                     if (!string.IsNullOrEmpty(options.Variant) && container is UmaContainerProp propContainer
                         && propContainer.TextureSet != null)
                     {
-                        bool applied = propContainer.TextureSet.SetVariant(options.Variant);
+                        // drive the actual UI row when it exists, so this also covers the dropdown path
+                        bool appliedViaUi = TryClickTextureSetRow(options.Variant, out string rowName);
+                        bool applied = appliedViaUi || propContainer.TextureSet.SetVariant(options.Variant);
                         Debug.Log($"{Tag} texture set variant '{options.Variant}' "
-                                  + (applied ? $"applied ({propContainer.TextureSet.CurrentVariant})"
-                                             : $"not available, current is '{propContainer.TextureSet.CurrentVariant}'"));
+                                  + (applied
+                                      ? $"applied via {(appliedViaUi ? $"UI row '{rowName}'" : "API")} "
+                                        + $"(current {propContainer.TextureSet.CurrentVariant})"
+                                      : $"not available, current is '{propContainer.TextureSet.CurrentVariant}'"));
                     }
 
                     if (options.DumpMaterials)
@@ -432,6 +436,31 @@ public static class UmaHeadlessExport
         {
             Fail($"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
+    }
+
+    /// <summary>
+    /// Sets a texture set row of the materials panel to on, which is exactly what clicking the
+    /// dropdown/toggle does. Returns true when a matching row was found.
+    /// </summary>
+    private static bool TryClickTextureSetRow(string variant, out string rowName)
+    {
+        rowName = null;
+        var list = UmaViewerUI.Instance != null && UmaViewerUI.Instance.ModelSettings != null
+            ? UmaViewerUI.Instance.ModelSettings.MaterialsList
+            : null;
+        if (list == null) return false;
+
+        string expected = UISettingsModel.TextureSetRowPrefix + variant;
+        foreach (Transform child in list.content)
+        {
+            if (child.name != expected) continue;
+            var toggle = child.GetComponentInChildren<UnityEngine.UI.Toggle>(true);
+            if (toggle == null) continue;
+            rowName = child.name;
+            toggle.isOn = true; // fires the panel's onValueChanged listener
+            return true;
+        }
+        return false;
     }
 
     /// <summary>The clip currently playing on the animator (first non-empty layer).</summary>
