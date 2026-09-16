@@ -9,7 +9,8 @@ regression tested from a terminal (and from CI).
 | `verify_export.ps1` | Runs headless Blender + `mmd_tools` + `uma_addon` and checks that the export still imports and rigs correctly. |
 | `blender_verify_pmx.py` | The Blender side of `verify_export.ps1`. |
 | `pmx_inspect.py` | Blender-free PMX inspector/differ (`summary`, `bones`, `weights`, `morphs`, `diff`, `check`). |
-| `vmd_inspect.py` | Blender-free VMD inspector and loop validator (`summary`, `loop`). |
+| `vmd_inspect.py` | Blender-free VMD inspector and loop validator (`summary`, `loop`, `motion`). |
+| `morph_name_table.py` | Prints what every morph is called in each naming mode, checks the rules against four exports (one per mode) and can write [`../docs/MORPH_NAMES.md`](../docs/MORPH_NAMES.md). |
 | `blender_verify_vmd.py` | Imports a PMX + VMD in Blender and checks the motion's morph keyframes survive. |
 | `blender_render_motion.py` | Imports a PMX (+VMD) and renders the upper body / full body as a coloured PNG sequence. |
 | `render_stats.py` | Checks rendered frames numerically: not black, not empty, not flat white, motion plays, loop closes. |

@@ -37,10 +37,51 @@ the shared container toggle prefab, which is what the materials list already use
 
   | Index | Option text | Morph names look like | Use when |
   |---|---|---|---|
-  | 0 | `Tagged (stock Blender addon)` | `Eye_2_L(CloseA)[M_Face]` | you use the unpatched `uma_addon` and never import vmds |
-  | 1 | `Short english` | `Eye_2_L` | the old fork behaviour |
+  | 0 | `Tagged (stock Blender addon)` | `EyeBrow_1_R(WaraiA)[M_Face]` | you use the unpatched `uma_addon` and never import vmds |
+  | 1 | `Short english` | `EyeBrow_1_R` | the old fork behaviour |
   | 2 | `Both (tagged + short)` | both of the above | bridging: addon and motion both work |
-  | 3 | `Unified (recommended)` | `Brow_WaraiA_R`, `Eye_XRange_L` | normal use; the only mode that works for model **and** motion |
+  | 3 | `Unified (recommended)` | `Brow_WaraiA_R` | normal use; the only mode that works for model **and** motion |
+
+* Optional description label under the dropdown: assign a `TextMeshProUGUI` to `_morphNameModeText` and the
+  code writes the explanation for whichever mode is selected, including the example, so the options
+  themselves can stay short. The text it writes, verified against real exports (see below):
+
+  | Mode | Label text |
+  |---|---|
+  | 0 | `Tagged: EyeBrow_1_R(WaraiA)[M_Face]` / `The stock Blender addon finds these, but the name is 27 bytes and a motion can only hold 15 - so a recorded vmd cannot drive these morphs.` |
+  | 1 | `Short english: EyeBrow_1_R` / `Fits a motion, but the name says nothing about what the morph does.` |
+  | 2 | `Both: EyeBrow_1_R(WaraiA)[M_Face] + EyeBrow_1_R` / `The addon stays happy and motions still land, at the cost of twice as many morphs.` |
+  | 3 | `Unified: Brow_WaraiA_R` / `English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive name for the model and the motion.` |
+
+  Leave `_morphNameModeText` empty if you would rather put the examples in the option text itself; then
+  append them to the option strings, e.g. `Tagged - EyeBrow_1_R(WaraiA)[M_Face]`.
+
+### All four modes on one morph
+
+Everything below is the smiling right eyebrow of character 1001, taken from four real exports (one per
+mode) rather than typed by hand:
+
+| Mode | This morph is called | Bytes | A vmd can drive it |
+|---|---|---|---|
+| 0 tagged | `EyeBrow_1_R(WaraiA)[M_Face]` | 27 | no |
+| 1 short english | `EyeBrow_1_R` | 11 | yes |
+| 2 both | `EyeBrow_1_R(WaraiA)[M_Face]` **and** `EyeBrow_1_R` | 27 / 11 | yes (via the short alias) |
+| 3 unified | `Brow_WaraiA_R` | 13 | yes |
+
+Two more that show the other rules:
+
+| Rule | tagged | short | unified |
+|---|---|---|---|
+| the tag says what the morph does | `Eye_2_L(CloseA)[M_Face]` | `Eye_2_L` | `Eye_CloseA_L` |
+| the side moves out of the tag into the name | `Mouth_2_0(CheekA_L)[M_Face]` | `Mouth_2_0` | `Mouth_CheekA_L` |
+| a tag too long with its group gets abbreviated | `Eye_27_L(EyelidHideA)[M_Face]` | `Eye_27_L` | `Eye_LidHideA_L` |
+| the morphs the Blender addon builds eye controls from | `Eye_20_R(XRange)[M_Face]` | `Eye_20_R` | `Eye_XRange_R` |
+
+Over the whole character, mode 0 writes **240** morph entries (same morph on `M_Face` and `M_Mayu` kept
+apart), modes 1 and 3 write **192** (those 48 duplicates merge), and mode 2 writes **432** - the union of
+mode 0 and mode 1. The complete mapping, all 192 morphs in all four spellings, is in
+[`MORPH_NAMES.md`](MORPH_NAMES.md), and `Tools/morph_name_table.py` regenerates it from four exports and
+fails if a name in it is not actually in the corresponding `.pmx`.
 
 ## Step by step (by duplicating an existing row)
 

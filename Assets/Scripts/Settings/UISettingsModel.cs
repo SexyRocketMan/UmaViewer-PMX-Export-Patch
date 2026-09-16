@@ -25,6 +25,13 @@ public class UISettingsModel : MonoBehaviour
     [SerializeField] private TMP_Dropdown _morphNameMode;
 
     /// <summary>
+    /// Optional description label under the naming dropdown. It spells out what the selected mode does to
+    /// one morph, so the dropdown itself can stay short
+    /// (see <see cref="MorphNameModeLabel"/> and docs/MORPH_NAMES.md).
+    /// </summary>
+    [SerializeField] private TextMeshProUGUI _morphNameModeText;
+
+    /// <summary>
     /// Optional dedicated prefab for the texture set rows in the materials panel; falls back to the
     /// container toggle prefab the character/material lists use when it is not assigned.
     /// </summary>
@@ -120,6 +127,7 @@ public class UISettingsModel : MonoBehaviour
     {
         if (_aPoseRestPose != null) _aPoseRestPose.SetIsOnWithoutNotify(Config.Instance.PmxAPoseRestPose);
         if (_morphNameMode != null) _morphNameMode.SetValueWithoutNotify((int)Config.Instance.PmxMorphNameMode);
+        if (_morphNameModeText != null) _morphNameModeText.text = MorphNameModeLabel(Config.Instance.PmxMorphNameMode);
     }
 
     /// <summary>
@@ -141,11 +149,38 @@ public class UISettingsModel : MonoBehaviour
     public void ChangeMorphNameMode(int mode)
     {
         var wanted = (PmxMorphNameMode)Mathf.Clamp(mode, 0, (int)PmxMorphNameMode.Unified);
+        if (_morphNameModeText != null) _morphNameModeText.text = MorphNameModeLabel(wanted);
         if (Config.Instance.PmxMorphNameMode == wanted) return;
         Config.Instance.PmxMorphNameMode = wanted;
         Debug.Log($"[Export] morph names are now '{wanted}' ({(int)wanted}); "
                   + "models and motions use the same spelling, so re-export models after changing this");
         Config.Instance.UpdateConfig(false);
+    }
+
+    /// <summary>
+    /// What each naming mode does, spelled out on one morph - the smiling right eyebrow of a character
+    /// ("EyeBrow_1_R(WaraiA)[M_Face]"). Every morph follows the same rules; docs/MORPH_NAMES.md lists all
+    /// 192 of them in all four spellings.
+    /// </summary>
+    static string MorphNameModeLabel(PmxMorphNameMode mode)
+    {
+        switch (mode)
+        {
+            case PmxMorphNameMode.BlenderCompatible:
+                return "Tagged: EyeBrow_1_R(WaraiA)[M_Face]\n"
+                       + "The stock Blender addon finds these, but the name is 27 bytes and a motion can only "
+                       + "hold 15 - so a recorded vmd cannot drive these morphs.";
+            case PmxMorphNameMode.ShortEnglish:
+                return "Short english: EyeBrow_1_R\n"
+                       + "Fits a motion, but the name says nothing about what the morph does.";
+            case PmxMorphNameMode.Both:
+                return "Both: EyeBrow_1_R(WaraiA)[M_Face] + EyeBrow_1_R\n"
+                       + "The addon stays happy and motions still land, at the cost of twice as many morphs.";
+            default:
+                return "Unified: Brow_WaraiA_R\n"
+                       + "English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive "
+                       + "name for the model and the motion.";
+        }
     }
 
     /// <summary>Prefix of the generated texture set rows, so they can be cleared again.</summary>
