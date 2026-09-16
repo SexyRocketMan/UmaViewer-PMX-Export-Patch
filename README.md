@@ -1,36 +1,107 @@
-# Uma Viewer
+# Uma Viewer — Ultimate Agemasen Edition
 
-## Fork-specific info
-There are several issues with the PMX export in the og repo - and i don't expect them to fixed anytime soon  
-Mainly, the exported model are using 2-byte vertex indices, which isn't an issue - until you hit the 65535 vertex limit  
-To my knowledge, no props or umas pass this threshold - but some scenes do, and as a result you get unusable mess of faces which can't be fixed post-export  
-So this fork is meant to fix the aforementioned bug, and some other issues (like material export not working)  
-I'm not sure i'll be able to maintain it, keep this in mind
+A fork of [katboi01/UmaViewer](https://github.com/katboi01/UmaViewer) that focuses on **PMX model and VMD
+motion export that you can actually open in Blender**. Upstream can export models and animations, but the
+results regularly need surgery: corrupted geometry, missing materials, motions whose morph/expression
+tracks land on nothing. This fork ships those fixes and leaves the viewer itself alone.
 
-# Changes from the og repo
-**Done:**
-- Fixed materials for all exported scenes  
-- Fixed broken geometry for exported scenes with 65k+ faces  
-- Full support for mini-uma motion export  
-- Added options to use short english names for bones and morphs (fixed morph mapping)  
+Maintained on a best-effort basis.
 
-**To-do (maybe):**
-- Rework the bone and morph naming schema - current names are not descriptive of the action, old ones don't fit in the vmd 15-byte morph name limit  
+Tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
 
-**Latest tutorial video:**  
-https://www.youtube.com/watch?v=zbzfF3pubjQ
+Jump to: [What each release fixed](#what-each-release-fixed) - [Fork vs og UmaViewer](#fork-vs-og-umaviewer) -
+[Installation](#requirementsinstallation) - [Build it yourself](#for-developerscontributors)
 
-*UPDATE*:  
-The exported eye bones no longer deform the mesh after the Blender `uma_addon`'s `Refine Structure`
-operator - **fixed**. The cause was the morph name shortener stripping the `(Tag)[Mesh]` suffix that
-the addon matches on by exact name (`Eye_20_R(XRange)[M_Face]`). Without those names the operator
-deletes the `Eye_L`/`Eye_R` vertex groups but never builds the replacement eye controls, so the eye
-bones go dead - while a raw import still looks completely fine. Morph naming is now selectable with
-`PmxMorphNameMode` in `Config.json` (0 = Blender/uma_addon compatible *(default)*, 1 = short english
-names for vmd matching, 2 = both) and defaults to the compatible naming again.  
-Exports can now be produced and checked from a terminal, see [Tools/README.md](Tools/README.md).
+## What each release fixed
 
-# Original readme follows:  
+### Agemasen 2 — *Ultimate Agemasen Edition (global db key updated)*
+[release](https://github.com/SexyRocketMan/UmaViewer-PMX-Export-Patch/releases/tag/Agemasen2) · 2026-07-26
+
+- **`Database not found` / viewer won't start**: the database key was refreshed, so this build works like the
+  current og UmaViewer again instead of failing on a new game version.
+
+### Agemasen 1 — *The Ultimate Agemasen Edition*
+[release](https://github.com/SexyRocketMan/UmaViewer-PMX-Export-Patch/releases/tag/Agemasen1) · 2026-06-29
+
+- **Short english names for exported bones and morphs**, selectable in the settings tab. The og naming is
+  Japanese/verbose, which no longer fits the VMD format's 15-byte name field - so morph (expression) tracks
+  were dropped or landed on nothing when you imported the motion next to a model. With short names an
+  exported motion maps onto an exported model in Blender without any custom translation dictionary.
+- **Mini-uma (chibi) motion export fixed properly** - the neck and shoulder bones are no longer broken in the
+  exported VMD. A couple of finger mappings are still off.
+- New app icon.
+- Note: models exported with an older version don't carry the new names - **re-export your models with this
+  version** or the morphs of a short-named motion won't match them.
+
+### patch_3
+tag `patch_3` · 2026-05-17
+
+- **Mini-uma motion export** got a first, hacky bypass so a recorded chibi motion could be exported at all.
+- **Settings could not be changed after quitting on mobile** - fixed (desktop was unaffected).
+
+### patch_2
+tag `patch_2` · 2026-03-31
+
+- **Some scenes could not be exported at all**: a failed texture-list name lookup aborted the export. There is
+  now a fallback texture assignment, so those scenes export.
+
+### patch — *PMX Export Patch*
+tag `patch` · 2026-03-30 — the first release of this fork
+
+- **Broken geometry on models/scenes with more than 65535 vertices**: the exporter wrote 2-byte vertex indices,
+  so everything past the limit turned into a mess of faces that cannot be repaired after the fact. Now 4-byte
+  indices are used when needed. No character or prop hits the limit, but several scenes do.
+- **Missing materials in exported models** - fixed.
+- New app icon and build settings.
+
+### Unreleased — branch `fix/eye-bone-export`
+
+- **Eye bones keep working after Blender's `Refine Structure`**: the name shortener used to strip the
+  `(Tag)[Mesh]` suffix that Blender's `uma_addon` matches on, so the addon deleted the `Eye_L`/`Eye_R` vertex
+  groups and never built the replacement eye controls - the eye bones went dead while a plain import still
+  looked fine. Morph naming is now a single shared implementation with a selectable scheme (see
+  [Tools/README.md](Tools/README.md)).
+- **One naming scheme for models and motions**: descriptive, romaji tags + english groups, always within the
+  VMD 15-byte limit, and identical for the exported model and the exported motion - so morph mapping just
+  works. The old short-english and Blender-compatible spellings are still selectable in `Config.json`
+  (`PmxMorphNameMode`).
+- **Props and scenes stop rendering white**: environment texture sets are resolved from the asset database and
+  can be switched from a row in the materials panel, so a home/live/race scene shows its real textures instead
+  of flat white. Exports now also warn about every material slot they could not resolve.
+- **One clean loop, recorded by a button**: `Record VMD` now records exactly one loop of the playing animation
+  (frame count = length × fps + 1, last frame repeats the first) with a pinned timestep and without the
+  T-pose frame that used to sneak in at the start. No trimming or retiming in Blender afterwards.
+- **Optional A-pose rest pose**: an exported model can be written with both upper arms rotated into the
+  38.5° A-pose that recorded motions are relative to, so model and motion line up in Blender without posing
+  anything by hand and without importing the motion with *Use current pose as rest pose*. It is **off by
+  default** - a T-pose rest is what rigging and retargeting tools expect - and can be turned on with
+  `"PmxAPoseRestPose": true` in `Config.json`, or `-APose` on the command line tools. The result was checked
+  against the hand recipe down to 6e-4 blender units, see [Tools/README.md](Tools/README.md).
+- **VMD key reduction is applied** (it was silently ignored because the save method shadowed the setting).
+- **Command line export**: models, motions, props and scene material tables can be exported and verified
+  without clicking, and the whole chain (export → record → check → render → encode) has a one-command
+  workflow. See [Tools/README.md](Tools/README.md).
+
+## Fork vs og UmaViewer
+
+| Problem in og UmaViewer | In this fork |
+| --- | --- |
+| Geometry corrupt on models/scenes over 65535 vertices (2-byte indices) | 4-byte indices where needed *(patch)* |
+| Exported models missing materials | Fixed *(patch)* |
+| Some scenes abort export on a texture-list lookup failure | Fallback texture assignment *(patch_2)* |
+| Mini-uma motions export with broken neck/shoulder bones | Bypass *(patch_3)*, then properly fixed *(Agemasen 1)* |
+| Japanese/verbose bone and morph names - morph tracks don't fit the VMD 15-byte name field and need a translation dictionary | Short english names *(Agemasen 1)*, now one descriptive unified scheme used by both models and motions *(unreleased)* |
+| `Database not found` on a newer game version | Refreshed database key *(Agemasen 2)* |
+| Blender `Refine Structure` kills the eye bones | Fixed - eye controls are built *(unreleased)* |
+| Scenes/props render and export with untextured (white) materials | Environment texture sets resolved + switchable *(unreleased)* |
+| Recorded motions need trimming, retiming, or a manual T→A rest pose | Button records one clean loop; optional A-pose rest pose *(unreleased)* |
+| Exporting means clicking through the UI | Headless CLI + end-to-end workflow script *(unreleased)* |
+
+Known upstream behaviour that is **not** a bug: after importing a motion you may see
+`not found bone Ankle_L_IK` - exported PMX models have no IK-constrained bones, so the VMD's IK track is
+inert and can be ignored.
+
+# Original readme follows:
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
 
 | Version   | Supported |
@@ -53,17 +124,17 @@ Currently only the default work mode is supported - you need to download assets 
 ### Requirements/Installation
 1. [Uma Musume: Pretty Derby](https://dmg.umamusume.jp/) with full data download is required to run the viewer.
 2. Depending on your version and update status, the game stores its data in **different locations**
- - **DMM/Steam Older installations :** C:\Users\\*your_username*\AppData\LocalLow\Cygames\umamusume(?)\
- - **DMM/Steam Fresh installations :** ...\\*Umamusume installation directory*\Umamusume_Data\Persistent(?)\
+ - **DMM/Steam Older installations :** C:\Users\*your_username*\AppData\LocalLow\Cygames\umamusume(?)\
+ - **DMM/Steam Fresh installations :** ...\*Umamusume installation directory*\Umamusume_Data\Persistent(?)\
  - In any case，confirm your file listing in target folder looks like this
    * Target Folder\
      * **meta**
      * master\
        * **master.mdb**
      * dat\
-       - 2A\\...
-       - 2B\\...
-       - ...\\...
+       - 2A\...
+       - 2B\...
+       - ...\...
 3. Download the most recent UmaViewer.zip file from [Releases](https://github.com/katboi01/UmaViewer/releases/) tab.
 4. Extract the archive anywhere, can be extracted over previous version.
 5. Run the UmaViewer.exe. 
