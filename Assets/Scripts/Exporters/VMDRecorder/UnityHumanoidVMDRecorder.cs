@@ -1201,6 +1201,12 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     Debug.LogWarning("[VMD] PmxMorphNameMode 0 (BlenderCompatible) names morphs longer than a vmd morph name field, "
                                      + "so exported motions cannot drive the exported model. Use mode 3 (Unified) or 2 (Both) for motions.");
                 }
+                else if (!Config.Instance.VmdUseEnglishMorphNames)
+                {
+                    Debug.LogWarning("[VMD] Japanese vmd morph names do not match any morph name an exported model can carry, "
+                                     + "so Blender will drop the morph keyframes on import. Enable 'english morph names' in the "
+                                     + "animation settings to match the exported model.");
+                }
                 foreach (var kvp in MorphDrivers)
                 {
                     Debug.Log($"[Morph Debug]   - {kvp.Key}: {kvp.Value.Morphs.Count} morphs");
