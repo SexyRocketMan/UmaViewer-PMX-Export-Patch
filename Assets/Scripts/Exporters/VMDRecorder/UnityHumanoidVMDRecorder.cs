@@ -157,7 +157,6 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public MorphRecorder morphRecorderSaved;
 
     private UmaContainer container;
-    float aposeDegress = 38.5f;
 
     public bool IsLive;
 
@@ -299,8 +298,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         characterContainer.UpBodyReset();
 
         // Safety check before rotating arms to A-Pose
-        if (BoneDictionary[BoneNames.左腕] != null) BoneDictionary[BoneNames.左腕].Rotate(0, 0, -aposeDegress);
-        if (BoneDictionary[BoneNames.右腕] != null) BoneDictionary[BoneNames.右腕].Rotate(0, 0, aposeDegress);
+        UmaAPose.IntoAPose(BoneDictionary[BoneNames.左腕], BoneDictionary[BoneNames.右腕]);
 
         SetInitialPositionAndRotation();
 
@@ -320,8 +318,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         boneGhost = new BoneGhost(BoneDictionary, UseBottomCenter);
         morphRecorder = new MorphRecorder(transform);
 
-        if (BoneDictionary[BoneNames.左腕] != null) BoneDictionary[BoneNames.左腕].Rotate(0, 0, aposeDegress);
-        if (BoneDictionary[BoneNames.右腕] != null) BoneDictionary[BoneNames.右腕].Rotate(0, 0, -aposeDegress);
+        UmaAPose.BackToTPose(BoneDictionary[BoneNames.左腕], BoneDictionary[BoneNames.右腕]);
         
         animator.enabled = true;
         animator.Play(state.shortNameHash, 0, state.normalizedTime);

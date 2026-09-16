@@ -17,6 +17,10 @@
 
 .EXAMPLE
     ./Tools/run_workflow.ps1 -Char 1002 -Costume 00 -MorphNameMode 0 -Name ogcompat
+
+.EXAMPLE
+    # model exported with the arms already in the A-pose, so the render poses nothing by hand
+    ./Tools/run_workflow.ps1 -Char 1001 -Costume 00 -Motion anm_rac_type01_run02_stride -APose -Name apose
 #>
 [CmdletBinding()]
 param(
@@ -24,6 +28,7 @@ param(
     [string]$Costume = "00",
     [string]$Motion = "",
     [ValidateSet(-1, 0, 1, 2, 3)][int]$MorphNameMode = 3,
+    [switch]$APose,
     [int]$Fps = 30,
     [ValidateSet("upper", "head", "full")][string]$View = "full",
     [int]$Width = 640,
@@ -72,12 +77,15 @@ $video = Join-Path $OutDir "$stem.mp4"
 
 Write-Host "Character : $Char/$Costume  motion: $(if ($Motion) { $Motion } else { '<default idle>' })"
 Write-Host "Naming    : mode $MorphNameMode"
+Write-Host "Rest pose : $(if ($APose) { 'A-pose (arms 38.5 degrees down)' } else { 'T-pose' })"
 Write-Host "Output    : $OutDir"
 
 # ---------------------------------------------------------------- 1. model
 Invoke-Step "1/6 export model" {
-    & (Join-Path $tools "headless_export.ps1") -Char $Char -Costume $Costume -Out $pmx `
-        -MorphNameMode $MorphNameMode -Motion $Motion -Timeout 900
+    $exportArgs = @{ Char = $Char; Costume = $Costume; Out = $pmx; MorphNameMode = $MorphNameMode
+                     Motion = $Motion; Timeout = 900 }
+    if ($APose) { $exportArgs.APose = $true }
+    & (Join-Path $tools "headless_export.ps1") @exportArgs
 }
 if (-not (Test-Path $pmx)) { throw "no pmx at $pmx" }
 
@@ -112,9 +120,16 @@ if ($SkipRender) {
 # ---------------------------------------------------------------- 4. render
 $blender = Find-BlenderExe
 Invoke-Step "4/6 render frames" {
+    # A model exported in the A-pose already has the rest pose the motion is relative to, so nothing may
+    # be posed here and the vmd must be imported without "Treat Current Pose as Rest Pose" - that is the
+    # whole point of the export option.
+    $aposeDegrees = if ($APose) { 0 } else { 38.5 }
+    $usePoseMode = if ($APose) { 0 } else { 1 }
+    Write-Host "   arms posed in blender by $aposeDegrees degrees, use_pose_mode=$usePoseMode"
     & $blender --background --factory-startup --python (Join-Path $tools "blender_render_motion.py") -- `
         --pmx $pmx --vmd $vmd --frames-dir $framesDir --still $still --view $View `
-        --engine $Engine --width $Width --height $Height --samples $Samples --fps $Fps
+        --engine $Engine --width $Width --height $Height --samples $Samples --fps $Fps `
+        --apose $aposeDegrees --use-pose-mode $usePoseMode
 }
 $rendered = @(Get-ChildItem $framesDir -Filter *.png -ErrorAction SilentlyContinue)
 if ($rendered.Count -eq 0) { throw "no frames were rendered into $framesDir" }

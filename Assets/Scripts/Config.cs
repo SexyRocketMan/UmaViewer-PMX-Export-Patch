@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -48,6 +48,9 @@ public class Config
 
     public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and vmd motions. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but is too long for a vmd morph name; 1 = short english names (Eye_2_L); 2 = both, tagged morphs plus short english aliases; 3 = unified, descriptive and vmd sized (Brow_WaraiA_R)";
     public PmxMorphNameMode PmxMorphNameMode = PmxMorphNameMode.Unified;
+
+    public string PmxAPoseRestPoseTip = "true/false. Exports the model with both upper arms rotated 38.5 degrees into the A-pose that motion recording is relative to, so a recorded vmd lines up in Blender on its own - no posing the model and re-importing the motion with \"Use current pose as rest pose\". true for MMD style use, false (default) keeps the plain T-pose rest that rigging/retargeting expects.";
+    public bool PmxAPoseRestPose = false;
 
     public string AntiAliasingTip = "Display, screenshot antialiasing level. 0 - no AA, 1 - 2x MSAA, 2 - 4x MSAA, 3 - 8x MSAA";
     public int AntiAliasing = 2;

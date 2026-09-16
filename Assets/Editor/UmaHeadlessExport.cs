@@ -37,6 +37,7 @@ using UnityEngine;
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short, 2 both, 3 unified)
+///   -umaAPose            export models with the arms in the A-pose that recorded motions are relative to
 ///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
 ///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
 ///   -umaRecordMode &lt;m&gt;   deterministic (default, one pinned frame per sample) or realtime (the legacy
@@ -100,6 +101,7 @@ public static class UmaHeadlessExport
         public bool DumpMaterials;
         public string Variant = "";
         public int MorphNameMode = -1;
+        public bool APoseRestPose;
         public string RecordVmd = "";
         public int RecordFps = 30;
         public int RecordReduction = 0;
@@ -137,6 +139,7 @@ public static class UmaHeadlessExport
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
+                    case "-umaAPose": options.APoseRestPose = true; break;
                     case "-umaRecordVmd": options.RecordVmd = Next(); break;
                     case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
                     case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
@@ -291,6 +294,13 @@ public static class UmaHeadlessExport
                         Config.Instance.PmxMorphNameMode = (PmxMorphNameMode)options.MorphNameMode;
                         Debug.Log($"{Tag} morph naming mode overridden to {Config.Instance.PmxMorphNameMode} "
                                   + $"({(int)Config.Instance.PmxMorphNameMode})");
+                    }
+
+                    if (options.APoseRestPose)
+                    {
+                        Config.Instance.PmxAPoseRestPose = true;
+                        Debug.Log($"{Tag} exporting models in the A-pose rest pose "
+                                  + $"(upper arms rotated {UmaAPose.Degrees} degrees down)");
                     }
 
                     if (options.ListChars)
@@ -506,7 +516,12 @@ public static class UmaHeadlessExport
 
                     if (SessionState.GetInt(KeyVmdDone, 0) == 0) return; // still recording
 
-                    if (options.RecordReduction > 0) recorder.KeyReductionLevel = options.RecordReduction;
+                    // The component defaults to 2 (its interactive default); recordings from here should be
+                    // full fidelity unless asked otherwise, which is also what Config.VmdKeyReductionLevel
+                    // means in the UI.
+                    recorder.KeyReductionLevel = options.RecordReduction > 0
+                        ? options.RecordReduction
+                        : Mathf.Max(1, Config.Instance.VmdKeyReductionLevel);
                     recorder.SaveVMD(container.name, vmdPath);
                     if (!File.Exists(vmdPath) || new FileInfo(vmdPath).Length == 0)
                     {

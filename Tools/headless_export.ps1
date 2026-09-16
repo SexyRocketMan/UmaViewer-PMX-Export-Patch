@@ -35,6 +35,7 @@ param(
     [int]$RecordReduction = 0,
     [ValidateSet("deterministic", "realtime")][string]$RecordMode = "deterministic",
     [int]$MorphNameMode = -1,
+    [switch]$APose,
     [int]$Timeout = 600,
     [int]$ExtraFrames = 30,
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
@@ -140,6 +141,7 @@ if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
 if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordReduction) }
 if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
+if ($APose) { $arguments += "-umaAPose" }
 
 Write-Host "Unity  : $UnityExe"
 Write-Host "Project: $ProjectPath"

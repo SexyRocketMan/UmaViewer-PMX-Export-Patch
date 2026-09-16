@@ -35,7 +35,13 @@ public class ModelExporter
         BuildBillboard(container);
 
         var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject);
-        var model = ReadPMXModel(container, textures, container.CharaEntry);
+        RawMMDModel model;
+        // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
+        // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
+        using (UmaAPose.Enter(container))
+        {
+            model = ReadPMXModel(container, textures, container.CharaEntry);
+        }
 
         FileStream fileStream = new FileStream(path, FileMode.Create);
         BinaryWriter writer = new BinaryWriter(fileStream);

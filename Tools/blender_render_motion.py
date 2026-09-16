@@ -47,7 +47,11 @@ def parse_args():
     parser.add_argument("--yaw", type=float, default=18.0, help="camera rotation around the model, degrees")
     parser.add_argument("--apose", type=float, default=38.5,
                         help="rotate the arms from the model's T-pose rest into the A-pose the recorder "
-                             "captures against (UnityHumanoidVMDRecorder uses 38.5); 0 disables it")
+                             "captures against (UnityHumanoidVMDRecorder uses 38.5); 0 disables it, which is "
+                             "what a model exported with Config.PmxAPoseRestPose needs")
+    parser.add_argument("--use-pose-mode", type=int, choices=(0, 1), default=1,
+                        help="import the vmd with 'Treat Current Pose as Rest Pose' (default 1); pass 0 to "
+                             "prove a model does not need it because its rest pose is already the A-pose")
     parser.add_argument("--json", default="")
     return parser.parse_args(argv)
 
@@ -71,14 +75,16 @@ def import_model(path, scale):
     return [o for o in bpy.data.objects if o not in before]
 
 
-def import_motion(path, scale, armature):
+def import_motion(path, scale, armature, use_pose_mode=True):
     for obj in bpy.data.objects:
         obj.select_set(False)
     armature.select_set(True)
     bpy.context.view_layer.objects.active = armature
     # "Treat Current Pose as Rest Pose": the recorder captures its reference pose with the arms already
-    # rotated into an A-pose, so the motion only lands correctly if that pose is the rest pose.
-    bpy.ops.mmd_tools.import_vmd(filepath=path, scale=scale, use_pose_mode=True)
+    # rotated into an A-pose, so the motion only lands correctly if that pose is the rest pose. A model
+    # exported with Config.PmxAPoseRestPose already carries that A-pose as its rest pose, and then this
+    # must stay off (--use-pose-mode 0) - otherwise the check proves nothing.
+    bpy.ops.mmd_tools.import_vmd(filepath=path, scale=scale, use_pose_mode=bool(use_pose_mode))
 
 
 def rotate_about_armature_axis(pose_bone, degrees, axis="Y"):
@@ -132,6 +138,58 @@ def world_bounds(objects):
                 minimum[axis] = min(minimum[axis], point[axis])
                 maximum[axis] = max(maximum[axis], point[axis])
     return minimum, maximum
+
+
+def pose_fingerprint(armature, meshes, scene):
+    """Numbers describing the pose at the first frame, so two imports can be compared without eyes.
+
+    The reference path (T-pose model, arms posed by hand into the A-pose, vmd imported with 'Treat
+    Current Pose as Rest Pose') and the A-pose export path (rest pose is already the A-pose, nothing
+    posed, vmd imported normally) must end up in the same pose - and if they do, these agree.
+
+    Bone positions are stored **relative to the hip** and the bounding box as its size, so that a model
+    whose rest pose sits a centimetre higher or lower than the other still compares equal; what matters
+    is the shape of the pose, not where the whole model floats.
+    """
+    scene.frame_set(scene.frame_start)
+    bpy.context.view_layer.update()
+
+    pose = {"bone_heads": {}, "bbox_min": [], "bbox_max": [], "bbox_center": [], "bbox_size": []}
+    anchor = None
+    if armature is not None:
+        for name in ("Hip", "センター", "Position"):
+            bone = armature.pose.bones.get(name)
+            if bone is not None:
+                anchor = armature.matrix_world @ bone.head
+                break
+        for name in ("Elbow_L", "Elbow_R", "Wrist_L", "Wrist_R", "Ankle_L", "Ankle_R", "Head"):
+            bone = armature.pose.bones.get(name)
+            if bone is not None:
+                head = armature.matrix_world @ bone.head
+                if anchor is not None:
+                    head = head - anchor
+                pose["bone_heads"][name] = [round(value, 5) for value in head]
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    minimum = [math.inf] * 3
+    maximum = [-math.inf] * 3
+    for obj in meshes:
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        if mesh is not None:
+            matrix = evaluated.matrix_world
+            for vertex in mesh.vertices:
+                point = matrix @ vertex.co
+                for axis in range(3):
+                    minimum[axis] = min(minimum[axis], point[axis])
+                    maximum[axis] = max(maximum[axis], point[axis])
+        evaluated.to_mesh_clear()
+    if minimum[0] < math.inf:
+        pose["bbox_min"] = [round(value, 5) for value in minimum]
+        pose["bbox_max"] = [round(value, 5) for value in maximum]
+        pose["bbox_center"] = [round((minimum[axis] + maximum[axis]) / 2, 5) for axis in range(3)]
+        pose["bbox_size"] = [round(maximum[axis] - minimum[axis], 5) for axis in range(3)]
+    return pose
 
 
 def find_head(armature, bounds_min, bounds_max):
@@ -261,7 +319,8 @@ def main():
                 apply_apose(armature, args.apose)
                 result["apose_degrees"] = args.apose
                 print(f"   arms posed to A-pose by {args.apose} degrees before the motion import")
-            import_motion(args.vmd, args.scale, armature)
+            import_motion(args.vmd, args.scale, armature, args.use_pose_mode)
+            result["use_pose_mode"] = bool(args.use_pose_mode)
             print(f"   motion applied, scene frames {scene.frame_start}..{scene.frame_end}")
         except Exception as exc:  # noqa: BLE001
             result["failures"].append(f"motion import failed: {type(exc).__name__}: {exc}")
@@ -272,6 +331,12 @@ def main():
 
     setup_scene(args, meshes, armature)
     configure_render(args, scene)
+
+    result["pose"] = pose_fingerprint(armature, meshes, scene)
+    print("   pose fingerprint: wrists "
+          + ", ".join(f"{name}={value}" for name, value in result["pose"]["bone_heads"].items()
+                      if "Wrist" in name)
+          + f", bbox center {result['pose']['bbox_center']}")
 
     frames_dir = os.path.abspath(args.frames_dir)
     if os.path.isdir(frames_dir):

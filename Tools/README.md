@@ -131,10 +131,47 @@ Two things to know when comparing a render against what you see in Blender by ha
   typical step") and `render_stats.py frames` fails when the first rendered frame differs from the
   second.
 * The recorder captures its reference pose with the arms already rotated into an **A-pose** (38.5
-  degrees, `aposeDegress`). A motion therefore only lands correctly if that is the rest pose:
+  degrees, `UmaAPose.Degrees`). A motion therefore only lands correctly if that is the rest pose:
   `blender_render_motion.py` poses the arms into an A-pose and imports the vmd with `use_pose_mode`
   ("Treat Current Pose as Rest Pose"), which is the same recipe as doing it by hand in Blender. Use
   `--apose <degrees>` if you use a different angle.
+
+### Exporting the A-pose rest pose instead (option)
+
+`Config.PmxAPoseRestPose = true` (or `headless_export.ps1 -APose`, `run_workflow.ps1 -APose`) makes the
+exporter hand the user the model that recipe produces: `UmaAPose.Enter(container)` freezes the animator,
+restores the rig's own rest pose, rotates both upper arms 38.5 degrees with the same helper the recorder
+uses, and puts everything back on dispose. Because `ReadVerticesAndTriangles` reads `SkinnedMeshRenderer.
+BakeMesh`, the vertices follow the arms, so both the mesh and the bone rest pose come out A-posed -
+exactly what `use_pose_mode` would have done in Blender.
+
+Imported that way the motion needs no posing and no `use_pose_mode`:
+
+```powershell
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/a.pmx -APose
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -RecordVmd D:/out/a.vmd -Motion <motion>
+uv run Tools/blender_render_motion.py --pmx D:/out/a.pmx --vmd D:/out/a.vmd `
+    --apose 0 --use-pose-mode 0 --frames-dir D:/out/frames --view full
+```
+
+Both paths are checked against each other numerically: `blender_render_motion.py` writes a `pose`
+fingerprint (world space elbow/wrist/ankle/head bone heads relative to the hip, plus the evaluated mesh
+bounding box at the first frame) into its `--json`, and the two imports have to agree on it. Measured on
+the stride motion of character 1001:
+
+| bone head | T-pose model + hand posed + `use_pose_mode` | A-pose export, nothing posed | T-pose model, nothing posed (control) |
+|---|---|---|---|
+| `Wrist_L` | `[0.1224, -0.32156, 0.13291]` | `[0.12219, -0.32184, 0.13312]` | `[0.32835, -0.39139, 0.25597]` |
+| `Wrist_R` | `[-0.23653, 0.07898, 0.10227]` | `[-0.23674, 0.07848, 0.102]` | `[-0.40393, 0.04334, 0.2928]` |
+| bbox centre | `[-0.05309, 0.0964, 0.74273]` | `[-0.05323, 0.09633, 0.74273]` | `[-0.08909, 0.06333, 0.74273]` |
+
+The export path agrees with the hand recipe to 6e-4 blender units and the rendered frames differ by
+0.32/255 on average, while skipping the pose (the control) is off by 0.2 units and 6.1/255 - so the check
+bites. Over the pmx files themselves the difference is confined to the arms: `Ankle_L`, `Hip`, `Head`,
+`Spine` and `Shoulder_L` are identical to 0.00000, 11762 of 13968 vertices are unchanged, and the 2206
+that move are the arms (the wrists drop 3.24 units in y, which is the A-pose direction).
+
+Default is still `false`, since a T-pose rest is what rigging and retargeting tools expect.
 
 ### Known harmless warning
 
@@ -215,17 +252,26 @@ literal string now go through it. Its `NAMING.md` has the details.
 
 
 
-`UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one loop of a clip by
-stepping the animation to exact normalized times (`frame / totalFrames`), pinning
-`Time.captureDeltaTime` to the frame length so cloth/hair keep advancing one step per frame, and
-sampling one vmd frame per step through `SampleFrame()`. That gives:
+`UnityHumanoidVMDRecorder.RecordClipLoop` / `RecordCurrentLoop` record exactly one loop of a clip without
+seeking the animators: the clip keeps playing at normal speed, `Time.captureDeltaTime` is pinned to the
+frame length so the animation - and cloth/hair - advance by exactly one frame per sample, and one vmd
+frame is sampled per `WaitForFixedUpdate` through `SampleFrame()`. Seeking with
+`Animator.Play(hash, layer, 0f)` is deliberately avoided: on a state with `writeDefaultValues` it resets
+every bone the clip does not animate, which is what left an earlier attempt as a single frozen rest pose.
+That gives:
 
 * a frame count of exactly `clip.length * fps + 1`,
 * a last frame that repeats the first pose, so the motion loops without a visible jump.
 
-Sampling in real time (one `FixedUpdate` per frame) drifts against the animator, which is what made
-the start and end frames disagree. `SaveVMD` also used to skip the final frame whenever the key
-reduction did not divide it; the last frame is now always keyed.
+Because nothing is seeked, the recording starts at whatever phase the animation happens to be in, not at
+the clip's first frame - for a looping clip that only decides where the loop begins. It also means two
+recordings of the same clip are not bit-identical: measured over two runs of the stride motion, root and
+IK handle positions differ by up to 0.05 / 0.37 units while every rotation that actually deforms the mesh
+agrees to 4e-4. `-umaRecordMode realtime` keeps the legacy path (one wall-clock `FixedUpdate` per frame,
+no pinned step); that one drifts against the animator, which is what made the first and last frames
+disagree. `SaveVMD` also used to skip the final frame whenever the key reduction did not divide it, and the
+level parameter used to shadow the field, so every save used level 1 - both are fixed, and key reduction
+is verified by checking that the reduced file is an identical subset of the full one.
 
 Record and validate headlessly:
 
