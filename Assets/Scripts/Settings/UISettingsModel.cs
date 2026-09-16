@@ -111,19 +111,32 @@ public class UISettingsModel : MonoBehaviour
     public void LoadTextureSetPanel(UmaEnvTextureSet textureSet)
     {
         ClearTextureSetPanel();
-        if (textureSet == null || textureSet.Variants.Count < 2) return;
+        if (textureSet == null) return;
         if (MaterialsList == null) return;
+        // nothing was resolved (or the scene has no alternative sets and needs none): stay out of the way
+        if (textureSet.Variants.Count == 0 || textureSet.AppliedSlots == 0) return;
 
-        Debug.Log($"[UISettingsModel] offering {textureSet.Variants.Count} texture sets for {textureSet.name}: "
-                  + $"{string.Join(", ", textureSet.Variants)} (current '{textureSet.CurrentVariant}')");
+        bool switchable = textureSet.Variants.Count > 1;
+        Debug.Log($"[UISettingsModel] {(switchable ? "offering" : "applied")} {textureSet.Variants.Count} texture set(s) "
+                  + $"for {textureSet.name}: {string.Join(", ", textureSet.Variants)} "
+                  + $"(current '{textureSet.CurrentVariant}', {textureSet.AppliedSlots} material slots)");
 
         foreach (string variant in textureSet.Variants)
         {
+            bool isCurrent = variant == textureSet.CurrentVariant;
             var row = Instantiate(UmaViewerUI.Instance.UmaContainerTogglePrefab, MaterialsList.content);
             row.name = TextureSetRowPrefix + variant;
-            row.Name = variant == textureSet.CurrentVariant ? $"Texture set {variant} (current)" : $"Texture set {variant}";
+            row.Name = $"Texture set {variant}"
+                       + (isCurrent ? $" - active ({textureSet.AppliedSlots} slots)" : "")
+                       + (switchable ? "" : " (only set available)");
             string captured = variant;
-            row.Toggle.SetIsOnWithoutNotify(variant == textureSet.CurrentVariant);
+            row.Toggle.SetIsOnWithoutNotify(isCurrent);
+            if (!switchable)
+            {
+                // a single set was found and already applied: show it, but do not pretend it is a choice
+                row.Toggle.interactable = false;
+                continue;
+            }
             row.Toggle.onValueChanged.AddListener(value =>
             {
                 if (!value) return;

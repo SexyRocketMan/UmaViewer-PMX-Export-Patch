@@ -101,6 +101,26 @@ resolver correctly does nothing elsewhere. Note that all the home scenes **share
 (`mtl_env_home10001_main000_000_base01`), so the resolver keys textures off the scene named *in the
 material*, not the prefab being loaded - keying it off the prefab left main002 upwards white.
 
+A sweep over every environment family (8 props each, `-ScanProps`) puts the scope of the problem:
+
+| family | slots sampled | textureless | props affected |
+|---|---|---|---|
+| `3d/env/home` | 20-57 per scene | 12 each | all, fixed by the resolver (12 -> 1) |
+| `3d/env/live` (common: confetti, cyalume, billboards) | 42 | **27** | 8/8 - runtime driven, see below |
+| `3d/env/race` (common props) | 8 | 1 | 1 |
+| `3d/env/set` | 282 | 0 | 0 |
+| `3d/env/gacha` | 52 | 0 | 0 |
+| `3d/env/mini` | 46 | 0 | 0 |
+| `3d/env/cutin` | 40 | 0 | 0 |
+
+The `live/common` and `race/common` cases are **not fixable by a static resolver**: no texture assets
+exist for them at all (`3d/env/race/common` has zero `tex_` entries, and nothing matches
+`tex_env_live_cmn_*` for confetti or the cyalume controllers). Their appearance is set at runtime - the
+cyalume controllers get their penlight colours per song, confetti and billboards come from live/effect
+data - so loading one as a standalone prop showing untextured is expected. The resolver correctly
+leaves them alone rather than guessing a texture.
+
+
 ### T-pose frame and rest pose
 
 Two things to know when comparing a render against what you see in Blender by hand:

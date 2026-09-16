@@ -997,6 +997,9 @@ public static class UmaHeadlessExport
         CurrentStage = Stage.Done;
         SessionState.SetString(KeyOptions, "");
         EditorApplication.update -= Tick;
+        // every mode has to emit this marker: the wrappers wait for it, and a mode that only logs its
+        // own summary looks like a hang to them
+        Debug.Log($"{Tag} OK");
         EditorApplication.Exit(0);
     }
 
