@@ -558,6 +558,9 @@ public class ModelExporter
                 mat.DrawSelfShadow = true;
                 mat.EdgeColor = Color.black;
                 mat.EdgeSize = 0.4f;
+                // The writer writes the comment with no null guard, and MMD treats an empty comment as "none",
+                // so every material starts out with an empty one
+                mat.MetaInfo = string.Empty;
 
                 if (material.HasProperty("_MainTex") && material.mainTexture != null)
                 {
@@ -585,32 +588,37 @@ public class ModelExporter
                                      + "the surface will not look right (see UmaEnvTextureSet for environment scenes)");
                     mat.Texture = model.TextureList[0];
                 }
-                mat.MetaInfo = UmaMaterialComment(material, model);
+                // Opt out for models that are meant to be used without the Blender addon: the plain MMD
+                // material values set above are then left alone, which is what an unadorned export looks like
+                if (Config.Instance == null || Config.Instance.PmxUmaMaterialFields)
+                {
+                    mat.MetaInfo = UmaMaterialComment(material, model);
 
-                // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
-                //
-                // * the uma environment map is added at the material's own _EnvRate (0.4) by the game, while
-                //   MMD's "sphere add" mode adds it at full strength with no rate to scale it - the model
-                //   came out washed out and glossy
-                // * the uma shade map (shad_c) is the colour of the shaded part of the surface, not a ramp,
-                //   so an MMD toon slot fed with it banded the model into harsh dark steps (black hair)
-                //
-                // Both maps are exported as textures and named in the comment below, so a shader that
-                // understands what they are (the uma addon's) can use them properly.
-                mat.Toon = null;
-                mat.SubTexture = null;
-                mat.SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexOff;
+                    // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
+                    //
+                    // * the uma environment map is added at the material's own _EnvRate (0.4) by the game, while
+                    //   MMD's "sphere add" mode adds it at full strength with no rate to scale it - the model
+                    //   came out washed out and glossy
+                    // * the uma shade map (shad_c) is the colour of the shaded part of the surface, not a ramp,
+                    //   so an MMD toon slot fed with it banded the model into harsh dark steps (black hair)
+                    //
+                    // Both maps are exported as textures and named in the comment, so a shader that understands
+                    // what they are (the uma addon's) can use them properly.
+                    mat.Toon = null;
+                    mat.SubTexture = null;
+                    mat.SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexOff;
 
-                // MMD's specular is a colour and a shininess; the uma material has a colour and a power on a
-                // different scale, so the power scales the colour down instead of the colour being used as
-                // it is (which made every part look polished).
-                var specular = PropertyColour(material, "_SpecularColor", Color.clear);
-                float specularPower = PropertyFloat(material, "_SpecularPower", 0f);
-                mat.SpecularColor = new Color(specular.r * specularPower, specular.g * specularPower,
-                                              specular.b * specularPower, 1f);
-                mat.EdgeColor = PropertyColour(material, "_OutlineColor", mat.EdgeColor);
-                mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
-                mat.DrawEdge = mat.EdgeSize > 0f;
+                    // MMD's specular is a colour and a shininess; the uma material has a colour and a power on a
+                    // different scale, so the power scales the colour down instead of the colour being used as
+                    // it is (which made every part look polished).
+                    var specular = PropertyColour(material, "_SpecularColor", Color.clear);
+                    float specularPower = PropertyFloat(material, "_SpecularPower", 0f);
+                    mat.SpecularColor = new Color(specular.r * specularPower, specular.g * specularPower,
+                                                  specular.b * specularPower, 1f);
+                    mat.EdgeColor = PropertyColour(material, "_OutlineColor", mat.EdgeColor);
+                    mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
+                    mat.DrawEdge = mat.EdgeSize > 0f;
+                }
                 part.BaseShift = baseShift + mesh.GetSubMesh(i).indexStart;
                 part.TriangleIndexNum = mesh.GetSubMesh(i).indexCount;
                 parts.Add(part);

@@ -107,6 +107,7 @@ public static class UmaHeadlessExport
         public string Variant = "";
         public int MorphNameMode = -1;
         public bool APoseRestPose;
+        public bool PlainMaterials;
         public string RecordVmd = "";
         public int RecordFps = 30;
         public int RecordReduction = 0;
@@ -146,6 +147,7 @@ public static class UmaHeadlessExport
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
+                    case "-umaPlainMaterials": options.PlainMaterials = true; break;
                     case "-umaRecordVmd": options.RecordVmd = Next(); break;
                     case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
                     case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
@@ -309,6 +311,13 @@ public static class UmaHeadlessExport
                         Config.Instance.PmxAPoseRestPose = true;
                         Debug.Log($"{Tag} exporting models in the A-pose rest pose "
                                   + $"(upper arms rotated {UmaAPose.Degrees} degrees down)");
+                    }
+
+                    if (options.PlainMaterials)
+                    {
+                        Config.Instance.PmxUmaMaterialFields = false;
+                        Debug.Log($"{Tag} exporting plain MMD materials: no uma shader settings in the material "
+                                  + "comment, and the plain diffuse/specular/outline values");
                     }
 
                     if (options.ListChars)

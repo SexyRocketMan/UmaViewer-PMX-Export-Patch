@@ -151,6 +151,41 @@ face gets `Rimlight Intensity 0` because its rim colour is transparent, and the 
 `0.325`. An export made before this existed still imports and shades: no comment means no settings applied,
 the textures are found by file name as before, and the outline keeps the group's own 0.35.
 
+### Turning the extras off again
+
+Nothing here changes what MMD or any other PMX tool renders: the comment is a comment, and the only real MMD
+field involved is the specular, scaled by the uma power. A viewer that knows nothing about any of this -
+including a Blender session without the addon - shows the same matte model it always did: rendering the same
+export with and without the extras differs by a mean of 0.0002 per channel, with 0.2% of pixels changed at all.
+
+For anyone who wants the literal pre-2.6 materials anyway, `Config.PmxUmaMaterialFields` (in `Assets/Scripts/Config.cs`)
+turns the extra fields off, and the headless runner exposes it as `-umaPlainMaterials`:
+
+```
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -PlainMaterials -Out D:/out/plain.pmx
+```
+
+A plain export has no comment and no uma-derived specular or edge values, so the Shading operator applies no
+per-material settings to it and falls back to the shipped group's own defaults. Everything else is untouched:
+same vertices, bones, morphs and textures (22 on character 1001 costume 00, the uma maps included, since they
+are exported as textures regardless), and the same empty comment the exporter wrote before this feature existed.
+
+## Morphs and custom split normals
+
+Moving a shape key does not move the custom split normals that were authored on the mesh. Blender keeps those
+normals fixed in object space, so as soon as a morph deforms a surface, its shading is computed from normals
+that no longer belong to it: the boundary between the morphed region and its neighbours becomes a hard seam.
+On this character it is most obvious around the mouth, where the mouth morphs move the face a long way.
+
+That is a Blender-side property of the exported mesh, not something the shader causes or can fix - the seam is
+there with plain MMD materials too, only softer, and it does not happen in Unity because the game recomputes
+skinned normals every frame from the deformed mesh.
+
+The Shading operator therefore clears the mesh's custom split normals as part of its run (`fix_morph_shading`,
+on by default; `bpy.ops.mesh.customdata_custom_splitnormals_clear()`), after which Blender derives normals from
+the deformed geometry and the seam is gone. It is a small change in look - the authored normals were what made
+the arms and legs read as smooth tubes - so it is exposed as a checkbox rather than applied silently.
+
 ## What still cannot be matched, and why
 
 * **Per-instance tinting.** `_MaskColor*`/`_MaskToonColor*` and the live rim values depend on the costume

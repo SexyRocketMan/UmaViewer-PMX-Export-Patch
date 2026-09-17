@@ -21,6 +21,10 @@
 .EXAMPLE
     # model exported with the arms already in the A-pose, so the render poses nothing by hand
     ./Tools/run_workflow.ps1 -Char 1001 -Costume 00 -Motion anm_rac_type01_run02_stride -APose -Name apose
+
+.EXAMPLE
+    # plain MMD materials, for a model that is meant to be used without the uma addon
+    ./Tools/run_workflow.ps1 -Char 1001 -Costume 00 -PlainMaterials -Name plain
 #>
 [CmdletBinding()]
 param(
@@ -29,6 +33,7 @@ param(
     [string]$Motion = "",
     [ValidateSet(-1, 0, 1, 2, 3)][int]$MorphNameMode = 3,
     [switch]$APose,
+    [switch]$PlainMaterials,
     [int]$Fps = 30,
     [ValidateSet("upper", "head", "full")][string]$View = "full",
     [int]$Width = 640,
@@ -78,6 +83,7 @@ $video = Join-Path $OutDir "$stem.mp4"
 Write-Host "Character : $Char/$Costume  motion: $(if ($Motion) { $Motion } else { '<default idle>' })"
 Write-Host "Naming    : mode $MorphNameMode"
 Write-Host "Rest pose : $(if ($APose) { 'A-pose (arms 38.5 degrees down)' } else { 'T-pose' })"
+Write-Host "Materials : $(if ($PlainMaterials) { 'plain MMD (no uma settings, usable without the addon)' } else { 'with the uma shader settings in the comment' })"
 Write-Host "Output    : $OutDir"
 
 # ---------------------------------------------------------------- 1. model
@@ -85,6 +91,7 @@ Invoke-Step "1/6 export model" {
     $exportArgs = @{ Char = $Char; Costume = $Costume; Out = $pmx; MorphNameMode = $MorphNameMode
                      Motion = $Motion; Timeout = 900 }
     if ($APose) { $exportArgs.APose = $true }
+    if ($PlainMaterials) { $exportArgs.PlainMaterials = $true }
     & (Join-Path $tools "headless_export.ps1") @exportArgs
 }
 if (-not (Test-Path $pmx)) { throw "no pmx at $pmx" }

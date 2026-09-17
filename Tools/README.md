@@ -178,6 +178,16 @@ that move are the arms (the wrists drop 3.24 units in y, which is the A-pose dir
 
 Default is still `false`, since a T-pose rest is what rigging and retargeting tools expect.
 
+### Exporting plain MMD materials instead (option)
+
+`Config.PmxUmaMaterialFields = false` (or `headless_export.ps1 -PlainMaterials`, `run_workflow.ps1
+-PlainMaterials`) writes the pre-2.6 materials: an empty material comment and no uma-derived specular or
+outline values, which is what an export from before that feature existed looks like. Useful for a model that
+is meant to be used without the uma addon. The difference is small either way - the same model rendered with
+and without the extras differs by a mean of 0.0002 per channel, with 0.2% of pixels changed at all - and
+nothing else about the export changes: same vertices, bones, morphs and 22 textures. See
+[docs/UMA_SHADER.md](../docs/UMA_SHADER.md).
+
 ### Known harmless warning
 
 Importing a recorded motion prints `WARNING: not found bone Ankle_L_IK` (and `Ankle_R_IK`). The
@@ -371,14 +381,16 @@ of the exported file's contract with Blender**, not cosmetic. If a morph is expo
 suffix the addon finds nothing, creates no eye controls, and the eye bones silently stop deforming
 the mesh - while a raw import still looks fine.
 
-That is why `PmxMorphNameMode` defaults to `BlenderCompatible` (keep the suffix) and why shortening
-morph names is opt-in:
+That is why the suffix is still available (`PmxMorphNameMode 0`), but it is no longer the default: the uma
+addon fork that ships with this project resolves morph names by meaning, so the descriptive names fit in a vmd
+keyframe too and both formats work.
 
 | `PmxMorphNameMode` (Config.json) | Morph names | Blender/uma_addon | vmd morph matching |
 |---|---|---|---|
-| `0` BlenderCompatible *(default)* | `Eye_20_R(XRange)[M_Face]` | works | no (vmd names are short) |
-| `1` ShortEnglish | `Eye_20_R` | **eye controls break** | yes |
-| `2` Both | both of the above | works | yes (larger file) |
+| `3` Unified *(default)* | `Brow_WaraiA_R` | fork build: yes (matched by meaning); stock addon: **eye controls break** | yes |
+| `0` BlenderCompatible | `Eye_20_R(XRange)[M_Face]` | yes | no (vmd names are short) |
+| `1` ShortEnglish | `Eye_20_R` | fork build: yes; stock addon: **eye controls break** | yes |
+| `2` Both | both spellings | yes | yes (larger file) |
 
 `verify_export.ps1 -Mode short|both|blender` asserts the matching expectations.
 

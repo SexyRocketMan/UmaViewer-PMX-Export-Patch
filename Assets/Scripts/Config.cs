@@ -58,6 +58,9 @@ public class Config
     public string PmxAPoseRestPoseTip = "true/false. Exports the model with both upper arms rotated 38.5 degrees into the A-pose that motion recording is relative to, so a recorded vmd lines up in Blender on its own - no posing the model and re-importing the motion with \"Use current pose as rest pose\". true for MMD style use, false (default) keeps the plain T-pose rest that rigging/retargeting expects.";
     public bool PmxAPoseRestPose = false;
 
+    public string PmxUmaMaterialFieldsTip = "true/false. Writes the uma material data an MMD material has no field for into the exported materials: the shader settings (shade threshold, rim, specular, outline, map names) as one line in the material comment, which the Blender uma addon reads back, and the material's specular and outline values. false exports plain MMD materials (white diffuse, no specular, black outline at 0.4) for models meant to be used without that addon.";
+    public bool PmxUmaMaterialFields = true;
+
     public string AntiAliasingTip = "Display, screenshot antialiasing level. 0 - no AA, 1 - 2x MSAA, 2 - 4x MSAA, 3 - 8x MSAA";
     public int AntiAliasing = 2;
 

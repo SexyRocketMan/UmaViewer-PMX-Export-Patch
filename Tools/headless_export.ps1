@@ -14,6 +14,8 @@
     # let a one shot animation run to its end first, the state the viewer is in when a user records
     # after the animation finished (batch mode alone gets nowhere near the end of the clip)
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_res_chr1001_001 -PlaySeconds 8 -RecordVmd D:/out/res.vmd
+    # write plain pre-2.6 materials (no uma shader data in each material comment)
+    ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -PlainMaterials -Out D:/out/plain.pmx
     ./Tools/headless_export.ps1 -ListProps home10001
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
@@ -39,6 +41,7 @@ param(
     [ValidateSet("deterministic", "realtime")][string]$RecordMode = "deterministic",
     [int]$MorphNameMode = -1,
     [switch]$APose,
+    [switch]$PlainMaterials,
     [int]$Timeout = 600,
     [int]$ExtraFrames = 30,
     [double]$PlaySeconds = 0,
@@ -146,6 +149,7 @@ if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordRedu
 if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 if ($APose) { $arguments += "-umaAPose" }
+if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
 if ($PlaySeconds -gt 0) { $arguments += @("-umaPlaySeconds", $PlaySeconds) }
 
 Write-Host "Unity  : $UnityExe"
