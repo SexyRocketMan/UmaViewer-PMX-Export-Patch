@@ -97,21 +97,9 @@ its own shadow maps, SSAO, bloom and tone mapping, which nothing in Blender repr
 
 ## What the exporter now carries
 
-The gap above is closed as far as a `.pmx` allows, in two ways.
-
-**1. The uma maps go into the MMD slots that mean the same thing.** Every material now writes the uma toon
-ramp (`_ToonMap`, the `shad_c` texture) into the material's **toon texture** slot and the uma environment
-map (`_EnvMap`) into its **sphere map** slot with sphere mode *add* (2), and the values an MMD material has
-fields for are taken from the uma material instead of being hard coded - `_SpecularColor` into the specular
-colour, `_OutlineColor`/`_OutlineWidth` into the edge colour and size. A plain `mmd_tools` import, with no
-addon at all, therefore shades noticeably closer to the game than an albedo-only material did.
-
-The two mask maps (`_TripleMaskMap` = `base`, `_OptionMaskMap` = `ctrl`) have no MMD field of their own;
-their names travel in the comment below so nothing has to guess file names.
-
-**2. The parameters an MMD material has no field for go into the material comment.** The comment is free
-text that `mmd_tools` keeps on the imported material as `material.mmd_material.comment`, and it is written
-as one line of `key=value` pairs:
+The gap above is closed as far as a `.pmx` allows, in one way: **the parameters an MMD material has no field
+for go into the material comment.** The comment is free text that `mmd_tools` keeps on the imported material
+as `material.mmd_material.comment`, and it is written as one line of `key=value` pairs:
 
 ```
 uma1 toon_step=0.4 toon_feather=0.001 specular_power=0.15 specular=1,0.905,0.59,1 env_rate=0.4 env_bias=5
@@ -125,7 +113,24 @@ Numbers use the invariant culture (dots for decimals, commas only between colour
 `uma1` marks the format, and a property the game renames is skipped rather than breaking the export - which
 is also how a rename gets noticed. Anything that does not understand the comment simply sees a comment.
 
-The Shading operator reads it back and maps it by meaning onto the shipped group:
+### Which MMD slots the uma maps go into, and which they do not
+
+The obvious idea is to put the uma maps into MMD's sphere and toon slots, since those carry a texture each.
+**Both were tried and both are wrong**, measured by rendering the same model with and without them (Blender
+5.2, EEVEE, identical camera and lights):
+
+| what was tried | what it rendered |
+|---|---|
+| `_EnvMap` in the sphere slot, mode add | the whole model washed out and glossy: the game adds that map at the material's `_EnvRate` (0.4), MMD's sphere add has no rate and adds at full strength |
+| `_ToonMap` (`shad_c`) in the toon slot | harsh dark steps and black hair: that map is the *colour* of the shaded part of a surface, not a ramp, and MMD's toon slot is a ramp |
+| neither (current) | the pre-change look, mean pixel difference **0.0002** against the baseline export |
+
+The maps are still exported as textures and named in the comment, so a shader that knows what they are (the
+uma addon's) can apply them with the right maths - `env` with a rate, `toon` as a shade colour. Only the
+specular is carried into a real MMD field, scaled by the uma power (`_SpecularColor * _SpecularPower`),
+because using the colour as it is made every part look polished.
+
+The Shading operator reads the comment back and maps it by meaning onto the shipped group:
 
 | comment key | shader group socket | why |
 |---|---|---|
