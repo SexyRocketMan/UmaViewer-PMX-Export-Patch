@@ -392,7 +392,9 @@ keyframe too and both formats work.
 | `1` ShortEnglish | `Eye_20_R` | fork build: yes; stock addon: **eye controls break** | yes |
 | `2` Both | both spellings | yes | yes (larger file) |
 
-`verify_export.ps1 -Mode short|both|blender` asserts the matching expectations.
+`verify_export.ps1 -Mode unified|blender|tagged|short|both` asserts the matching expectations; `unified` is
+the default there too, so a checker run on a plain default export no longer reports the tagged spellings as
+missing while the addon has in fact built all eight eye controls.
 
 ## Notes / gotchas
 

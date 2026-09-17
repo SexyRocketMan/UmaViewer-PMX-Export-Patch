@@ -8,12 +8,14 @@
 
 .EXAMPLE
     ./Tools/verify_export.ps1 -Pmx D:/out/1001_00.pmx
+    ./Tools/verify_export.ps1 -Pmx D:/out/1001_00.pmx -Mode unified
     ./Tools/verify_export.ps1 -Pmx a.pmx, b.pmx -Mode blender -Json report.json
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string[]]$Pmx,
-    [ValidateSet("blender", "short", "both")][string]$Mode = "blender",
+    # unified is what the exporter writes by default; the other spellings are for PmxMorphNameMode 0/1/2
+    [ValidateSet("unified", "blender", "tagged", "short", "both")][string]$Mode = "unified",
     [string]$Bone = "Eye_L",
     [string]$Json = "",
     [switch]$SkipRefine,
