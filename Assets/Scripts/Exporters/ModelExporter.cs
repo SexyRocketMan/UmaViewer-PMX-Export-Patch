@@ -587,16 +587,27 @@ public class ModelExporter
                 }
                 mat.MetaInfo = UmaMaterialComment(material, model);
 
-                // MMD has one slot each for the albedo, a sphere map and a toon ramp. The uma toon ramp and
-                // environment map fit those two slots exactly, so they go there and a plain mmd_tools import
-                // shades much closer to the game without any addon. The remaining values an MMD material has
-                // fields for (specular, outline) are taken from the uma material rather than hard coded.
-                mat.Toon = FindExportedTexture(model, material, "_ToonMap");
-                mat.SubTexture = FindExportedTexture(model, material, "_EnvMap");
-                mat.SubTextureType = mat.SubTexture != null
-                    ? MMDMaterial.SubTextureTypeEnum.MatSubTexSpa
-                    : MMDMaterial.SubTextureTypeEnum.MatSubTexOff;
-                mat.SpecularColor = PropertyColour(material, "_SpecularColor", mat.SpecularColor);
+                // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
+                //
+                // * the uma environment map is added at the material's own _EnvRate (0.4) by the game, while
+                //   MMD's "sphere add" mode adds it at full strength with no rate to scale it - the model
+                //   came out washed out and glossy
+                // * the uma shade map (shad_c) is the colour of the shaded part of the surface, not a ramp,
+                //   so an MMD toon slot fed with it banded the model into harsh dark steps (black hair)
+                //
+                // Both maps are exported as textures and named in the comment below, so a shader that
+                // understands what they are (the uma addon's) can use them properly.
+                mat.Toon = null;
+                mat.SubTexture = null;
+                mat.SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexOff;
+
+                // MMD's specular is a colour and a shininess; the uma material has a colour and a power on a
+                // different scale, so the power scales the colour down instead of the colour being used as
+                // it is (which made every part look polished).
+                var specular = PropertyColour(material, "_SpecularColor", Color.clear);
+                float specularPower = PropertyFloat(material, "_SpecularPower", 0f);
+                mat.SpecularColor = new Color(specular.r * specularPower, specular.g * specularPower,
+                                              specular.b * specularPower, 1f);
                 mat.EdgeColor = PropertyColour(material, "_OutlineColor", mat.EdgeColor);
                 mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
                 mat.DrawEdge = mat.EdgeSize > 0f;

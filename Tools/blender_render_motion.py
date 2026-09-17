@@ -25,6 +25,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 MMD_TOOLS = "bl_ext.blender_org.mmd_tools"
+UMA_ADDON = "bl_ext.user_default.uma_addon"
 
 
 def parse_args():
@@ -52,12 +53,29 @@ def parse_args():
     parser.add_argument("--use-pose-mode", type=int, choices=(0, 1), default=1,
                         help="import the vmd with 'Treat Current Pose as Rest Pose' (default 1); pass 0 to "
                              "prove a model does not need it because its rest pose is already the A-pose")
+    parser.add_argument("--apply-shader", action="store_true",
+                        help="run the uma_addon's Shading operator on the imported model first, so the "
+                             "render shows what a user actually looks at in Blender")
     parser.add_argument("--json", default="")
     return parser.parse_args(argv)
 
 
 def enable_mmd_tools():
     addon_utils.enable(MMD_TOOLS, default_set=True)
+
+
+def apply_uma_shader(meshes):
+    """Run the uma_addon's Shading operator, which is what a user does after importing."""
+    addon_utils.enable(UMA_ADDON, default_set=True)
+    applied = []
+    for mesh in meshes:
+        for obj in bpy.data.objects:
+            obj.select_set(False)
+        mesh.select_set(True)
+        bpy.context.view_layer.objects.active = mesh
+        status = bpy.ops.uma.apply_shader()
+        applied.append(f"{mesh.name}: {status}")
+    return applied
 
 
 def import_model(path, scale):
@@ -306,6 +324,10 @@ def main():
     result["vertices"] = sum(len(o.data.vertices) for o in meshes)
     result["shape_keys"] = max((len(o.data.shape_keys.key_blocks) for o in meshes if o.data.shape_keys),
                                default=0)
+
+    if args.apply_shader:
+        result["shader"] = apply_uma_shader(meshes)
+        print("   applied the uma shader: " + ", ".join(result["shader"]))
     print(f"   imported {len(meshes)} mesh(es), {len(armatures)} armature(s), "
           f"{result['vertices']} vertices, {result['shape_keys']} shape keys")
     if not meshes:
