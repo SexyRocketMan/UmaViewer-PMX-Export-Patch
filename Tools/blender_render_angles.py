@@ -117,7 +117,7 @@ def scene_setup(args, mesh, armature):
     # midtones, which made every comparison look pale and washed out against it. Standard is the honest match.
     scene.view_settings.view_transform = "Standard"
     scene.view_settings.look = "None"
-    return camera, target, distance, facing
+    return camera, target, distance, facing, light
 
 
 def load_scaled(path, height_limit=700):
@@ -167,6 +167,32 @@ def compose(left_path, right_path, out_path, window=None):
     print(f"   wrote {out_path}: the game's shot on the left, Blender's on the right")
 
 
+def montage(paths, columns, out_path):
+    """Tile rendered images into one picture: rows of `columns`, in the order given."""
+    loaded = [load_scaled(path, height_limit=460) for path in paths]
+    cell_width = max(entry[1] for entry in loaded)
+    cell_height = max(entry[2] for entry in loaded)
+    rows = (len(loaded) + columns - 1) // columns
+    width = cell_width * columns + 4 * (columns - 1)
+    height = cell_height * rows + 4 * (rows - 1)
+    sheet = bpy.data.images.new(os.path.basename(out_path), width, height, alpha=False)
+    buffer = [0.05] * (width * height * 4)
+    for index, (image, image_width, image_height) in enumerate(loaded):
+        column, row = index % columns, index // columns
+        offset_x = column * (cell_width + 4)
+        offset_y = (rows - 1 - row) * (cell_height + 4)
+        source = list(image.pixels)
+        for y in range(image_height):
+            source_row = source[y * image_width * 4:(y + 1) * image_width * 4]
+            start = ((offset_y + y) * width + offset_x) * 4
+            buffer[start:start + len(source_row)] = source_row
+    sheet.pixels = buffer
+    sheet.filepath_raw = out_path
+    sheet.file_format = 'PNG'
+    sheet.save()
+    print(f"   wrote {out_path}: {columns}x{rows} montage")
+
+
 def main():
     argv = sys.argv
     argv = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -192,6 +218,9 @@ def main():
                         help="'lo,hi': also write both sides with that luminance window stretched to full "
                              "range, which is how faint shading structure is compared")
     parser.add_argument("--name", default="game_face", help="file name stem, also the game shots' stem")
+    parser.add_argument("--grid", default="",
+                        help="'azimuths': render the camera yaws against each sun azimuth and tile them into "
+                             "grid.png, which is how the diff/shad transition becomes visible")
     args = parser.parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
     yaws = [float(part) for part in args.yaws.split(",") if part.strip()]
@@ -215,7 +244,7 @@ def main():
         print("!! no mesh in that model")
         return
 
-    camera, target, distance, facing = scene_setup(args, mesh, armature)
+    camera, target, distance, facing, light = scene_setup(args, mesh, armature)
 
     if args.apply_shader:
         # after the scene is built: the addon's cheek test reads the scene's sun lamp for its light direction,
@@ -243,6 +272,32 @@ def main():
         bpy.ops.render.render(write_still=True)
         written[yaw] = path
         print(f"   rendered {path}")
+
+    if args.grid:
+        azimuths = [float(part) for part in args.grid.split(",") if part.strip()]
+        paths = []
+        for azimuth in azimuths:
+            # swing the sun around the model: the camera stays put, which is what makes the transition visible
+            direction = (Matrix.Rotation(math.radians(azimuth), 4, 'Z') @ facing).normalized()
+            direction.z = 0.0
+            direction.normalize()
+            light_direction = (direction + Vector((0.0, 0.0, 0.7))).normalized()
+            light.location = target + light_direction * distance
+            light.rotation_euler = (target - light.location).to_track_quat("-Z", "Y").to_euler()
+            for yaw in yaws:
+                camera_direction = (Matrix.Rotation(math.radians(-yaw), 4, 'Z') @ facing).normalized()
+                camera_direction.z = 0.0
+                camera_direction.normalize()
+                camera.location = target + camera_direction * distance
+                camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+                label = f"{yaw:+0.0f}" if yaw else "0"
+                path = os.path.join(args.out_dir, f"grid_az{azimuth:+0.0f}_yaw{label}.png")
+                bpy.context.scene.render.filepath = path
+                bpy.ops.render.render(write_still=True)
+                paths.append(path)
+                print(f"   rendered {path}")
+        if paths:
+            montage(paths, len(yaws), os.path.join(args.out_dir, "grid.png"))
 
     if not args.compare:
         return
