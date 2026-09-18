@@ -211,6 +211,29 @@ since the same view under different light directions is where a shading setup ei
 so the export that follows is unaffected, and the UI layer is excluded the same way the in-app screenshot
 button does it.
 
+### Comparing Blender against the game, angle by angle
+
+`-ShotYaws` gives the game's own render at several angles; `blender_render_angles.py` renders the same view of
+the same model from Blender and can write the two side by side, which is how shading work is judged:
+
+```powershell
+# the game's side
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -ShotYaws 0,45,-45 `
+    -Screenshot D:/out/game_face.png -ShotOnly
+
+# Blender's side, with the game's shots next to it: writes compare_yaw0.png, compare_yaw+45.png, ...
+blender --background --factory-startup --python Tools/blender_render_angles.py -- `
+    --pmx D:/out/1001_00.pmx --out-dir D:/out/angles --yaws 0,45,-45 --apply-shader `
+    --compare D:/out --name game_face
+```
+
+`--view face|head|upper|full` matches the viewer's framing (the distance factors are tuned so the two frames
+line up - the viewer's shot renders through the editor's projection matrix, which is built for the screen's
+aspect rather than the square target, so it comes out about twice as wide as the same numbers suggest),
+`--light-from front|upper|upper-left` places the key light, `--cheek-strength` is passed to the Shading
+operator, and the camera orbits a fixed scene exactly as the viewer's does. The lighting cannot be matched
+exactly - the game has its own sun and tone mapping - so compare the *shape* of the shading, not the colour.
+
 ### Checking where the bones point
 
 A PMX bone's tail is either a child index or an offset, and head -> tail is what Blender draws. The uma rig
