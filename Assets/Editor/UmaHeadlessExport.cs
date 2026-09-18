@@ -137,6 +137,10 @@ public static class UmaHeadlessExport
         // for probing what a shader *global* does to the face - the viewer's own global buffer carries
         // the fog and lightmap colours, so the absolute brightness of its render is scene state
         public List<string> ShotGlobals = new List<string>();
+
+        // for probing a material float: _faceShadowAlpha is driven by the Shade_Ctrl morph rather than
+        // being a material constant, so its rest value is 0 and the cheek and nose regions never show
+        public List<string> ShotFloats = new List<string>();
         // -1 keeps the scene's own elevation; anything else rebuilds the light direction at that height
         public double ShotLightElevation = -1.0;
         public bool ShotTransparent;
@@ -172,6 +176,7 @@ public static class UmaHeadlessExport
                     case "-umaDumpFace": options.DumpFace = true; break;
                     case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
                     case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
+                    case "-umaShotFloat": options.ShotFloats.Add(Next()); break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
@@ -522,6 +527,9 @@ public static class UmaHeadlessExport
                         ? new List<ShotTextureOverride>()
                         : ApplyShotTextureOverrides(container.gameObject, options.ShotTextures);
                     List<GlobalOverride> globals = ApplyShotGlobalOverrides(options.ShotGlobals);
+                    List<FloatOverride> floats = container == null
+                        ? new List<FloatOverride>()
+                        : ApplyShotFloatOverrides(container.gameObject, options.ShotFloats);
                     double[] yaws = ParseShotYaws(options.ShotYaws, options.ShotYaw);
                     // the viewer's face shading reads its light direction from the materials' _ViewDirX/_ViewDirY,
                     // so a grid steps those instead of moving a scene light
@@ -555,6 +563,7 @@ public static class UmaHeadlessExport
                     }
                     RestoreShotTextureOverrides(overrides);
                     RestoreShotGlobalOverrides(globals);
+                    RestoreShotFloatOverrides(floats);
                     if (options.ShotOnly)
                     {
                         Succeed();
@@ -1080,6 +1089,72 @@ public static class UmaHeadlessExport
     /// material post-processing at all in UmaContainerProp, so materials the game assigns at runtime
     /// (weather/banner texture sets) stay empty and render flat white.
     /// </summary>
+    private class FloatOverride
+    {
+        public Material Material;
+        public string Property;
+        public float Original;
+    }
+
+    /// <summary>
+    /// Sets named material floats for the duration of a shot. `_faceShadowAlpha` is the reason this exists:
+    /// it is a *driven* property of the game's facial driven-key system (`Gallop/FaceDrivenKeyTarget` binds it
+    /// to a `Shade_Ctrl` morph), so its value in the material is only its rest value of 0, and the cheek and
+    /// nose regions are inert. Forcing it is how to see what those regions do.
+    /// </summary>
+    private static List<FloatOverride> ApplyShotFloatOverrides(GameObject root, List<string> specs)
+    {
+        var applied = new List<FloatOverride>();
+        if (specs == null || specs.Count == 0) return applied;
+
+        foreach (string raw in specs)
+        {
+            string spec = raw.Trim().Trim('\'', '"');
+            int equals = spec.IndexOf('=');
+            if (equals < 0)
+            {
+                Debug.LogWarning($"{Tag} ignoring -umaShotFloat '{spec}': expected Property=value");
+                continue;
+            }
+            string property = spec.Substring(0, equals).Trim().Trim('\'', '"');
+            string value = spec.Substring(equals + 1).Trim().Trim('\'', '"');
+            if (!float.TryParse(value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out float number))
+            {
+                Debug.LogWarning($"{Tag} ignoring -umaShotFloat '{spec}': bad number");
+                continue;
+            }
+
+            int count = 0;
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var material in renderer.materials)
+                {
+                    if (material == null || !material.HasProperty(property)) continue;
+                    applied.Add(new FloatOverride
+                    {
+                        Material = material,
+                        Property = property,
+                        Original = material.GetFloat(property)
+                    });
+                    material.SetFloat(property, number);
+                    count++;
+                }
+            }
+            Debug.Log($"{Tag} -umaShotFloat: '{property}' set to {number} on {count} material slot(s)");
+        }
+        return applied;
+    }
+
+    private static void RestoreShotFloatOverrides(List<FloatOverride> applied)
+    {
+        foreach (var entry in applied)
+        {
+            if (entry.Material != null) entry.Material.SetFloat(entry.Property, entry.Original);
+        }
+        applied.Clear();
+    }
+
     private class GlobalOverride
     {
         public string Name;

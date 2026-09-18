@@ -658,6 +658,10 @@ public class ModelExporter
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
         Number("face_shadow_length", "_faceShadowLength");
+        // the two strengths the region gates compare `factor >= 1 - strength` against: named for exactly
+        // that role, and 0.775 makes a threshold the factor can actually cross
+        Number("cheek_threshold", "_CheekPretenseThreshold");
+        Number("nose_threshold", "_NosePretenseThreshold");
         Number("vertex_color_toon_power", "_VertexColorToonPower");
         Vector("original_light", "_OriginalDirectionalLightDir");
 

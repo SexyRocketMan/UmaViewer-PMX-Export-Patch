@@ -37,7 +37,14 @@ UMA_ADDON = "bl_ext.user_default.uma_addon"
 # 0.60 it is 140 against 150. That 51-level gap is what both handoff documents called the largest
 # unexplained difference in this project; it was the framing.
 # The other three views have not been checked this way.
-VIEW_DISTANCE = {"face": 0.60, "head": 0.45, "upper": 1.1, "full": 2.2}
+# Calibrated against the viewer's own view distances. Matching the visible extent at the subject's depth is
+#     ours = viewer_nominal * (H_viewer / H_blender) * tan(fov_viewer / 2) / tan(19.8deg)
+# and the viewer's shot renders through the editor's projection rather than the 39.6 degrees it sets - the
+# note above calls it "about twice as wide" - while its model measures 2.92 units tall against this tool's
+# 1.5994. The product is 4.19, which predicts 0.63 for the face against the 0.60 that was measured by
+# rendering four candidate distances and tiling them against the viewer's shot. The face value is measured;
+# the other three follow from the same camera and projection and have not been checked individually.
+VIEW_DISTANCE = {"face": 0.60, "head": 1.17, "upper": 3.35, "full": 7.96}
 VIEW_LENS = 50.0
 
 
@@ -218,6 +225,10 @@ def main():
     parser.add_argument("--apply-shader", action="store_true")
     parser.add_argument("--no-cylinder-blend", action="store_true",
                         help="apply the game shading without the cylinder normal blend, to isolate its effect")
+    parser.add_argument("--face-shadow-alpha", type=float, default=None,
+                        help="override the alpha that gates the addon's cheek and nose regions, so they can "
+                             "be rendered and compared against the same regions forced on in the viewer. "
+                             "The exported value is their rest value of 0, which leaves them inert")
     parser.add_argument("--face-mask", default="", choices=["", "triple", "toon"],
                         help="which texture the game's face step reads its mask from: 'triple' is "
                              "_TripleMaskMap (*_base), the register the game's pixel program actually reads, "
@@ -326,6 +337,8 @@ def main():
             kwargs["game_cylinder_blend"] = False
         if getattr(args, "face_mask", None):
             kwargs["game_face_mask"] = args.face_mask
+        if getattr(args, "face_shadow_alpha", None) is not None:
+            kwargs["game_face_shadow_alpha"] = args.face_shadow_alpha
         if args.cheek_strength is not None:
             kwargs["cheek_shading_strength"] = args.cheek_strength
         print(f"== apply_shader({kwargs}) -> {bpy.ops.uma.apply_shader(**kwargs)}")

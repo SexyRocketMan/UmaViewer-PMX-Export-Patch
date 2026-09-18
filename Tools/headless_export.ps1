@@ -57,6 +57,7 @@ param(
     [string]$ShotAzimuths = "",
 [string]$ShotTexture = "",
 [string]$ShotGlobal = "",
+[string]$ShotFloat = "",
     [double]$ShotLightElevation = -1,
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
@@ -176,6 +177,9 @@ if ($Screenshot) {
     if ($ShotAzimuths) { $arguments += @("-umaShotAzimuths", $ShotAzimuths) }
 foreach ($entry in ($ShotGlobal -split ';')) {
     if ($entry.Trim()) { $arguments += @("-umaShotGlobal", $entry.Trim()) }
+}
+foreach ($entry in ($ShotFloat -split ';')) {
+    if ($entry.Trim()) { $arguments += @("-umaShotFloat", $entry.Trim()) }
 }
 # one string split here, not an array: passing a [string[]] through `pwsh -File` delivers the whole
 # array as a single quoted argument, quotes included
