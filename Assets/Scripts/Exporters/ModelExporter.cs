@@ -338,33 +338,100 @@ public class ModelExporter
             pmxbone.Rotatable = true;
             pmxbone.Controllable = true;
             // A PMX bone's tail is either the index of one of its children or an absolute position. The uma
-            // rig has no tails, so a usable child's head becomes the tail - that is what makes Blender draw
-            // the bone along its chain. Leaves of the rig (finger tips, hair and tail ends) have no such
-            // child, and their "_Handle" helpers sit at the same position as the bone itself, so those get
-            // an explicit tail along the bone's own axis instead.
-            Transform pmxChild = PMXTailChild(bone, bonelist);
-            pmxbone.ChildBoneVal = pmxChild != null
-                ? new Bone.ChildBone()
-                {
-                    ChildUseId = true,
-                    Index = bonelist.IndexOf(pmxChild)
-                }
-                : new Bone.ChildBone()
-                {
-                    ChildUseId = false,
-                    Index = -1,
-                    Offset = LeafTail(bone)
-                };
+            // rig has no tails, so a child's head becomes the tail - that is what makes Blender draw the bone
+            // along its chain.
+            pmxbone.ChildBoneVal = BoneTail(bone, bonelist);
             pmxbones.Add(pmxbone);
         }
         return pmxbones.ToArray();
     }
 
     /// <summary>
-    /// The child whose head should be this bone's tail, or null when nothing usable is below it. Children
-    /// that were filtered out of the export (the Col_* colliders), "_Handle" helpers and children sitting
-    /// at the bone's own position all describe no direction at all - a tail like that leaves Blender
-    /// drawing the bone straight up instead of along the finger or hair strand it belongs to.
+    /// How the tail of one bone is written: the head of a child, or an offset from the bone's own position.
+    ///
+    /// The child is the first one that describes a direction (see <see cref="PMXTailChild"/>), which is the
+    /// next joint for every bone of the body - except where the rig's first child is an attachment that sits
+    /// off to the side of the chain, which is what the head bone's children are: its first child is a cheek
+    /// offset in front of the face, so the head used to point forward instead of up out of the neck. When the
+    /// first child turns more than 60 degrees away from the chain the bone belongs to, the child that really
+    /// continues that chain wins instead, at most as long as the segment leading into the bone, so that the
+    /// head gets a head-length bone pointing up rather than a spike toward the hair.
+    ///
+    /// Bones with no usable child at all - finger tips, hair and tail ends, and the roll helpers, whose only
+    /// child sits on top of themselves - get a tail along the chain they belong to (<see cref="LeafTail"/>).
+    /// </summary>
+    private static Bone.ChildBone BoneTail(Transform bone, List<Transform> bonelist)
+    {
+        Transform pmxChild = PMXTailChild(bone, bonelist);
+        Vector3 chain = ChainDirection(bone);
+        if (pmxChild != null && chain.sqrMagnitude > 1e-10f)
+        {
+            Vector3 delta = pmxChild.position - bone.position;
+            bool offChain = Vector3.Dot(delta.normalized, chain.normalized) < 0.5f;
+            if (offChain)
+            {
+                Transform aligned = AlignedChild(bone, bonelist, chain);
+                if (aligned != null)
+                {
+                    Vector3 direction = aligned.position - bone.position;
+                    float length = Mathf.Min(direction.magnitude, chain.magnitude);
+                    return OffsetTail(direction.normalized * length);
+                }
+            }
+        }
+        if (pmxChild != null)
+        {
+            return new Bone.ChildBone()
+            {
+                ChildUseId = true,
+                Index = bonelist.IndexOf(pmxChild)
+            };
+        }
+        return OffsetTail(LeafTail(bone));
+    }
+
+    private static Bone.ChildBone OffsetTail(Vector3 offset)
+    {
+        return new Bone.ChildBone()
+        {
+            ChildUseId = false,
+            Index = -1,
+            Offset = offset
+        };
+    }
+
+    /// <summary>
+    /// The usable child that best continues a chain: the one whose direction lies closest to
+    /// <paramref name="chain"/>, and only if it is nearly along it (<see cref="alignedDot"/>). Null when no
+    /// child is close enough, which is the case for a bone that really does turn a corner, such as the
+    /// shoulder, whose only child is the upper arm.
+    /// </summary>
+    private static Transform AlignedChild(Transform bone, List<Transform> bonelist, Vector3 chain,
+                                          float alignedDot = 0.94f)
+    {
+        Transform best = null;
+        float bestAlignment = alignedDot;
+        for (int i = 0; i < bone.childCount; i++)
+        {
+            Transform child = bone.GetChild(i);
+            if (bonelist.IndexOf(child) < 0) continue;
+            if (child.name.Contains("_Handle")) continue;
+            Vector3 delta = child.position - bone.position;
+            if (delta.sqrMagnitude < 1e-10f) continue;
+            float alignment = Vector3.Dot(delta.normalized, chain.normalized);
+            if (alignment > bestAlignment)
+            {
+                bestAlignment = alignment;
+                best = child;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// The first child that describes a direction: one that is in the export, not a "_Handle" helper, and not
+    /// sitting at the bone's own position. Children that were filtered out of the export (the Col_* colliders)
+    /// and the "_Handle" helpers describe no direction at all.
     /// </summary>
     private static Transform PMXTailChild(Transform bone, List<Transform> bonelist)
     {
@@ -380,24 +447,47 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The tail offset for a bone with nothing usable below it: its own axis - measured on the uma rig, a
-    /// bone's local up is exactly the direction its chain runs in - at half the length of the segment that
-    /// leads to it, so a finger tip carries on the finger instead of standing up. A root with nothing above
-    /// it falls back to a short stub along the same axis.
+    /// The direction the chain runs in as it arrives at this bone: the segment from its parent to itself, or
+    /// - for a bone sitting exactly on its parent, which is how the uma rig places the roll helpers - the
+    /// first ancestor segment that is not degenerate. Zero when there is none, e.g. for the root.
+    /// </summary>
+    private static Vector3 ChainDirection(Transform bone)
+    {
+        for (Transform current = bone; current != null; current = current.parent)
+        {
+            if (current.parent == null) break;
+            Vector3 delta = current.position - current.parent.position;
+            if (delta.sqrMagnitude > 1e-10f) return delta;
+        }
+        return Vector3.zero;
+    }
+
+    /// <summary>
+    /// The tail offset for a bone with nothing usable below it: half of the direction the chain runs in, so
+    /// that a finger tip carries on the finger and a roll helper points along the arm or forearm it rolls -
+    /// away from the body on both sides, instead of following its own local axes (a mirrored rig does not lay
+    /// those out the same way on both sides, which used to point one roll helper at the neck).
+    ///
+    /// A bone that describes no direction at all (a root, or a bone whose whole ancestry is degenerate) falls
+    /// back to the direction of its first child that has one, and otherwise to a short stub, so that there is
+    /// always something to draw.
     ///
     /// The value is an offset from the bone's own position, not a position: mmd_tools reads it as
     /// <c>tail = head + offset</c> (core/pmx/importer.py), and its own exporter writes it the same way.
     /// </summary>
     private static Vector3 LeafTail(Transform bone)
     {
-        float length = 0.1f;
-        Transform parent = bone.parent;
-        if (parent != null)
+        Vector3 segment = ChainDirection(bone);
+        if (segment.sqrMagnitude > 1e-10f) return segment * 0.5f;
+
+        for (int i = 0; i < bone.childCount; i++)
         {
-            float segment = (bone.position - parent.position).magnitude;
-            if (segment > 1e-5f) length = segment * 0.5f;
+            Vector3 delta = bone.GetChild(i).position - bone.position;
+            if (delta.sqrMagnitude > 1e-10f) return delta * 0.5f;
         }
-        return bone.up * length;
+        // nothing around it describes a direction: a stub along the bone's own up, which at least keeps the
+        // bone visible in a bone list that only stores head, tail and roll
+        return bone.up * 0.1f;
     }
 
     /// <summary>

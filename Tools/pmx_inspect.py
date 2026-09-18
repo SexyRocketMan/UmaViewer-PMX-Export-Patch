@@ -483,6 +483,105 @@ def cmd_names(paths: list[str], args) -> int:
     return 0 if ok else 1
 
 
+def cmd_tails(paths: list[str], args) -> int:
+    """Where every bone points, for the bones whose direction a user notices.
+
+    A PMX bone's tail is either a child index or an offset, and the direction from head to tail is what
+    Blender draws. The uma rig has no tails, so the exporter derives them: a bone points at the child that
+    continues its chain, and a bone without one (finger tips, hair ends, the roll helpers) continues the
+    segment leading into it. This reports the result, the left/right mirroring, and the bones that do not
+    follow the segment leading into them - a hair strand that turns is expected there, the head bone is not.
+    """
+    exit_code = 0
+    for path in paths:
+        m = read_model(path)
+        bones = m.bones
+        by_index = {b.index: b for b in bones}
+        children: dict[int, list[Bone]] = {}
+        for b in bones:
+            children.setdefault(b.parent, []).append(b)
+        print(f"== {path}")
+
+        def head(bone: Bone) -> list[float]:
+            return bone.pos
+
+        def tail(bone: Bone) -> list[float] | None:
+            if bone.tail_bone is not None and 0 <= bone.tail_bone < len(bones):
+                return bones[bone.tail_bone].pos
+            if bone.tail_pos is not None:
+                return [bone.pos[i] + bone.tail_pos[i] for i in range(3)]
+            return None
+
+        def subtract(a, b):
+            return [a[i] - b[i] for i in range(3)]
+
+        def length(v):
+            return math.sqrt(sum(c * c for c in v))
+
+        def angle(a, b):
+            la, lb = length(a), length(b)
+            if la < 1e-9 or lb < 1e-9:
+                return 0.0
+            cosine = max(-1.0, min(1.0, sum(a[i] * b[i] for i in range(3)) / (la * lb)))
+            return math.degrees(math.acos(cosine))
+
+        if args.named:
+            print("   bone                 head -> tail direction (length)")
+            for name in args.named.split(","):
+                bone = next((b for b in bones if b.name == name), None)
+                if bone is None:
+                    print(f"   {name:<20} (not in this model)")
+                    continue
+                end = tail(bone)
+                if end is None:
+                    print(f"   {name:<20} no tail")
+                    continue
+                delta = subtract(end, bone.pos)
+                print(f"   {name:<20} ({delta[0]:+.4f}, {delta[1]:+.4f}, {delta[2]:+.4f})  len={length(delta):.4f}")
+
+        deviations = []
+        leaf_deviations = []
+        for bone in bones:
+            if bone.parent < 0 or bone.parent >= len(bones):
+                continue
+            end = tail(bone)
+            if end is None:
+                continue
+            incoming = subtract(bone.pos, bones[bone.parent].pos)
+            if length(incoming) < 1e-5:
+                continue
+            deviation = angle(subtract(end, bone.pos), incoming)
+            deviations.append((deviation, bone.name, len(children.get(bone.index, []))))
+            if not children.get(bone.index):
+                leaf_deviations.append(deviation)
+        off_chain = [row for row in deviations if row[0] > 5.0]
+        deviations.sort(reverse=True)
+        print(f"   bones: {len(bones)}, checked {len(deviations)}, off the segment leading into them "
+              f"(>5 deg): {len(off_chain)}")
+        for deviation, name, kids in deviations[:args.worst]:
+            print(f"      {name:<28} {deviation:6.2f} deg   children={kids}")
+        if leaf_deviations:
+            print(f"   leaf bones: {len(leaf_deviations)}, worst deviation "
+                  f"{max(leaf_deviations):.2f} deg, mean {sum(leaf_deviations) / len(leaf_deviations):.2f} deg")
+
+        pairs = args.pairs.split(",") if args.pairs else []
+        if pairs:
+            print("   left/right mirror check (left against the right one mirrored across x):")
+            for stem in pairs:
+                left = next((b for b in bones if b.name == f"{stem}_L"), None)
+                right = next((b for b in bones if b.name == f"{stem}_R"), None)
+                if left is None or right is None or tail(left) is None or tail(right) is None:
+                    continue
+                dl = subtract(tail(left), left.pos)
+                dr = subtract(tail(right), right.pos)
+                deviation = angle(dl, [-dr[0], dr[1], dr[2]])
+                flag = "" if deviation <= args.mirror_tolerance else "   <- not mirrored"
+                if deviation > args.mirror_tolerance:
+                    exit_code = 1
+                print(f"      {stem + '_L/R':<20} {deviation:6.2f} deg apart{flag}")
+    return exit_code
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -499,10 +598,20 @@ def main() -> int:
     p.add_argument("--require", help="comma separated morph names that must exist")
     p = sub.add_parser("diff")
     p.add_argument("paths", nargs=2)
+    p = sub.add_parser("tails")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("--named", default="Neck,Head,Shoulder_L,Shoulder_R,ShoulderRoll_L,ShoulderRoll_R,"
+                                     "Arm_L,Arm_R,ArmRoll_L,ArmRoll_R,Index_03_L,Index_03_R",
+                   help="comma separated bones whose direction is printed")
+    p.add_argument("--pairs", default="Shoulder,ShoulderRoll,Arm,ArmRoll,Elbow,Wrist,Thigh,Knee,Index_01,Index_02",
+                   help="comma separated bone stems whose left and right direction must mirror each other")
+    p.add_argument("--mirror-tolerance", type=float, default=5.0,
+                   help="how far a left/right pair may differ, in degrees")
+    p.add_argument("--worst", type=int, default=8, help="how many of the worst bone deviations to list")
     args = ap.parse_args()
     return {"summary": cmd_summary, "bones": cmd_bones, "weights": cmd_weights,
             "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check,
-            "names": cmd_names}[args.cmd](args.paths, args)
+            "names": cmd_names, "tails": cmd_tails}[args.cmd](args.paths, args)
 
 
 if __name__ == "__main__":

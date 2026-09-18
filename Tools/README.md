@@ -8,7 +8,7 @@ regression tested from a terminal (and from CI).
 | `headless_export.ps1` | Runs Unity in batch mode, boots the viewer scene, loads a character/costume and writes a `.pmx` - the same code path the "Export Model" button uses. |
 | `verify_export.ps1` | Runs headless Blender + `mmd_tools` + `uma_addon` and checks that the export still imports and rigs correctly. |
 | `blender_verify_pmx.py` | The Blender side of `verify_export.ps1`. |
-| `pmx_inspect.py` | Blender-free PMX inspector/differ (`summary`, `bones`, `weights`, `morphs`, `diff`, `check`). |
+| `pmx_inspect.py` | Blender-free PMX inspector/differ (`summary`, `bones`, `tails`, `weights`, `morphs`, `diff`, `check`). |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator (`summary`, `loop`, `motion`). |
 | `morph_name_table.py` | Prints what every morph is called in each naming mode, checks the rules against four exports (one per mode) and can write [`../docs/MORPH_NAMES.md`](../docs/MORPH_NAMES.md). |
 | `blender_verify_vmd.py` | Imports a PMX + VMD in Blender and checks the motion's morph keyframes survive. |
@@ -187,6 +187,25 @@ is meant to be used without the uma addon. The difference is small either way - 
 and without the extras differs by a mean of 0.0002 per channel, with 0.2% of pixels changed at all - and
 nothing else about the export changes: same vertices, bones, morphs and 22 textures. See
 [docs/UMA_SHADER.md](../docs/UMA_SHADER.md).
+
+### Checking where the bones point
+
+A PMX bone's tail is either a child index or an offset, and head -> tail is what Blender draws. The uma rig
+has no tails, so the exporter derives them: a bone points at the child that continues its chain, and a bone
+without one - finger tips, hair ends, and the roll helpers, whose only child sits on top of themselves -
+continues the segment leading into it. That is why the head bone points up out of the neck and both roll
+helpers mirror each other, and `pmx_inspect.py tails` checks it without Blender:
+
+```powershell
+uv run Tools/pmx_inspect.py tails D:/out/1001_00.pmx
+```
+
+It prints the direction of the bones a user notices (`--named`), each left/right pair's mirroring
+(`--pairs`, tolerated to `--mirror-tolerance` degrees, 5 by default) and exits non-zero when a pair is not
+mirrored, plus how many bones turn away from the segment leading into them - strands of hair and costume
+ribbons are expected there, a body chain bone is not. Measured on character 1001: 73 of 253 bones turn more
+than 5 degrees, all of them hair, mantle, ribbon, skirt and tail strands, and the leaf bones deviate 0.00
+degrees on average.
 
 ### Known harmless warning
 
