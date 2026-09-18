@@ -129,6 +129,14 @@ public static class UmaHeadlessExport
         public string ShotYaws = "";
         // azimuths for the face light, in degrees: the Nars face shader shades with _ViewDirX/_ViewDirY
         public string ShotAzimuths = "";
+
+        // for probing which texture a term of the game's compiled shader reads: "Property=r,g,b" or
+        // "Property=null", applied before the shots and undone after them
+        public List<string> ShotTextures = new List<string>();
+
+        // for probing what a shader *global* does to the face - the viewer's own global buffer carries
+        // the fog and lightmap colours, so the absolute brightness of its render is scene state
+        public List<string> ShotGlobals = new List<string>();
         // -1 keeps the scene's own elevation; anything else rebuilds the light direction at that height
         public double ShotLightElevation = -1.0;
         public bool ShotTransparent;
@@ -162,6 +170,8 @@ public static class UmaHeadlessExport
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaDumpFace": options.DumpFace = true; break;
+                    case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
+                    case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
@@ -507,6 +517,11 @@ public static class UmaHeadlessExport
                     // under different light directions, which is what shading work is judged on.
                     string shotPath = Path.GetFullPath(options.Screenshot);
                     Directory.CreateDirectory(Path.GetDirectoryName(shotPath));
+                    var container = CurrentContainer();
+                    List<ShotTextureOverride> overrides = container == null
+                        ? new List<ShotTextureOverride>()
+                        : ApplyShotTextureOverrides(container.gameObject, options.ShotTextures);
+                    List<GlobalOverride> globals = ApplyShotGlobalOverrides(options.ShotGlobals);
                     double[] yaws = ParseShotYaws(options.ShotYaws, options.ShotYaw);
                     // the viewer's face shading reads its light direction from the materials' _ViewDirX/_ViewDirY,
                     // so a grid steps those instead of moving a scene light
@@ -538,6 +553,8 @@ public static class UmaHeadlessExport
                                       + (options.ShotTransparent ? ", transparent" : "") + ")");
                         }
                     }
+                    RestoreShotTextureOverrides(overrides);
+                    RestoreShotGlobalOverrides(globals);
                     if (options.ShotOnly)
                     {
                         Succeed();
@@ -1063,6 +1080,179 @@ public static class UmaHeadlessExport
     /// material post-processing at all in UmaContainerProp, so materials the game assigns at runtime
     /// (weather/banner texture sets) stay empty and render flat white.
     /// </summary>
+    private class GlobalOverride
+    {
+        public string Name;
+        public bool IsColour;
+        public Color Colour;
+        public float Value;
+    }
+
+    /// <summary>
+    /// Sets named shader globals for the duration of a shot. The face program ends by blending its colour
+    /// toward a global by a per-vertex factor, and that global lives in the viewer's own buffer
+    /// (UmaViewerGlobalShader), so overriding it is how to tell whether the viewer's render is fogged or
+    /// lightmapped in a way the game's material knows nothing about.
+    /// </summary>
+    private static List<GlobalOverride> ApplyShotGlobalOverrides(List<string> specs)
+    {
+        var applied = new List<GlobalOverride>();
+        if (specs == null || specs.Count == 0) return applied;
+
+        foreach (string raw in specs)
+        {
+            string spec = raw.Trim().Trim('\'', '"');
+            int equals = spec.IndexOf('=');
+            if (equals < 0)
+            {
+                Debug.LogWarning($"{Tag} ignoring -umaShotGlobal '{spec}': expected Name=value");
+                continue;
+            }
+            string name = spec.Substring(0, equals).Trim();
+            string value = spec.Substring(equals + 1).Trim().Trim('\'', '"');
+            string[] parts = value.Split(',');
+
+            if (parts.Length >= 2)
+            {
+                var components = new float[4] { 0f, 0f, 0f, 1f };
+                bool parsed = true;
+                for (int i = 0; parsed && i < parts.Length && i < 4; i++)
+                {
+                    parsed = float.TryParse(parts[i].Trim(), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out components[i]);
+                }
+                if (!parsed)
+                {
+                    Debug.LogWarning($"{Tag} ignoring -umaShotGlobal '{spec}': bad colour");
+                    continue;
+                }
+                var colour = new Color(components[0], components[1], components[2], components[3]);
+                applied.Add(new GlobalOverride
+                {
+                    Name = name, IsColour = true, Colour = Shader.GetGlobalColor(name), Value = 0f
+                });
+                Shader.SetGlobalColor(name, colour);
+                Debug.Log($"{Tag} -umaShotGlobal: '{name}' colour set to "
+                          + $"{colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3} "
+                          + $"(was {Shader.GetGlobalColor(name)})");
+            }
+            else
+            {
+                if (!float.TryParse(value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out float number))
+                {
+                    Debug.LogWarning($"{Tag} ignoring -umaShotGlobal '{spec}': bad number");
+                    continue;
+                }
+                float original = Shader.GetGlobalFloat(name);
+                applied.Add(new GlobalOverride { Name = name, IsColour = false, Value = original });
+                Shader.SetGlobalFloat(name, number);
+                Debug.Log($"{Tag} -umaShotGlobal: '{name}' float set to {number} (was {original})");
+            }
+        }
+        return applied;
+    }
+
+    private static void RestoreShotGlobalOverrides(List<GlobalOverride> applied)
+    {
+        foreach (var entry in applied)
+        {
+            if (entry.IsColour) Shader.SetGlobalColor(entry.Name, entry.Colour);
+            else Shader.SetGlobalFloat(entry.Name, entry.Value);
+        }
+        applied.Clear();
+    }
+
+    private class ShotTextureOverride
+    {
+        public Material Material;
+        public string Property;
+        public Texture Original;
+    }
+
+    /// <summary>
+    /// Replaces named texture properties with a solid colour, so a term of the game's compiled shader can be
+    /// asked what it reads: hand the term a colour it could not otherwise produce and see whether it turns up
+    /// in the render. This is the only way to name a texture register - the shipped containers have no RDEF
+    /// chunk, and the per-container records in the blob region are not in layout order.
+    /// </summary>
+    private static List<ShotTextureOverride> ApplyShotTextureOverrides(GameObject root, List<string> specs)
+    {
+        var applied = new List<ShotTextureOverride>();
+        if (specs == null || specs.Count == 0) return applied;
+
+        foreach (string raw in specs)
+        {
+            // quoted forms turn up when a caller passes an array through a shell, so strip them rather
+            // than throw on them
+            string spec = raw.Trim().Trim('\'', '"');
+            int equals = spec.IndexOf('=');
+            if (equals < 0)
+            {
+                Debug.LogWarning($"{Tag} ignoring -umaShotTexture '{spec}': expected Property=r,g,b or Property=null");
+                continue;
+            }
+            string property = spec.Substring(0, equals).Trim().Trim('\'', '"');
+            string value = spec.Substring(equals + 1).Trim().Trim('\'', '"');
+
+            Texture replacement = null;
+            if (!value.Equals("null", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] parts = value.Split(',');
+                var components = new float[3];
+                bool parsed = parts.Length >= 3;
+                for (int i = 0; parsed && i < 3; i++)
+                {
+                    parsed = float.TryParse(parts[i].Trim().Trim('\'', '"'),
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out components[i]);
+                }
+                if (!parsed)
+                {
+                    Debug.LogWarning($"{Tag} ignoring -umaShotTexture '{spec}': expected three numbers, "
+                                     + $"got '{value}'");
+                    continue;
+                }
+                var colour = new Color(components[0], components[1], components[2], 1f);
+                var texture = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+                var pixels = new Color[16];
+                for (int i = 0; i < pixels.Length; i++) pixels[i] = colour;
+                texture.SetPixels(pixels);
+                texture.Apply();
+                replacement = texture;
+            }
+
+            int count = 0;
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var material in renderer.materials)
+                {
+                    if (material == null || !material.HasProperty(property)) continue;
+                    applied.Add(new ShotTextureOverride
+                    {
+                        Material = material,
+                        Property = property,
+                        Original = material.GetTexture(property)
+                    });
+                    material.SetTexture(property, replacement);
+                    count++;
+                }
+            }
+            Debug.Log($"{Tag} -umaShotTexture: '{property}' set to "
+                      + (replacement == null ? "<null>" : value) + $" on {count} material slot(s)");
+        }
+        return applied;
+    }
+
+    private static void RestoreShotTextureOverrides(List<ShotTextureOverride> applied)
+    {
+        foreach (var entry in applied)
+        {
+            if (entry.Material != null) entry.Material.SetTexture(entry.Property, entry.Original);
+        }
+        applied.Clear();
+    }
+
     /// <summary>
     /// Everything after the meta database: the material the game's shader actually receives, the textures bound to
     /// it, and the mesh facts the shader depends on. The stored bundle material is not necessarily the runtime one -

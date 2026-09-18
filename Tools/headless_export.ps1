@@ -55,6 +55,8 @@ param(
     [double]$ShotYaw = 0,
     [string]$ShotYaws = "",
     [string]$ShotAzimuths = "",
+[string]$ShotTexture = "",
+[string]$ShotGlobal = "",
     [double]$ShotLightElevation = -1,
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
@@ -172,6 +174,14 @@ if ($Screenshot) {
                     "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
     if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
     if ($ShotAzimuths) { $arguments += @("-umaShotAzimuths", $ShotAzimuths) }
+foreach ($entry in ($ShotGlobal -split ';')) {
+    if ($entry.Trim()) { $arguments += @("-umaShotGlobal", $entry.Trim()) }
+}
+# one string split here, not an array: passing a [string[]] through `pwsh -File` delivers the whole
+# array as a single quoted argument, quotes included
+foreach ($entry in ($ShotTexture -split ';')) {
+    if ($entry.Trim()) { $arguments += @("-umaShotTexture", $entry.Trim()) }
+}
     if ($ShotLightElevation -ge 0) { $arguments += @("-umaShotLightElevation", $ShotLightElevation) }
     else { $arguments += @("-umaShotYaw", $ShotYaw) }
     if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
