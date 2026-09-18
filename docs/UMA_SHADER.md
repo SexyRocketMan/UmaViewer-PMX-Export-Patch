@@ -170,21 +170,35 @@ per-material settings to it and falls back to the shipped group's own defaults. 
 same vertices, bones, morphs and textures (22 on character 1001 costume 00, the uma maps included, since they
 are exported as textures regardless), and the same empty comment the exporter wrote before this feature existed.
 
-## Morphs and custom split normals
+## Face shading, morphs and custom split normals
 
-Moving a shape key does not move the custom split normals that were authored on the mesh. Blender keeps those
-normals fixed in object space, so as soon as a morph deforms a surface, its shading is computed from normals
-that no longer belong to it: the boundary between the morphed region and its neighbours becomes a hard seam.
-On this character it is most obvious around the mouth, where the mouth morphs move the face a long way.
+Two things decide how the face looks, and they pull in opposite directions if you get them wrong.
 
-That is a Blender-side property of the exported mesh, not something the shader causes or can fix - the seam is
-there with plain MMD materials too, only softer, and it does not happen in Unity because the game recomputes
-skinned normals every frame from the deformed mesh.
+**Keep the normals the game authored.** The models ship custom split normals, and on the face those normals are
+what makes the shading clean: the face is low-poly, so normals recomputed from the surface move the toon step
+onto triangle edges and the cheeks and jaw come out in hard angular patches - clearly worse than anything the
+authored normals do. An earlier version of the Shading operator cleared them (`fix_morph_shading`); that is now
+off by default, with the checkbox kept for the rare model that still shows a seam.
 
-The Shading operator therefore clears the mesh's custom split normals as part of its run (`fix_morph_shading`,
-on by default; `bpy.ops.mesh.customdata_custom_splitnormals_clear()`), after which Blender derives normals from
-the deformed geometry and the seam is gone. It is a small change in look - the authored normals were what made
-the arms and legs read as smooth tubes - so it is exposed as a checkbox rather than applied silently.
+**Switch the group's face branch on.** The shipped `Uma Shader` group has an input `Toggle If Face [0=Off,1=On]`,
+and the operator sets it for the `face` and `mayu` materials. That branch is the game's own face shading, and it
+is also what keeps the face clean *while a morph deforms it*: moving a shape key does not move custom normals in
+Blender (they stay fixed in object space, unlike Unity, which recomputes skinned normals every frame), so with
+the face branch off a mouth morph leaves a hard seam plus dark spikes around the lips. With it on, the same morph
+shades smoothly.
+
+Measured on character 1001 costume 00, face close-up, the same camera and a dim world, in a 2x2 of those two
+switches with the two largest mouth morphs at 1.0:
+
+| setup | at rest | with the mouth morphs |
+|---|---|---|
+| face branch on, authored normals (the defaults now) | clean | clean |
+| face branch on, normals cleared | hard angular patches on the cheeks and jaw | nearly clean, a spike near the nose |
+| face branch off, authored normals | clean | hard seam and dark spikes around the lips |
+| face branch off, normals cleared | hard angular patches | hard seam |
+
+The scripts used for that live in the scratch tooling (`face_toggle_matrix.py`), and the images are in
+`umaviewer_exports\shadercheck\facetoggle\`.
 
 ## What still cannot be matched, and why
 
