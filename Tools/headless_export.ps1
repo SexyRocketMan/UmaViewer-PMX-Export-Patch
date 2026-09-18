@@ -18,6 +18,9 @@
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -PlainMaterials -Out D:/out/plain.pmx
     # the game's own render of the face, as the baseline to compare a Blender shading setup against
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/game_face.png -ShotOnly
+    # ... and the same view from several angles, which is what shading has to hold up under
+    ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -ShotYaws 0,45,-45,90 `
+        -Screenshot D:/out/game_face.png -ShotOnly
     ./Tools/headless_export.ps1 -ListProps home10001
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
@@ -49,6 +52,7 @@ param(
     [int]$ShotWidth = 1280,
     [int]$ShotHeight = 720,
     [double]$ShotYaw = 0,
+    [string]$ShotYaws = "",
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
     [int]$Timeout = 600,
@@ -161,7 +165,9 @@ if ($APose) { $arguments += "-umaAPose" }
 if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
 if ($Screenshot) {
     $arguments += @("-umaScreenshot", $Screenshot, "-umaShotView", $ShotView,
-                    "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight, "-umaShotYaw", $ShotYaw)
+                    "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
+    if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
+    else { $arguments += @("-umaShotYaw", $ShotYaw) }
     if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
     if ($ShotOnly) { $arguments += "-umaShotOnly" }
 }

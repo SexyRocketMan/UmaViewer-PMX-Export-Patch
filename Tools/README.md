@@ -204,9 +204,12 @@ itself.
 ```
 
 `-ShotView` is `face`, `head`, `upper` or `full` (distance as a fraction of the model's height), `-ShotWidth`
-/ `-ShotHeight` size the image (1280x720 by default), `-ShotYaw` orbits the camera, `-ShotTransparent` drops
-the background and `-ShotOnly` skips the export. The camera is put back afterwards, so the export that
-follows is unaffected, and the UI layer is excluded the same way the in-app screenshot button does it.
+/ `-ShotHeight` size the image (1280x720 by default), `-ShotYaw` orbits the camera and `-ShotYaws 0,45,-45`
+takes several in one run - writing `game_face_yaw+45.png` and so on - which is what shading work is judged on,
+since the same view under different light directions is where a shading setup either holds up or does not.
+`-ShotTransparent` drops the background and `-ShotOnly` skips the export. The camera is put back afterwards,
+so the export that follows is unaffected, and the UI layer is excluded the same way the in-app screenshot
+button does it.
 
 ### Checking where the bones point
 

@@ -1,6 +1,7 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using UnityEditor;
@@ -122,6 +123,9 @@ public static class UmaHeadlessExport
         public int ShotWidth = 0;
         public int ShotHeight = 0;
         public double ShotYaw = 0;
+        // several yaws in one run: "-umaShotYaw 0,45,-45" writes one png per angle, which is what shading work
+        // is judged on - the same view under different light directions
+        public string ShotYaws = "";
         public bool ShotTransparent;
         public bool ShotOnly;
 
@@ -169,6 +173,7 @@ public static class UmaHeadlessExport
                     case "-umaShotWidth": options.ShotWidth = int.Parse(Next()); break;
                     case "-umaShotHeight": options.ShotHeight = int.Parse(Next()); break;
                     case "-umaShotYaw": options.ShotYaw = double.Parse(Next()); break;
+                    case "-umaShotYaws": options.ShotYaws = Next(); break;
                     case "-umaShotTransparent": options.ShotTransparent = true; break;
                     case "-umaShotOnly": options.ShotOnly = true; break;
                     default: break; // ignore everything else Unity/the shell passes through
@@ -489,17 +494,29 @@ public static class UmaHeadlessExport
                 case Stage.Screenshot:
                 {
                     // the game's own render of the loaded character, for comparing a Blender shading setup
-                    // against what the game actually looks like
+                    // against what the game actually looks like. Several yaws in one run give the same view
+                    // under different light directions, which is what shading work is judged on.
                     string shotPath = Path.GetFullPath(options.Screenshot);
                     Directory.CreateDirectory(Path.GetDirectoryName(shotPath));
-                    string failure = CaptureGameScreenshot(options, shotPath);
-                    if (failure != null)
+                    double[] yaws = ParseShotYaws(options.ShotYaws, options.ShotYaw);
+                    string baseName = Path.GetFileNameWithoutExtension(shotPath);
+                    string extension = Path.GetExtension(shotPath);
+                    string folder = Path.GetDirectoryName(shotPath);
+                    foreach (double yaw in yaws)
                     {
-                        Fail(failure);
-                        return;
+                        string path = yaws.Length == 1
+                            ? shotPath
+                            : Path.Combine(folder, $"{baseName}_yaw{yaw:+0;-0;0}{extension}");
+                        options.ShotYaw = yaw;
+                        string failure = CaptureGameScreenshot(options, path);
+                        if (failure != null)
+                        {
+                            Fail(failure);
+                            return;
+                        }
+                        Debug.Log($"{Tag} wrote {path} ({options.ShotView} view, {yaw:+0;-0;0} degrees"
+                                  + (options.ShotTransparent ? ", transparent" : "") + ")");
                     }
-                    Debug.Log($"{Tag} wrote {shotPath} ({options.ShotView} view"
-                              + (options.ShotTransparent ? ", transparent" : "") + ")");
                     if (options.ShotOnly)
                     {
                         Succeed();
@@ -751,6 +768,26 @@ public static class UmaHeadlessExport
             : "textureSet=none";
         return $"renderers={renderers.Length} slots={slots} textureless={textureless} "
                + $"noMainTexProp={noMainTexProperty} missingShader={missingShader} shaders={shaders.Count} {resolved}";
+    }
+
+    /// <summary>
+    /// The camera angles to shoot: the comma separated list when one was given, otherwise the single -umaShotYaw
+    /// value. One angle writes the file as named, several write "&lt;name&gt;_yaw+45.png" and so on.
+    /// </summary>
+    private static double[] ParseShotYaws(string list, double single)
+    {
+        if (string.IsNullOrWhiteSpace(list)) return new[] { single };
+        var parsed = new List<double>();
+        foreach (string part in list.Split(','))
+        {
+            string trimmed = part.Trim();
+            if (trimmed.Length == 0) continue;
+            if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+                parsed.Add(value);
+            else
+                Debug.Log($"{Tag} ignoring unreadable camera angle '{trimmed}'");
+        }
+        return parsed.Count > 0 ? parsed.ToArray() : new[] { single };
     }
 
     /// <summary>
