@@ -364,6 +364,19 @@ public class ModelExporter
     {
         Transform pmxChild = PMXTailChild(bone, bonelist);
         Vector3 chain = ChainDirection(bone);
+        if (FacesForward(bone))
+        {
+            // the eyes: their tail points out of the face, not along the chain that arrives at them. The rig's
+            // bone axes have forward pointing where the character looks (in the exported file that is -z, where
+            // the face helpers sit), and the eye bones themselves hang off the head, so the head's forward is
+            // what they look along. See FacesForward.
+            Vector3 forward = bone.parent != null ? bone.parent.forward : bone.forward;
+            if (forward.sqrMagnitude > 1e-8f)
+            {
+                float length = chain.sqrMagnitude > 1e-10f ? chain.magnitude * 0.5f : 0.1f;
+                return OffsetTail(forward.normalized * length);
+            }
+        }
         if (pmxChild != null && chain.sqrMagnitude > 1e-10f)
         {
             Vector3 delta = pmxChild.position - bone.position;
@@ -398,6 +411,30 @@ public class ModelExporter
             Index = -1,
             Offset = offset
         };
+    }
+
+    /// <summary>
+    /// The bones whose tail has to point out of the face instead of along the chain that arrives at them:
+    /// the eyeballs and the locators that drive them. MMD points an eye bone at the viewer, so that rotating
+    /// it around its own axes moves the gaze - carried along the chain (which comes in from the middle of the
+    /// head, up and out towards the temple) a gaze rotation reads as a roll instead, and the eyes look inward.
+    /// The direction comes from the bone's own forward axis, which on this rig points where the character
+    /// looks; the length stays the same as any other leaf tail, half the segment leading into the bone.
+    /// </summary>
+    private static bool FacesForward(Transform bone)
+    {
+        switch (bone.name)
+        {
+            case "Eye_L":
+            case "Eye_R":
+            case "Eye_locator_L":
+            case "Eye_locator_R":
+            case "Eye_target_locator_L":
+            case "Eye_target_locator_R":
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>

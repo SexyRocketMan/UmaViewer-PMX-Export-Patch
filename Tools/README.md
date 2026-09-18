@@ -188,6 +188,26 @@ and without the extras differs by a mean of 0.0002 per channel, with 0.2% of pix
 nothing else about the export changes: same vertices, bones, morphs and 22 textures. See
 [docs/UMA_SHADER.md](../docs/UMA_SHADER.md).
 
+### A baseline from the game itself
+
+Shading work needs something to compare against, and memory is a poor reference: `-Screenshot` writes what the
+viewer draws, with the game's own materials, lighting and post processing, from a camera the tool places
+itself.
+
+```powershell
+# the game's own render of the face, no model exported
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/game_face.png -ShotOnly
+
+# same run as an export, for a model and a picture of it side by side
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx -ShotView upper `
+    -Screenshot D:/out/game_upper.png
+```
+
+`-ShotView` is `face`, `head`, `upper` or `full` (distance as a fraction of the model's height), `-ShotWidth`
+/ `-ShotHeight` size the image (1280x720 by default), `-ShotYaw` orbits the camera, `-ShotTransparent` drops
+the background and `-ShotOnly` skips the export. The camera is put back afterwards, so the export that
+follows is unaffected, and the UI layer is excluded the same way the in-app screenshot button does it.
+
 ### Checking where the bones point
 
 A PMX bone's tail is either a child index or an offset, and head -> tail is what Blender draws. The uma rig
@@ -203,9 +223,16 @@ uv run Tools/pmx_inspect.py tails D:/out/1001_00.pmx
 It prints the direction of the bones a user notices (`--named`), each left/right pair's mirroring
 (`--pairs`, tolerated to `--mirror-tolerance` degrees, 5 by default) and exits non-zero when a pair is not
 mirrored, plus how many bones turn away from the segment leading into them - strands of hair and costume
-ribbons are expected there, a body chain bone is not. Measured on character 1001: 73 of 253 bones turn more
-than 5 degrees, all of them hair, mantle, ribbon, skirt and tail strands, and the leaf bones deviate 0.00
-degrees on average.
+ribbons are expected there, a body chain bone is not. Measured on character 1001: 79 of 253 bones turn more
+than 5 degrees, and 73 of those are hair, mantle, ribbon, skirt and tail strands - the other six are the eye
+and eye-locator bones, which deliberately point out of the face instead of along the chain that arrives at
+them (see below).
+
+The eye bones are the one place where the chain is the wrong answer. `Eye_L`/`Eye_R` and the locators that
+drive them hang off the head in the middle of the skull, so the segment leading into them runs up and out
+towards the temple: a tail along it makes a gaze rotation read as a roll, and the eyes look inward. MMD points
+an eye bone at the viewer, so those six bones take the head's own forward axis instead - measured on character
+1001 they come out as `(0.00, 0.00, -0.73)`, straight along the direction the model faces.
 
 ### Known harmless warning
 

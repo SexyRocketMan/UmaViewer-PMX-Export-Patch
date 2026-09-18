@@ -101,9 +101,15 @@ tag `patch` · 2026-03-30 — the first release of this fork
   against the hand recipe down to 6e-4 blender units, see [Tools/README.md](Tools/README.md).
 - **Bone tails follow the rig's chains**: an exported bone points at the child that continues its chain, and a
   bone without one (finger tips, hair ends, the roll helpers) continues the segment leading into it. The head
-  bone points up out of the neck instead of at the cheek offset it happened to be parented to first, and
-  `ShoulderRoll_L/R` and `ArmRoll_L/R` mirror each other instead of one of them pointing back at the neck -
-  `pmx_inspect.py tails` asserts all of it, see [Tools/README.md](Tools/README.md).
+  bone points up out of the neck instead of at the cheek offset it happened to be parented to first,
+  `ShoulderRoll_L/R` and `ArmRoll_L/R` mirror each other instead of one of them pointing back at the neck, and
+  the eye bones keep pointing straight out of the face (MMD's convention for an eye bone - carried along the
+  chain they would look inward) - `pmx_inspect.py tails` asserts all of it, see
+  [Tools/README.md](Tools/README.md).
+- **A screenshot of the game's own render**: `headless_export.ps1 -Screenshot <png> -ShotView face|head|upper|full`
+  writes what the viewer draws, with its own lighting and post processing, so a Blender material or shading
+  setup can be compared against the real thing instead of against memory. `-ShotOnly` takes the picture without
+  exporting a model.
 - **VMD key reduction is applied** (it was silently ignored because the save method shadowed the setting).
 - **Command line export**: models, motions, props and scene material tables can be exported and verified
   without clicking, and the whole chain (export → record → check → render → encode) has a one-command

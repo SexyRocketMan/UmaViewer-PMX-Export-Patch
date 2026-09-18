@@ -16,6 +16,8 @@
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_res_chr1001_001 -PlaySeconds 8 -RecordVmd D:/out/res.vmd
     # write plain pre-2.6 materials (no uma shader data in each material comment)
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -PlainMaterials -Out D:/out/plain.pmx
+    # the game's own render of the face, as the baseline to compare a Blender shading setup against
+    ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/game_face.png -ShotOnly
     ./Tools/headless_export.ps1 -ListProps home10001
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
@@ -42,6 +44,13 @@ param(
     [int]$MorphNameMode = -1,
     [switch]$APose,
     [switch]$PlainMaterials,
+    [string]$Screenshot = "",
+    [ValidateSet("face", "head", "upper", "full")][string]$ShotView = "full",
+    [int]$ShotWidth = 1280,
+    [int]$ShotHeight = 720,
+    [double]$ShotYaw = 0,
+    [switch]$ShotTransparent,
+    [switch]$ShotOnly,
     [int]$Timeout = 600,
     [int]$ExtraFrames = 30,
     [double]$PlaySeconds = 0,
@@ -150,6 +159,12 @@ if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 if ($APose) { $arguments += "-umaAPose" }
 if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
+if ($Screenshot) {
+    $arguments += @("-umaScreenshot", $Screenshot, "-umaShotView", $ShotView,
+                    "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight, "-umaShotYaw", $ShotYaw)
+    if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
+    if ($ShotOnly) { $arguments += "-umaShotOnly" }
+}
 if ($PlaySeconds -gt 0) { $arguments += @("-umaPlaySeconds", $PlaySeconds) }
 
 Write-Host "Unity  : $UnityExe"

@@ -85,7 +85,8 @@ public static class UmaHeadlessExport
         Settle,
         RecordVmd,
         Export,
-        Done
+        Done,
+        Screenshot
     }
 
     [Serializable]
@@ -116,6 +117,13 @@ public static class UmaHeadlessExport
         public double BootTimeoutSeconds = 120;
         public int ExtraFrames = 30;
         public double PlaySeconds = 0;
+        public string Screenshot = "";
+        public string ShotView = "full";
+        public int ShotWidth = 0;
+        public int ShotHeight = 0;
+        public double ShotYaw = 0;
+        public bool ShotTransparent;
+        public bool ShotOnly;
 
         public static Options Parse(string[] argv)
         {
@@ -156,6 +164,13 @@ public static class UmaHeadlessExport
                     case "-umaBootTimeout": options.BootTimeoutSeconds = double.Parse(Next()); break;
                     case "-umaExtraFrames": options.ExtraFrames = int.Parse(Next()); break;
                     case "-umaPlaySeconds": options.PlaySeconds = double.Parse(Next()); break;
+                    case "-umaScreenshot": options.Screenshot = Next(); break;
+                    case "-umaShotView": options.ShotView = Next().ToLowerInvariant(); break;
+                    case "-umaShotWidth": options.ShotWidth = int.Parse(Next()); break;
+                    case "-umaShotHeight": options.ShotHeight = int.Parse(Next()); break;
+                    case "-umaShotYaw": options.ShotYaw = double.Parse(Next()); break;
+                    case "-umaShotTransparent": options.ShotTransparent = true; break;
+                    case "-umaShotOnly": options.ShotOnly = true; break;
                     default: break; // ignore everything else Unity/the shell passes through
                 }
             }
@@ -466,8 +481,33 @@ public static class UmaHeadlessExport
                         return;
                     }
 
+                    CurrentStage = !string.IsNullOrEmpty(options.Screenshot)
+                        ? Stage.Screenshot
+                        : (string.IsNullOrEmpty(options.RecordVmd) ? Stage.Export : Stage.RecordVmd);
+                    break;
+
+                case Stage.Screenshot:
+                {
+                    // the game's own render of the loaded character, for comparing a Blender shading setup
+                    // against what the game actually looks like
+                    string shotPath = Path.GetFullPath(options.Screenshot);
+                    Directory.CreateDirectory(Path.GetDirectoryName(shotPath));
+                    string failure = CaptureGameScreenshot(options, shotPath);
+                    if (failure != null)
+                    {
+                        Fail(failure);
+                        return;
+                    }
+                    Debug.Log($"{Tag} wrote {shotPath} ({options.ShotView} view"
+                              + (options.ShotTransparent ? ", transparent" : "") + ")");
+                    if (options.ShotOnly)
+                    {
+                        Succeed();
+                        return;
+                    }
                     CurrentStage = string.IsNullOrEmpty(options.RecordVmd) ? Stage.Export : Stage.RecordVmd;
                     break;
+                }
 
                 case Stage.RecordVmd:
                 {
@@ -711,6 +751,98 @@ public static class UmaHeadlessExport
             : "textureSet=none";
         return $"renderers={renderers.Length} slots={slots} textureless={textureless} "
                + $"noMainTexProp={noMainTexProperty} missingShader={missingShader} shaders={shaders.Count} {resolved}";
+    }
+
+    /// <summary>
+    /// Renders the game's own view of the loaded character to a PNG, so a Blender shading setup can be
+    /// compared against what the game actually looks like. The camera is moved for the shot - the game
+    /// keeps its post processing, so this is the tone mapped result, not a raw buffer - and put back
+    /// afterwards, which leaves the export path untouched.
+    ///
+    /// Returns null on success, or a message describing what was missing.
+    /// </summary>
+    private static string CaptureGameScreenshot(Options options, string path)
+    {
+        var builder = UmaViewerBuilder.Instance;
+        var container = CurrentContainer();
+        if (container == null) return "no model loaded to screenshot";
+
+        var animationCamera = builder != null ? builder.AnimationCamera : null;
+        Camera camera = animationCamera != null && animationCamera.isActiveAndEnabled ? animationCamera : Camera.main;
+        if (camera == null) return "the viewer scene has no active camera";
+
+        Bounds bounds = new Bounds(container.transform.position, Vector3.zero);
+        bool any = false;
+        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null || !renderer.enabled) continue;
+            if (!any) { bounds = renderer.bounds; any = true; }
+            else bounds.Encapsulate(renderer.bounds);
+        }
+        if (!any) return "the loaded model has no renderers";
+
+        var character = container as UmaContainerCharacter;
+        Transform head = character != null && character.HeadBone != null ? character.HeadBone.transform : null;
+        // the game's bone axes point where the character looks, so the head's own forward is the way the face
+        // is turned - the same axis the exporter uses to aim the eye bones
+        Vector3 facing = head != null ? head.forward : container.transform.forward;
+        facing.y = 0f;
+        if (facing.sqrMagnitude < 1e-6f) facing = Vector3.forward;
+        facing.Normalize();
+
+        float height = Mathf.Max(bounds.size.y, 0.01f);
+        Vector3 headPoint = head != null
+            ? head.position
+            : new Vector3(bounds.center.x, bounds.max.y - height * 0.08f, bounds.center.z);
+        Vector3 target;
+        float distance;
+        switch (options.ShotView)
+        {
+            case "face":
+                target = headPoint;
+                distance = height * 0.15f;      // the head nearly fills the frame, for comparing shading
+                break;
+            case "head":
+                target = headPoint;
+                distance = height * 0.28f;
+                break;
+            case "upper":
+                target = new Vector3(headPoint.x, bounds.min.y + height * 0.82f, headPoint.z);
+                distance = height * 0.8f;
+                break;
+            default:
+                target = bounds.center;
+                distance = height * 1.9f;
+                break;
+        }
+        Debug.Log($"{Tag} screenshot view '{options.ShotView}': bounds {bounds.size} centre {bounds.center} "
+                  + $"head {headPoint} facing {facing} target {target} distance {distance:F3}");
+
+        Vector3 direction = Quaternion.AngleAxis((float)options.ShotYaw, Vector3.up) * facing;
+        Transform camTransform = camera.transform;
+        Vector3 oldPosition = camTransform.position;
+        Quaternion oldRotation = camTransform.rotation;
+        float oldFov = camera.fieldOfView;
+        try
+        {
+            camTransform.position = target + direction * distance;
+            camTransform.rotation = Quaternion.LookRotation(-direction, Vector3.up);
+            camera.fieldOfView = 39.6f;     // what a 50 mm lens on a 36 mm sensor sees, like the Blender tool
+            camera.ResetProjectionMatrix();
+
+            var image = Screenshot.GrabFrame(camera, options.ShotWidth, options.ShotHeight,
+                                             options.ShotTransparent);
+            File.WriteAllBytes(path, ImageConversion.EncodeToPNG(image));
+            UnityEngine.Object.Destroy(image);
+        }
+        finally
+        {
+            camTransform.position = oldPosition;
+            camTransform.rotation = oldRotation;
+            camera.fieldOfView = oldFov;
+            camera.ResetProjectionMatrix();
+        }
+        return null;
     }
 
     /// <summary>The container the current run is operating on (character or prop/scene).</summary>
