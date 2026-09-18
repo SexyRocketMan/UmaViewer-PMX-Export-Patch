@@ -141,6 +141,10 @@ public static class UmaHeadlessExport
         // for probing a material float: _faceShadowAlpha is driven by the Shade_Ctrl morph rather than
         // being a material constant, so its rest value is 0 and the cheek and nose regions never show
         public List<string> ShotFloats = new List<string>();
+
+        // freezes the model at this normalised time before the shots, because an A/B pair is only a
+        // comparison if the pose is the same in both. Negative leaves the animation alone.
+        public double PinPose = -1;
         // -1 keeps the scene's own elevation; anything else rebuilds the light direction at that height
         public double ShotLightElevation = -1.0;
         public bool ShotTransparent;
@@ -177,6 +181,7 @@ public static class UmaHeadlessExport
                     case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
                     case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
                     case "-umaShotFloat": options.ShotFloats.Add(Next()); break;
+                    case "-umaPinPose": options.PinPose = double.Parse(Next()); break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
@@ -523,6 +528,7 @@ public static class UmaHeadlessExport
                     string shotPath = Path.GetFullPath(options.Screenshot);
                     Directory.CreateDirectory(Path.GetDirectoryName(shotPath));
                     var container = CurrentContainer();
+                    if (options.PinPose >= 0.0 && container != null) PinContainerPose(container, options.PinPose);
                     List<ShotTextureOverride> overrides = container == null
                         ? new List<ShotTextureOverride>()
                         : ApplyShotTextureOverrides(container.gameObject, options.ShotTextures);
@@ -1089,6 +1095,25 @@ public static class UmaHeadlessExport
     /// material post-processing at all in UmaContainerProp, so materials the game assigns at runtime
     /// (weather/banner texture sets) stay empty and render flat white.
     /// </summary>
+    /// <summary>
+    /// Freezes every animator under the container at a normalised time. Two shots of the same model are only
+    /// comparable if the pose matches, and this viewer's model animates: a baseline against a perturbed
+    /// render otherwise shows the pose moving as well as whatever was perturbed.
+    /// </summary>
+    private static void PinContainerPose(UmaContainer container, double normalisedTime)
+    {
+        int pinned = 0;
+        foreach (var animator in container.GetComponentsInChildren<Animator>(true))
+        {
+            if (animator.runtimeAnimatorController == null) continue;
+            animator.speed = 0f;
+            animator.Play(0, 0, (float)normalisedTime);
+            animator.Update(0f);
+            pinned++;
+        }
+        Debug.Log($"{Tag} -umaPinPose: froze {pinned} animator(s) at normalised time {normalisedTime:g}");
+    }
+
     private class FloatOverride
     {
         public Material Material;

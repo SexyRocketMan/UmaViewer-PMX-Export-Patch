@@ -58,6 +58,7 @@ param(
 [string]$ShotTexture = "",
 [string]$ShotGlobal = "",
 [string]$ShotFloat = "",
+[double]$PinPose = -1,
     [double]$ShotLightElevation = -1,
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
@@ -173,7 +174,8 @@ if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
 if ($Screenshot) {
     $arguments += @("-umaScreenshot", $Screenshot, "-umaShotView", $ShotView,
                     "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
-    if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
+    if ($PinPose -ge 0) { $arguments += @("-umaPinPose", $PinPose) }
+if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
     if ($ShotAzimuths) { $arguments += @("-umaShotAzimuths", $ShotAzimuths) }
 foreach ($entry in ($ShotGlobal -split ';')) {
     if ($entry.Trim()) { $arguments += @("-umaShotGlobal", $entry.Trim()) }
