@@ -30,7 +30,14 @@ from mathutils import Matrix, Vector
 MMD_TOOLS = "bl_ext.blender_org.mmd_tools"
 UMA_ADDON = "bl_ext.user_default.uma_addon"
 
-VIEW_DISTANCE = {"face": 0.30, "head": 0.45, "upper": 1.1, "full": 2.2}
+# The face factor is measured against the viewer's own face view, not tuned by eye: rendered at 0.15,
+# 0.30, 0.60 and 1.00 and tiled against the viewer's shot, 0.60 is the one that frames the same way - a
+# whole head with shoulders, not a face filling the frame. It matters more than it looks: at 0.30 the
+# comparison crop is mostly background, and the face crop's mean was 201 against the viewer's 150, while at
+# 0.60 it is 140 against 150. That 51-level gap is what both handoff documents called the largest
+# unexplained difference in this project; it was the framing.
+# The other three views have not been checked this way.
+VIEW_DISTANCE = {"face": 0.60, "head": 0.45, "upper": 1.1, "full": 2.2}
 VIEW_LENS = 50.0
 
 
@@ -75,7 +82,10 @@ def scene_setup(args, mesh, armature):
     else:
         target = head
 
-    distance = height * VIEW_DISTANCE[args.view]
+    factor = args.view_distance if getattr(args, "view_distance", None) else VIEW_DISTANCE[args.view]
+    distance = height * factor
+    print(f"   camera distance factor {factor:g} of a model {height:.4f} high "
+          + ("(overridden)" if getattr(args, "view_distance", None) else f"(the {args.view} default)"))
     camera_data = bpy.data.cameras.new("AngleCam")
     camera_data.lens = VIEW_LENS
     camera = bpy.data.objects.new("AngleCam", camera_data)
@@ -201,6 +211,10 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--yaws", default="0,45,-45", help="comma separated camera angles")
     parser.add_argument("--view", default="face", choices=list(VIEW_DISTANCE))
+    parser.add_argument("--view-distance", type=float, default=None,
+                        help="override the camera distance as a fraction of the model's height, to match the "
+                             "viewer's framing by measurement instead of by argument (the viewer's own face "
+                             "view is 0.15 of its model's height)")
     parser.add_argument("--apply-shader", action="store_true")
     parser.add_argument("--no-cylinder-blend", action="store_true",
                         help="apply the game shading without the cylinder normal blend, to isolate its effect")
