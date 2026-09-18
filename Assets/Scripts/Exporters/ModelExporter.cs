@@ -658,6 +658,7 @@ public class ModelExporter
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
         Number("face_shadow_length", "_faceShadowLength");
+        Tint("face_shadow_color", "_faceShadowColor");
         // the two strengths the region gates compare `factor >= 1 - strength` against: named for exactly
         // that role, and 0.775 makes a threshold the factor can actually cross
         Number("cheek_threshold", "_CheekPretenseThreshold");
@@ -883,6 +884,7 @@ public class ModelExporter
             else if (renderer is SkinnedMeshRenderer smr)
             {
                 var mesh = smr.sharedMesh;
+                Transform headBone = FindHeadBone(bones);
                 if (VertexDumpPath != null)
                 {
                     _writtenVertices.Add($"# renderer {renderer.name} mesh {mesh.name} "
@@ -921,10 +923,20 @@ public class ModelExporter
                     vertex.Coordinate = root.InverseTransformPoint(smr.transform.TransformPoint(bakemesh.vertices[i])); 
                     vertex.Normal = normals[i];
                     vertex.UvCoordinate = new Vector2(uv[i].x, 1 - uv[i].y);
+                    // the head-local height goes in the spare .z of the second extra uv, which mmd_tools
+                    // reads as `_UV2`; nothing else in the file uses that component
+                    float headLocalY = 0f;
+                    if (headBone != null)
+                    {
+                        Vector3 world = smr.transform.TransformPoint(bakemesh.vertices[i]);
+                        headLocalY = headBone.worldToLocalMatrix.MultiplyPoint(world).y;
+                    }
                     vertex.ExtraUvCoordinate = new Vector4[3]
                     {
                         uv1.Length > 0 ? new Vector2(uv1[i].x, 1 - uv1[i].y) : Vector2.zero,
-                        uv2.Length > 0 ? new Vector2(uv2[i].x, 1 - uv2[i].y) : Vector2.zero,
+                        new Vector4(uv2.Length > 0 ? uv2[i].x : 0f,
+                                    uv2.Length > 0 ? 1 - uv2[i].y : 0f,
+                                    headLocalY, 0f),
                         colors.Length > 0 ? colors[i] : Color.clear
                     };
 
@@ -1037,6 +1049,21 @@ public class ModelExporter
     private static int GetBoneIndex(List<Transform> bones, Transform bone)
     {
         return bones.Contains(bone) ? bones.IndexOf(bone) : 0;
+    }
+
+    /// <summary>
+    /// The head bone, whose space the game's facial shadow is measured in: the viewer sets
+    /// `_faceShadowHeadMat` from it every frame (`HeadBone.transform.worldToLocalMatrix`) and the vertex
+    /// program transforms each vertex by it, so the pixel program can read the vertex's height inside the
+    /// head. A static export can carry the same number computed at the rest pose.
+    /// </summary>
+    private static Transform FindHeadBone(List<Transform> bones)
+    {
+        foreach (var bone in bones)
+        {
+            if (bone != null && bone.name == "Head") return bone;
+        }
+        return null;
     }
 
     /// <summary> Credit to pohype: https://discussions.unity.com/t/reading-meshes-at-runtime-that-are-not-enabled-for-read-write/804189/7 </summary>
