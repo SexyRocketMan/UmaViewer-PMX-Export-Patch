@@ -1111,9 +1111,26 @@ public static class UmaHeadlessExport
                         min = Vector4.Min(min, c);
                         max = Vector4.Max(max, c);
                     }
+                if (normals != null && normals.Length > 0)
+                {
+                    Vector3 sum = Vector3.zero;
+                    foreach (var n in normals) sum += n;
+                    Vector3 mean = (sum / normals.Length).normalized;
+                    var bins = new int[19];
+                    foreach (var n in normals)
+                        bins[Mathf.Clamp((int)(Vector3.Angle(n, mean) / 5f), 0, 18)]++;
+                    var parts = new List<string>();
+                    for (int i = 0; i < bins.Length; i++)
+                        if (bins[i] > 0) parts.Add($"{i * 5}-{i * 5 + 5}:{bins[i]}");
+                    Debug.Log($"{Tag} [face] normal fingerprint: mean "
+                              + $"({mean.x:F4},{mean.y:F4},{mean.z:F4}) angles to mean -> "
+                              + string.Join(" ", parts));
+                }
+                    float blueSum = 0f;
+                    foreach (var c in colours) blueSum += c.b;
                     Debug.Log($"{Tag} [face] vertex colours: {colours.Length} entries, "
                               + $"r {min.x:F3}-{max.x:F3} g {min.y:F3}-{max.y:F3} "
-                              + $"b {min.z:F3}-{max.z:F3} a {min.w:F3}-{max.w:F3}");
+                              + $"b {min.z:F3}-{max.z:F3} a {min.w:F3}-{max.w:F3}, b mean {blueSum / colours.Length:F4}");
                 }
             }
 
@@ -1122,6 +1139,11 @@ public static class UmaHeadlessExport
                 if (material == null) continue;
                 Debug.Log($"{Tag} [face] material '{material.name}' shader "
                           + $"'{(material.shader != null ? material.shader.name : "<none>")}'");
+                var keywords = material.shaderKeywords;
+                Debug.Log($"{Tag} [face]   enabled keywords: "
+                          + (keywords == null || keywords.Length == 0
+                              ? "<none>"
+                              : string.Join(", ", keywords)));
 
                 foreach (string property in material.GetTexturePropertyNames())
                 {
