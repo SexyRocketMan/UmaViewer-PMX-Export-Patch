@@ -866,6 +866,7 @@ public class ModelExporter
                     vertex.SkinningOperator.Param = new Bdef1() { BoneId = bones.IndexOf(renderer.transform) };
                     vertex.EdgeScale = 1;
                     verticesList.Add(vertex);
+                    if (VertexDumpPath != null) RecordVertex(vertex, renderer.name);
                 }
 
 
@@ -878,6 +879,12 @@ public class ModelExporter
             else if (renderer is SkinnedMeshRenderer smr)
             {
                 var mesh = smr.sharedMesh;
+                if (VertexDumpPath != null)
+                {
+                    _writtenVertices.Add($"# renderer {renderer.name} mesh {mesh.name} "
+                                         + $"offset {verticesList.Count} count {mesh.vertexCount} "
+                                         + $"readable {mesh.isReadable}");
+                }
                 if (!mesh.isReadable)
                 {
                     UmaViewerUI.Instance.ShowMessage($"Mesh {mesh.name} was not readable. Attempting to export", UIMessageType.Warning);
@@ -968,6 +975,7 @@ public class ModelExporter
                     }
                     vertex.EdgeScale = 1;
                     verticesList.Add(vertex);
+                    if (VertexDumpPath != null) RecordVertex(vertex, renderer.name);
                 }
 
                 foreach (var triangle in mesh.triangles)
@@ -977,7 +985,49 @@ public class ModelExporter
                 vertexOffset += vertices.Length;
             }
         }
+        FlushVertexDump();
         return verticesList.ToArray();
+    }
+
+    /// <summary>
+    /// When set, every vertex is also recorded here in the order the pmx receives it. Set by the headless
+    /// exporter before an export and cleared after; null in normal use, which costs one comparison per
+    /// vertex. This exists because comparing the pmx against the live mesh has to be done vertex by vertex,
+    /// and a mesh read at a different moment than the write - while the viewer's model is animating - is
+    /// not the same vertex list at all.
+    /// </summary>
+    public static string VertexDumpPath;
+
+    private static readonly List<string> _writtenVertices = new List<string>();
+
+    private static void RecordVertex(Vertex vertex, string rendererName)
+    {
+        var extra = vertex.ExtraUvCoordinate;
+        var parts = new List<string>(24)
+        {
+            vertex.Coordinate.x.ToString("R"), vertex.Coordinate.y.ToString("R"), vertex.Coordinate.z.ToString("R"),
+            vertex.Normal.x.ToString("R"), vertex.Normal.y.ToString("R"), vertex.Normal.z.ToString("R"),
+            vertex.UvCoordinate.x.ToString("R"), vertex.UvCoordinate.y.ToString("R"),
+        };
+        for (int i = 0; i < 3; i++)
+        {
+            var layer = extra != null && i < extra.Length ? extra[i] : Vector4.zero;
+            parts.Add(layer.x.ToString("R"));
+            parts.Add(layer.y.ToString("R"));
+            parts.Add(layer.z.ToString("R"));
+            parts.Add(layer.w.ToString("R"));
+        }
+        parts.Add(rendererName);
+        _writtenVertices.Add(string.Join(" ", parts));
+    }
+
+    private static void FlushVertexDump()
+    {
+        if (VertexDumpPath == null) return;
+        File.WriteAllLines(VertexDumpPath, _writtenVertices);
+        Debug.Log($"[ModelExporter] wrote {_writtenVertices.Count} written vertices to {VertexDumpPath}");
+        _writtenVertices.Clear();
+        VertexDumpPath = null;
     }
 
     private static int GetBoneIndex(List<Transform> bones, Transform bone)

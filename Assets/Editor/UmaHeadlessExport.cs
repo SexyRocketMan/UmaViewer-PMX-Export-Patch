@@ -674,6 +674,9 @@ public static class UmaHeadlessExport
                     }
 
                     Debug.Log($"{Tag} exporting to {exportPath}");
+                    // the exporter records what it writes, so the pmx can be compared against the game's
+                    // own data vertex by vertex rather than by matching positions after the fact
+                    ModelExporter.VertexDumpPath = options.DumpFace ? exportPath + ".vertices.txt" : null;
                     if (container is UmaContainerCharacter character)
                     {
                         Debug.Log($"{Tag} the save dialog would suggest '{ExportNaming.ModelFile(character)}.pmx'");
