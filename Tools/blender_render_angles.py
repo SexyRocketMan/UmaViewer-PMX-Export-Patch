@@ -113,6 +113,10 @@ def scene_setup(args, mesh, armature):
     scene.eevee.taa_render_samples = args.samples
     scene.render.resolution_x = scene.render.resolution_y = args.size
     scene.render.image_settings.file_format = "PNG"
+    # The viewer is a plain linear-ish pipeline; Blender's default AgX view transform desaturates and lifts the
+    # midtones, which made every comparison look pale and washed out against it. Standard is the honest match.
+    scene.view_settings.view_transform = "Standard"
+    scene.view_settings.look = "None"
     return camera, target, distance, facing
 
 
