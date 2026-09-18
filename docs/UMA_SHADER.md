@@ -172,22 +172,39 @@ are exported as textures regardless), and the same empty comment the exporter wr
 
 ## Face shading, morphs and custom split normals
 
-Two things decide how the face looks, and they pull in opposite directions if you get them wrong.
+Three things decide how the face looks, and the game does all three.
 
-**Keep the normals the game authored.** The models ship custom split normals, and on the face those normals are
-what makes the shading clean: the face is low-poly, so normals recomputed from the surface move the toon step
-onto triangle edges and the cheeks and jaw come out in hard angular patches - clearly worse than anything the
+**Keep the normals the game authored.** The models ship custom split normals, and on the face those are what
+makes the shading clean: the face is low-poly, so normals recomputed from the surface move the toon step onto
+triangle edges and the cheeks and jaw come out in hard angular patches - clearly worse than anything the
 authored normals do. An earlier version of the Shading operator cleared them (`fix_morph_shading`); that is now
 off by default, with the checkbox kept for the rare model that still shows a seam.
 
+**Blend a cylinder normal into them.** The game's face, eye and hair shaders do not light the surface with the
+mesh normal. Decompiled community sources (see below) agree on
+
+```
+radial   = P - (C + dot(U, P - C) * U)          # the component perpendicular to the head's up axis
+w        = vertexColour.blue * (1 - _CylinderBlend)
+shadingN = normalize(w * N + (1 - w) * normalize(radial))
+```
+
+and the viewer's own code sets `_CylinderBlend = 0.25` for exactly `Gallop/3D/Chara/ToonFace`, `ToonEye` and
+`ToonHair`, never for the body, whose shader uses the plain mesh normal (`Assets/Scripts/UmaContainerCharacter.cs`).
+The weight is the Unity vertex colour, which the exporter writes into the `.pmx`'s last extra UV slot and
+`mmd_tools` imports as the `UV3` (r,g) and `_UV3` (b,a) layers - so the blue channel is `_UV3.x`, and no extra
+data has to be exported for this. The Shading operator applies the same blend to the face, eyebrow, eye and
+hair materials (`Face shading normals`, on by default) and writes it as custom split normals: measured on
+character 1001 costume 00 that turns 4133 vertices by 20.8 degrees on average.
+
 **Switch the group's face branch on.** The shipped `Uma Shader` group has an input `Toggle If Face [0=Off,1=On]`,
 and the operator sets it for the `face` and `mayu` materials. That branch is the game's own face shading, and it
-is also what keeps the face clean *while a morph deforms it*: moving a shape key does not move custom normals in
-Blender (they stay fixed in object space, unlike Unity, which recomputes skinned normals every frame), so with
-the face branch off a mouth morph leaves a hard seam plus dark spikes around the lips. With it on, the same morph
-shades smoothly.
+is also what keeps the face clean *while a morph deforms it*. Blender stores the imported custom normals in the
+corner fan space, so they do follow shape keys and posing (measured: a shape key that rotates the mesh rotates
+the normals with it, by exactly the same angle) - but they follow the *deformation*, so a mouth morph still
+moves the boundary, and the face branch is what keeps that from tearing.
 
-Measured on character 1001 costume 00, face close-up, the same camera and a dim world, in a 2x2 of those two
+Measured on character 1001 costume 00, face close-up, the same camera and a dim world, in a 2x2 of the two
 switches with the two largest mouth morphs at 1.0:
 
 | setup | at rest | with the mouth morphs |
@@ -197,8 +214,21 @@ switches with the two largest mouth morphs at 1.0:
 | face branch off, authored normals | clean | hard seam and dark spikes around the lips |
 | face branch off, normals cleared | hard angular patches | hard seam |
 
-The scripts used for that live in the scratch tooling (`face_toggle_matrix.py`), and the images are in
-`umaviewer_exports\shadercheck\facetoggle\`.
+The scripts used for that live in the scratch tooling (`face_toggle_matrix.py`, `cylinder_normals.py`), and the
+images are in `umaviewer_exports\shadercheck\facetoggle\` and `...\face_light\`.
+
+### Where that came from
+
+* `croakfang/UmaMusumeMME` - decompiled HLSL of the game's face shader (`UMA_Face.fx`), which contains the
+  cylinder blend and the cheek/nose mask tests.
+* `Elysia-simp/Honse-Shader` - an independent hand rewrite from an OpenGL decompile (`face_shader.fxsub`),
+  agreeing on the same maths.
+* Cygames Tech Conference 2021, `ウマ娘 プリティーダービー 3DCGキャラクター事例` - first-party: the head uses a
+  detail mask for cheeks and nose, and before it "the shadow looked distorted and unnatural".
+* Two more game mechanisms we do **not** reproduce yet: a per-texel bias on the toon threshold from `_base`.R
+  (the shadow mask), and the cheek/nose detail mask in `_base`.G, which replaces N·L with a half-plane test in
+  the head's own forward/up frame. A face close-up of the game (`game_face.png`, from `-Screenshot`) shows the
+  result: no toon step crosses the face at all.
 
 ## What still cannot be matched, and why
 
