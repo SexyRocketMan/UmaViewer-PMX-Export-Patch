@@ -54,6 +54,7 @@ param(
     [double]$ShotYaw = 0,
     [string]$ShotYaws = "",
     [string]$ShotAzimuths = "",
+    [double]$ShotLightElevation = -1,
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
     [int]$Timeout = 600,
@@ -169,6 +170,7 @@ if ($Screenshot) {
                     "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
     if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
     if ($ShotAzimuths) { $arguments += @("-umaShotAzimuths", $ShotAzimuths) }
+    if ($ShotLightElevation -ge 0) { $arguments += @("-umaShotLightElevation", $ShotLightElevation) }
     else { $arguments += @("-umaShotYaw", $ShotYaw) }
     if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
     if ($ShotOnly) { $arguments += "-umaShotOnly" }

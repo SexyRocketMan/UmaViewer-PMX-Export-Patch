@@ -128,6 +128,8 @@ public static class UmaHeadlessExport
         public string ShotYaws = "";
         // azimuths for the face light, in degrees: the Nars face shader shades with _ViewDirX/_ViewDirY
         public string ShotAzimuths = "";
+        // -1 keeps the scene's own elevation; anything else rebuilds the light direction at that height
+        public double ShotLightElevation = -1.0;
         public bool ShotTransparent;
         public bool ShotOnly;
 
@@ -177,6 +179,7 @@ public static class UmaHeadlessExport
                     case "-umaShotYaw": options.ShotYaw = double.Parse(Next()); break;
                     case "-umaShotYaws": options.ShotYaws = Next(); break;
                     case "-umaShotAzimuths": options.ShotAzimuths = Next(); break;
+                    case "-umaShotLightElevation": options.ShotLightElevation = double.Parse(Next()); break;
                     case "-umaShotTransparent": options.ShotTransparent = true; break;
                     case "-umaShotOnly": options.ShotOnly = true; break;
                     default: break; // ignore everything else Unity/the shell passes through
@@ -511,7 +514,7 @@ public static class UmaHeadlessExport
                     foreach (double azimuth in azimuths)
                     {
                         if (azimuths.Length > 1)
-                            ApplyLightAzimuth(azimuth);
+                            ApplyLightAzimuth(azimuth, options.ShotLightElevation);
                         foreach (double yaw in yaws)
                         {
                             bool grid = yaws.Length * azimuths.Length > 1;
@@ -792,9 +795,11 @@ public static class UmaHeadlessExport
     /// </summary>
     private static Quaternion s_lightRestRotation;
     private static bool s_lightRestCaptured;
+    private static double s_lightElevation = -1.0;
 
-    private static void ApplyLightAzimuth(double azimuth)
+    private static void ApplyLightAzimuth(double azimuth, double elevation)
     {
+        s_lightElevation = elevation;
         // The scene's directional light is what the character's shading follows, so that is what turns. The
         // first call remembers where it started, and every azimuth is measured from there - so azimuth 0 gives
         // back exactly the viewer's own default lighting.
@@ -808,7 +813,9 @@ public static class UmaHeadlessExport
                 s_lightRestRotation = light.transform.rotation;
                 s_lightRestCaptured = true;
             }
-            light.transform.rotation = s_lightRestRotation * Quaternion.Euler(0f, (float)azimuth, 0f);
+            light.transform.rotation = s_lightElevation >= 0.0
+                ? Quaternion.Euler((float)s_lightElevation, (float)azimuth, 0f)
+                : Quaternion.Euler(0f, (float)azimuth, 0f) * s_lightRestRotation;
             turned++;
             Debug.Log($"{Tag} turned the directional light '{light.name}' to azimuth {azimuth:+0;-0;0} degrees "
                       + $"(elevation {light.transform.eulerAngles.x:F0}, at {light.transform.eulerAngles.y:F0})");
