@@ -145,6 +145,11 @@ public static class UmaHeadlessExport
         // freezes the model at this normalised time before the shots, because an A/B pair is only a
         // comparison if the pose is the same in both. Negative leaves the animation alone.
         public double PinPose = -1;
+
+        // limits -umaShotTexture / -umaShotFloat / -umaShotGlobal's face work to materials whose name
+        // contains this. Without it a property that exists on both the face and the body changes both, and
+        // the result is not comparable with a port that only touches the face.
+        public string ShotMaterial = "";
         // -1 keeps the scene's own elevation; anything else rebuilds the light direction at that height
         public double ShotLightElevation = -1.0;
         public bool ShotTransparent;
@@ -182,6 +187,7 @@ public static class UmaHeadlessExport
                     case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
                     case "-umaShotFloat": options.ShotFloats.Add(Next()); break;
                     case "-umaPinPose": options.PinPose = double.Parse(Next()); break;
+                    case "-umaShotMaterial": options.ShotMaterial = Next(); break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
@@ -531,11 +537,13 @@ public static class UmaHeadlessExport
                     if (options.PinPose >= 0.0 && container != null) PinContainerPose(container, options.PinPose);
                     List<ShotTextureOverride> overrides = container == null
                         ? new List<ShotTextureOverride>()
-                        : ApplyShotTextureOverrides(container.gameObject, options.ShotTextures);
+                        : ApplyShotTextureOverrides(container.gameObject, options.ShotTextures,
+                                                    options.ShotMaterial);
                     List<GlobalOverride> globals = ApplyShotGlobalOverrides(options.ShotGlobals);
                     List<FloatOverride> floats = container == null
                         ? new List<FloatOverride>()
-                        : ApplyShotFloatOverrides(container.gameObject, options.ShotFloats);
+                        : ApplyShotFloatOverrides(container.gameObject, options.ShotFloats,
+                                                  options.ShotMaterial);
                     double[] yaws = ParseShotYaws(options.ShotYaws, options.ShotYaw);
                     // the viewer's face shading reads its light direction from the materials' _ViewDirX/_ViewDirY,
                     // so a grid steps those instead of moving a scene light
@@ -1127,7 +1135,8 @@ public static class UmaHeadlessExport
     /// to a `Shade_Ctrl` morph), so its value in the material is only its rest value of 0, and the cheek and
     /// nose regions are inert. Forcing it is how to see what those regions do.
     /// </summary>
-    private static List<FloatOverride> ApplyShotFloatOverrides(GameObject root, List<string> specs)
+    private static List<FloatOverride> ApplyShotFloatOverrides(GameObject root, List<string> specs,
+                                                              string only = "")
     {
         var applied = new List<FloatOverride>();
         if (specs == null || specs.Count == 0) return applied;
@@ -1156,6 +1165,8 @@ public static class UmaHeadlessExport
                 foreach (var material in renderer.materials)
                 {
                     if (material == null || !material.HasProperty(property)) continue;
+                    if (only.Length > 0 && !material.name.ToLowerInvariant().Contains(only.ToLowerInvariant()))
+                        continue;
                     applied.Add(new FloatOverride
                     {
                         Material = material,
@@ -1277,7 +1288,8 @@ public static class UmaHeadlessExport
     /// in the render. This is the only way to name a texture register - the shipped containers have no RDEF
     /// chunk, and the per-container records in the blob region are not in layout order.
     /// </summary>
-    private static List<ShotTextureOverride> ApplyShotTextureOverrides(GameObject root, List<string> specs)
+    private static List<ShotTextureOverride> ApplyShotTextureOverrides(GameObject root, List<string> specs,
+                                                                     string only = "")
     {
         var applied = new List<ShotTextureOverride>();
         if (specs == null || specs.Count == 0) return applied;
@@ -1329,6 +1341,8 @@ public static class UmaHeadlessExport
                 foreach (var material in renderer.materials)
                 {
                     if (material == null || !material.HasProperty(property)) continue;
+                    if (only.Length > 0 && !material.name.ToLowerInvariant().Contains(only.ToLowerInvariant()))
+                        continue;
                     applied.Add(new ShotTextureOverride
                     {
                         Material = material,

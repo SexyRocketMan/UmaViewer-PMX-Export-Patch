@@ -59,6 +59,7 @@ param(
 [string]$ShotGlobal = "",
 [string]$ShotFloat = "",
 [double]$PinPose = -1,
+[string]$ShotMaterial = "",
     [double]$ShotLightElevation = -1,
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
@@ -175,6 +176,7 @@ if ($Screenshot) {
     $arguments += @("-umaScreenshot", $Screenshot, "-umaShotView", $ShotView,
                     "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
     if ($PinPose -ge 0) { $arguments += @("-umaPinPose", $PinPose) }
+if ($ShotMaterial) { $arguments += @("-umaShotMaterial", $ShotMaterial) }
 if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
     if ($ShotAzimuths) { $arguments += @("-umaShotAzimuths", $ShotAzimuths) }
 foreach ($entry in ($ShotGlobal -split ';')) {
