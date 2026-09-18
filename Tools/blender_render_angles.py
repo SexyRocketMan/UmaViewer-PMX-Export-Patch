@@ -231,6 +231,10 @@ def main():
                         help="NAME=VALUE, repeatable: set every shape key whose name contains NAME (case "
                              "insensitive) to VALUE, e.g. --morph Mouth=1.0 --morph Eye=0")
     parser.add_argument("--list-morphs", action="store_true", help="print the model's shape keys and stop")
+    parser.add_argument("--light-elevation", type=float, default=35.0,
+                        help="degrees above the horizon for the grid's sun. The viewer's own light sits at 70, "
+                             "and comparing the two at different elevations compares two different pictures: at a "
+                             "high elevation the face's N.L barely varies, so the toon step never crosses it")
     parser.add_argument("--grid", default="",
                         help="'azimuths': render the camera yaws against each sun azimuth and tile them into "
                              "grid.png, which is how the diff/shad transition becomes visible")
@@ -324,9 +328,13 @@ def main():
             direction = (Matrix.Rotation(math.radians(azimuth), 4, 'Z') @ facing).normalized()
             direction.z = 0.0
             direction.normalize()
-            light_direction = (direction + Vector((0.0, 0.0, 0.7))).normalized()
+            elevation = math.radians(args.light_elevation)
+            light_direction = (direction * math.cos(elevation)
+                               + Vector((0.0, 0.0, 1.0)) * math.sin(elevation)).normalized()
             light.location = target + light_direction * distance
             light.rotation_euler = (target - light.location).to_track_quat("-Z", "Y").to_euler()
+            print(f"   sun at azimuth {azimuth:+.0f}, elevation {args.light_elevation:.0f} "
+                  f"-> direction {tuple(round(v, 3) for v in light_direction)}")
             for yaw in yaws:
                 camera_direction = (Matrix.Rotation(math.radians(-yaw), 4, 'Z') @ facing).normalized()
                 camera_direction.z = 0.0
