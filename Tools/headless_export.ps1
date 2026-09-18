@@ -40,6 +40,7 @@ param(
     [string]$ScanProps = "",
     [int]$ScanCount = 10,
     [switch]$DumpMaterials,
+[switch]$DumpFace,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
     [int]$RecordReduction = 0,
@@ -158,6 +159,7 @@ if ($ScanProps) {
     $arguments += @("-umaScanProps", $ScanProps, "-umaScanCount", $ScanCount)
 }
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
+if ($DumpFace) { $arguments += "-umaDumpFace" }
 if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
 if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
 if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordReduction) }

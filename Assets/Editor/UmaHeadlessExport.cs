@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -106,6 +106,7 @@ public static class UmaHeadlessExport
         public string ScanProps = "";
         public int ScanCount = 10;
         public bool DumpMaterials;
+        public bool DumpFace;
         public string Variant = "";
         public int MorphNameMode = -1;
         public bool APoseRestPose;
@@ -160,6 +161,7 @@ public static class UmaHeadlessExport
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
+                    case "-umaDumpFace": options.DumpFace = true; break;
                     case "-umaVariant": options.Variant = Next(); break;
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
@@ -657,11 +659,13 @@ public static class UmaHeadlessExport
                                       : $"not available, current is '{propContainer.TextureSet.CurrentVariant}'"));
                     }
 
-                    if (options.DumpMaterials)
+                    if (options.DumpFace || options.DumpMaterials)
                     {
                         string stem = SessionState.GetInt(KeyIsProp, 0) == 1
                             ? SceneStem(SessionState.GetString(KeyPropName, ""))
                             : "";
+                        if (options.DumpFace) DumpFacePipeline(container.gameObject, stem);
+                        if (!options.DumpMaterials) return;
                         DumpMaterials(container.gameObject, stem);
                         DumpShaderProperties(container.gameObject, stem);
                     }
@@ -1053,6 +1057,102 @@ public static class UmaHeadlessExport
     /// material post-processing at all in UmaContainerProp, so materials the game assigns at runtime
     /// (weather/banner texture sets) stay empty and render flat white.
     /// </summary>
+    /// <summary>
+    /// Everything after the meta database: the material the game's shader actually receives, the textures bound to
+    /// it, and the mesh facts the shader depends on. The stored bundle material is not necessarily the runtime one -
+    /// the viewer overwrites textures and properties when it loads a character - and the face shader's
+    /// _NormalizeNormal is 0, so the length of its vertex normals matters.
+    /// </summary>
+    private static bool _faceDumped;
+
+    private static void DumpFacePipeline(GameObject root, string stem)
+    {
+        // once only: this sits in the stage loop, and without the guard it wrote a four gigabyte log
+        if (_faceDumped) return;
+        _faceDumped = true;
+
+        foreach (var renderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            string lower = renderer.name.ToLowerInvariant();
+            if (!lower.Contains("face") && !lower.Contains("head")) continue;
+
+            Debug.Log($"{Tag} [face] {stem} renderer '{renderer.name}' mesh '{renderer.sharedMesh?.name}'");
+
+            var mesh = renderer.sharedMesh;
+            if (mesh != null)
+            {
+                var normals = mesh.normals;
+                if (normals != null && normals.Length > 0)
+                {
+                    float min = float.MaxValue, max = 0f, total = 0f;
+                    foreach (var n in normals)
+                    {
+                        float length = n.magnitude;
+                        if (length < min) min = length;
+                        if (length > max) max = length;
+                        total += length;
+                    }
+                    float mean = total / normals.Length;
+                    Debug.Log($"{Tag} [face] normals: {normals.Length} entries, length min {min:F6} mean {mean:F6} "
+                              + $"max {max:F6}");
+                }
+
+                var colours = mesh.colors;
+                if (colours == null || colours.Length == 0)
+                {
+                    Debug.Log($"{Tag} [face] vertex colours: none on the mesh");
+                }
+                else
+                {
+                    Vector4 min = new Vector4(float.MaxValue, float.MaxValue, float.MaxValue, float.MaxValue);
+                    Vector4 max = new Vector4(float.MinValue, float.MinValue, float.MinValue, float.MinValue);
+                    foreach (var c in colours)
+                    {
+                        min = Vector4.Min(min, c);
+                        max = Vector4.Max(max, c);
+                    }
+                    Debug.Log($"{Tag} [face] vertex colours: {colours.Length} entries, "
+                              + $"r {min.x:F3}-{max.x:F3} g {min.y:F3}-{max.y:F3} "
+                              + $"b {min.z:F3}-{max.z:F3} a {min.w:F3}-{max.w:F3}");
+                }
+            }
+
+            foreach (var material in renderer.sharedMaterials)
+            {
+                if (material == null) continue;
+                Debug.Log($"{Tag} [face] material '{material.name}' shader "
+                          + $"'{(material.shader != null ? material.shader.name : "<none>")}'");
+
+                foreach (string property in material.GetTexturePropertyNames())
+                {
+                    var texture = material.GetTexture(property);
+                    Debug.Log($"{Tag} [face]   texture {property} = "
+                              + $"{(texture == null ? "<null>" : $"'{texture.name}' {texture.width}x{texture.height}")}");
+                }
+
+                var shader = material.shader;
+                if (shader == null) continue;
+                int count = ShaderUtil.GetPropertyCount(shader);
+                for (int i = 0; i < count; i++)
+                {
+                    var type = ShaderUtil.GetPropertyType(shader, i);
+                    string property = ShaderUtil.GetPropertyName(shader, i);
+                    if (type == ShaderUtil.ShaderPropertyType.Float
+                        || type == ShaderUtil.ShaderPropertyType.Range)
+                    {
+                        Debug.Log($"{Tag} [face]   float {property} = {material.GetFloat(property):F6}");
+                    }
+                    else if (type == ShaderUtil.ShaderPropertyType.Color)
+                    {
+                        var colour = material.GetColor(property);
+                        Debug.Log($"{Tag} [face]   colour {property} = "
+                                  + $"{colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3}");
+                    }
+                }
+            }
+        }
+    }
+
     private static void DumpMaterials(GameObject root, string stem)
     {
         var renderers = root.GetComponentsInChildren<Renderer>(true);
