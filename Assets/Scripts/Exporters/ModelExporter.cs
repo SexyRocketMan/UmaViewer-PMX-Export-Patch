@@ -658,6 +658,10 @@ public class ModelExporter
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
         Number("face_shadow_length", "_faceShadowLength");
+        // the alpha that gates the region path. In the game it is *driven* - FaceDrivenKeyTarget binds it to
+        // a Shade_Ctrl morph - so a static export can only carry its rest value; carrying it means a material
+        // that does set it renders its regions without anyone forcing the value.
+        Number("face_shadow_alpha", "_faceShadowAlpha");
         Tint("face_shadow_color", "_faceShadowColor");
         // the two strengths the region gates compare `factor >= 1 - strength` against: named for exactly
         // that role, and 0.775 makes a threshold the factor can actually cross

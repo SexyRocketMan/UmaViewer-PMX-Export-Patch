@@ -110,7 +110,19 @@ def scene_setup(args, mesh, armature):
     bpy.context.scene.world = world
 
     facing = facing_direction(armature)
-    if args.light_from == "front":
+    explicit = None
+    if getattr(args, "light_direction", ""):
+        parts = [float(v) for v in args.light_direction.split(",")]
+        if len(parts) == 3:
+            explicit = Vector(parts).normalized()
+            print(f"   light direction given explicitly: {tuple(round(v, 4) for v in explicit)} (travels along)")
+        else:
+            print(f"   !! --light-direction wants three numbers, got {args.light_direction!r}")
+    if explicit is not None:
+        # the sun is aimed by pointing it at the target, so its travel direction is target - location; to
+        # travel along the given vector the light sits on the opposite side
+        light_direction = -explicit
+    elif args.light_from == "front":
         light_direction = facing
     elif args.light_from == "upper-left":
         light_direction = (facing + Vector((0.7, 0.0, 0.7))).normalized()
@@ -122,6 +134,13 @@ def scene_setup(args, mesh, armature):
     # shader cannot be handed one), so the shading and the cheek band agree on where the light is.
     light_data = bpy.data.lights.new("AngleKey", type="SUN")
     light_data.energy = args.light_energy
+    if getattr(args, "light_colour", ""):
+        parts = [float(v) for v in args.light_colour.split(",")]
+        if len(parts) == 3:
+            light_data.color = tuple(parts)
+            print(f"   light colour set to {tuple(round(v, 3) for v in parts)}")
+        else:
+            print(f"   !! --light-colour wants three numbers, got {args.light_colour!r}")
     light_data.angle = 0.02
     light = bpy.data.objects.new("AngleKey", light_data)
     light.location = target + light_direction * distance
@@ -257,6 +276,9 @@ def main():
                         help="where the key light comes from; upper-right puts the cheek shadow on the side the "
                              "+45 and -45 orbits look at, which is what the game's own shots show")
     parser.add_argument("--world", type=float, default=0.16)
+    parser.add_argument("--light-colour", default="",
+                        help="the sun's colour as r,g,b, to match a scene light the game's shader would "
+                             "multiply the diffuse by. Empty leaves Blender's white")
     parser.add_argument("--light-energy", type=float, default=3.0,
                         help="sun lamp strength; the game's key light is brighter than a default scene light")
     parser.add_argument("--size", type=int, default=900)
@@ -270,6 +292,10 @@ def main():
                         help="NAME=VALUE, repeatable: set every shape key whose name contains NAME (case "
                              "insensitive) to VALUE, e.g. --morph Mouth=1.0 --morph Eye=0")
     parser.add_argument("--list-morphs", action="store_true", help="print the model's shape keys and stop")
+    parser.add_argument("--light-direction", default="",
+                        help="the direction the light travels, as x,y,z in Blender's frame, overriding "
+                             "--light-from entirely. The viewer prints its own light's travelling direction "
+                             "in Unity's frame; blender = (ux, -uz, uy) converts it (see the measured import map)")
     parser.add_argument("--light-elevation", type=float, default=35.0,
                         help="degrees above the horizon for the grid's sun. The viewer's own light sits at 70, "
                              "and comparing the two at different elevations compares two different pictures: at a "

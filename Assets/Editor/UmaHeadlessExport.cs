@@ -872,7 +872,15 @@ public static class UmaHeadlessExport
                 : Quaternion.Euler(0f, (float)azimuth, 0f) * s_lightRestRotation;
             turned++;
             Debug.Log($"{Tag} turned the directional light '{light.name}' to azimuth {azimuth:+0;-0;0} degrees "
-                      + $"(elevation {light.transform.eulerAngles.x:F0}, at {light.transform.eulerAngles.y:F0})");
+                      + $"(elevation {light.transform.eulerAngles.x:F0}, at {light.transform.eulerAngles.y:F0})"
+                      // the vector itself, so the Blender tool can be given the same light: Unity's directional
+                      // light travels along its own forward
+                      + $", travelling along ({light.transform.forward.x:F4}, "
+                      + $"{light.transform.forward.y:F4}, {light.transform.forward.z:F4})"
+                      // the colour and intensity too: the game's pixel program multiplies the diffuse by a
+                      // global that carries the light colour, so a warm scene light tints the face warm
+                      + $", colour ({light.color.r:F3}, {light.color.g:F3}, {light.color.b:F3}) "
+                      + $"intensity {light.intensity:F3}");
         }
 
         // and the Nars face shader's own control, for a model that does use it
