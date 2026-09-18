@@ -223,6 +223,10 @@ def main():
                         help="'lo,hi': also write both sides with that luminance window stretched to full "
                              "range, which is how faint shading structure is compared")
     parser.add_argument("--name", default="game_face", help="file name stem, also the game shots' stem")
+    parser.add_argument("--morph", action="append", default=[],
+                        help="NAME=VALUE, repeatable: set every shape key whose name contains NAME (case "
+                             "insensitive) to VALUE, e.g. --morph Mouth=1.0 --morph Eye=0")
+    parser.add_argument("--list-morphs", action="store_true", help="print the model's shape keys and stop")
     parser.add_argument("--grid", default="",
                         help="'azimuths': render the camera yaws against each sun azimuth and tile them into "
                              "grid.png, which is how the diff/shad transition becomes visible")
@@ -250,6 +254,28 @@ def main():
         return
 
     camera, target, distance, facing, light = scene_setup(args, mesh, armature)
+
+    if args.list_morphs:
+        for key in mesh.data.shape_keys.key_blocks if mesh.data.shape_keys else []:
+            print(f"   morph {key.name!r} = {key.value:g}")
+        return
+
+    for entry in args.morph:
+        name, _, raw = entry.partition("=")
+        try:
+            value = float(raw)
+        except ValueError:
+            print(f"   !! --morph {entry}: {raw!r} is not a number")
+            continue
+        needle = name.strip().lower()
+        touched = 0
+        for key in (mesh.data.shape_keys.key_blocks if mesh.data.shape_keys else []):
+            if needle in key.name.lower():
+                key.value = value
+                touched += 1
+                print(f"   morph {key.name!r} set to {value:g}")
+        if touched == 0:
+            print(f"   !! no shape key matched {name!r} - use --list-morphs to see them")
 
     if args.apply_shader:
         # after the scene is built: the addon's cheek test reads the scene's sun lamp for its light direction,
