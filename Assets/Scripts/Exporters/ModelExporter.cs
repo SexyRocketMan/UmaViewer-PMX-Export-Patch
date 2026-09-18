@@ -656,11 +656,31 @@ public class ModelExporter
         // the raw vertex normal rather than a normalised one.
         Number("cylinder_blend", "_CylinderBlend");
         Number("normalize_normal", "_NormalizeNormal");
-        Number("face_shadow_alpha", "_faceShadowAlpha");
         Number("face_shadow_end_y", "_faceShadowEndY");
         Number("face_shadow_length", "_faceShadowLength");
         Number("vertex_color_toon_power", "_VertexColorToonPower");
         Vector("original_light", "_OriginalDirectionalLightDir");
+
+        // The region colours, and they are per character: the viewer sets all twelve from the character's own
+        // colour data rows at runtime (UmaContainerCharacter.SetMaskColor), so an export that omits them leaves the
+        // region path with nothing to switch between. Six for the surface and six for the toon side, R/G/B in
+        // pairs, matching the six colour constants the game's pixel program uses.
+        //
+        // Note that _faceShadowAlpha is deliberately *not* exported as a material value: it is a driven shader
+        // property of the facial driven-key system (Gallop/FaceDrivenKeyTarget binds it to a morph named
+        // "Shade_Ctrl"), so its value changes with the expression rather than with the material.
+        Tint("mask_r1", "_MaskColorR1");
+        Tint("mask_r2", "_MaskColorR2");
+        Tint("mask_g1", "_MaskColorG1");
+        Tint("mask_g2", "_MaskColorG2");
+        Tint("mask_b1", "_MaskColorB1");
+        Tint("mask_b2", "_MaskColorB2");
+        Tint("mask_toon_r1", "_MaskToonColorR1");
+        Tint("mask_toon_r2", "_MaskToonColorR2");
+        Tint("mask_toon_g1", "_MaskToonColorG1");
+        Tint("mask_toon_g2", "_MaskToonColorG2");
+        Tint("mask_toon_b1", "_MaskToonColorB1");
+        Tint("mask_toon_b2", "_MaskToonColorB2");
 
         // the maps an MMD material has no field for, by name so the addon does not have to guess file names
         Map("triple", "_TripleMaskMap");
