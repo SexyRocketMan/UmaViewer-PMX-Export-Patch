@@ -1127,14 +1127,15 @@ public static class UmaHeadlessExport
                     continue;
                 }
                 var colour = new Color(components[0], components[1], components[2], components[3]);
+                Color previous = Shader.GetGlobalColor(name);
                 applied.Add(new GlobalOverride
                 {
-                    Name = name, IsColour = true, Colour = Shader.GetGlobalColor(name), Value = 0f
+                    Name = name, IsColour = true, Colour = previous, Value = 0f
                 });
                 Shader.SetGlobalColor(name, colour);
                 Debug.Log($"{Tag} -umaShotGlobal: '{name}' colour set to "
-                          + $"{colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3} "
-                          + $"(was {Shader.GetGlobalColor(name)})");
+                          + $"{colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3}"
+                          + $" (was {previous.r:F3},{previous.g:F3},{previous.b:F3},{previous.a:F3})");
             }
             else
             {
