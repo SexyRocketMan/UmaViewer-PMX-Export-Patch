@@ -1,0 +1,5 @@
+# scratch output for the game rip pipeline - extracted bundles are not ours to redistribute
+game_shaders/
+bin/
+obj/
+sqlite3mc_x64.dll
