@@ -19,6 +19,7 @@ param(
     [string[]]$Morph = @(),
     [double]$LightEnergy = 2.0,
     [int]$Size = 440,
+    [int]$Subdivide = 0,
     [string]$Blender = "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 )
 
@@ -35,6 +36,7 @@ foreach ($mode in @(@("legacy", "--legacy"), @("new", "--new-face"))) {
                    "--pmx", $Pmx, "--out-dir", (Join-Path $OutDir $name), "--yaws", $Yaws,
                    "--apply-shader", $flag, "--light-energy", $LightEnergy, "--size", $Size,
                    "--grid", $Azimuths) + $morphArgs
+    if ($Subdivide -gt 0) { $arguments += @("--subdivide", $Subdivide) }
     Write-Host "--- $name"
     & $Blender @arguments 2>&1 | Select-String -Pattern "morph |legacy shading|Nars face|montage" | ForEach-Object { "    $($_.Line)" }
 }

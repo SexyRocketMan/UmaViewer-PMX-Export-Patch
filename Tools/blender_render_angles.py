@@ -204,6 +204,8 @@ def main():
     parser.add_argument("--apply-shader", action="store_true")
     parser.add_argument("--legacy", action="store_true",
                         help="apply the shader with the fork's face work switched off, i.e. as upstream shades it")
+    parser.add_argument("--subdivide", type=int, default=0,
+                        help="SIMPLE subdivision level for shading: no vertex moves, the boundary just gets more triangles to cross")
     parser.add_argument("--new-face", action="store_true",
                         help="apply the fork's face shading (legacy is the addon's default now, so this is what "
                              "has to be asked for explicitly)")
@@ -285,6 +287,8 @@ def main():
         mesh.select_set(True)
         bpy.context.view_layer.objects.active = mesh
         kwargs = {}
+        if args.subdivide:
+            kwargs["shade_subdivide"] = args.subdivide
         if args.legacy:
             kwargs["legacy_shading"] = True
         elif args.new_face:
