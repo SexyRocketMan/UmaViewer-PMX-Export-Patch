@@ -126,6 +126,8 @@ public static class UmaHeadlessExport
         // several yaws in one run: "-umaShotYaw 0,45,-45" writes one png per angle, which is what shading work
         // is judged on - the same view under different light directions
         public string ShotYaws = "";
+        // azimuths for the face light, in degrees: the Nars face shader shades with _ViewDirX/_ViewDirY
+        public string ShotAzimuths = "";
         public bool ShotTransparent;
         public bool ShotOnly;
 
@@ -174,6 +176,7 @@ public static class UmaHeadlessExport
                     case "-umaShotHeight": options.ShotHeight = int.Parse(Next()); break;
                     case "-umaShotYaw": options.ShotYaw = double.Parse(Next()); break;
                     case "-umaShotYaws": options.ShotYaws = Next(); break;
+                    case "-umaShotAzimuths": options.ShotAzimuths = Next(); break;
                     case "-umaShotTransparent": options.ShotTransparent = true; break;
                     case "-umaShotOnly": options.ShotOnly = true; break;
                     default: break; // ignore everything else Unity/the shell passes through
@@ -499,23 +502,35 @@ public static class UmaHeadlessExport
                     string shotPath = Path.GetFullPath(options.Screenshot);
                     Directory.CreateDirectory(Path.GetDirectoryName(shotPath));
                     double[] yaws = ParseShotYaws(options.ShotYaws, options.ShotYaw);
+                    // the viewer's face shading reads its light direction from the materials' _ViewDirX/_ViewDirY,
+                    // so a grid steps those instead of moving a scene light
+                    double[] azimuths = ParseShotYaws(options.ShotAzimuths, 0.0);
                     string baseName = Path.GetFileNameWithoutExtension(shotPath);
                     string extension = Path.GetExtension(shotPath);
                     string folder = Path.GetDirectoryName(shotPath);
-                    foreach (double yaw in yaws)
+                    foreach (double azimuth in azimuths)
                     {
-                        string path = yaws.Length == 1
-                            ? shotPath
-                            : Path.Combine(folder, $"{baseName}_yaw{yaw:+0;-0;0}{extension}");
-                        options.ShotYaw = yaw;
-                        string failure = CaptureGameScreenshot(options, path);
-                        if (failure != null)
+                        if (azimuths.Length > 1)
+                            ApplyLightAzimuth(azimuth);
+                        foreach (double yaw in yaws)
                         {
-                            Fail(failure);
-                            return;
+                            bool grid = yaws.Length * azimuths.Length > 1;
+                            string name = grid
+                                ? $"{baseName}_az{azimuth:+0;-0;0}_yaw{yaw:+0;-0;0}{extension}"
+                                : (yaws.Length == 1 ? shotPath
+                                                    : Path.Combine(folder, $"{baseName}_yaw{yaw:+0;-0;0}{extension}"));
+                            string path = grid ? Path.Combine(folder, name) : name;
+                            options.ShotYaw = yaw;
+                            string failure = CaptureGameScreenshot(options, path);
+                            if (failure != null)
+                            {
+                                Fail(failure);
+                                return;
+                            }
+                            Debug.Log($"{Tag} wrote {path} ({options.ShotView} view, {yaw:+0;-0;0} degrees"
+                                      + (azimuths.Length > 1 ? $", light {azimuth:+0;-0;0}" : "")
+                                      + (options.ShotTransparent ? ", transparent" : "") + ")");
                         }
-                        Debug.Log($"{Tag} wrote {path} ({options.ShotView} view, {yaw:+0;-0;0} degrees"
-                                  + (options.ShotTransparent ? ", transparent" : "") + ")");
                     }
                     if (options.ShotOnly)
                     {
@@ -768,6 +783,28 @@ public static class UmaHeadlessExport
             : "textureSet=none";
         return $"renderers={renderers.Length} slots={slots} textureless={textureless} "
                + $"noMainTexProp={noMainTexProperty} missingShader={missingShader} shaders={shaders.Count} {resolved}";
+    }
+
+    /// <summary>
+    /// Points the character's materials at a light azimuth, for the grid: the Nars face shader shades with its
+    /// view-rotated light direction, and _ViewDirX/_ViewDirY are what rotate it. Half a turn either way covers
+    /// the face from both sides.
+    /// </summary>
+    private static void ApplyLightAzimuth(double azimuth)
+    {
+        int applied = 0;
+        // every renderer in the scene: only the character's materials carry the property, so nothing else moves
+        foreach (Renderer renderer in UnityEngine.Object.FindObjectsByType<Renderer>(
+                     FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            foreach (Material material in renderer.materials)
+            {
+                if (material == null || !material.HasProperty("_ViewDirX")) continue;
+                material.SetFloat("_ViewDirX", (float)azimuth);
+                applied++;
+            }
+        }
+        Debug.Log($"{Tag} light azimuth {azimuth:+0;-0;0} degrees on {applied} material(s)");
     }
 
     /// <summary>
