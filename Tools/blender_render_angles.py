@@ -204,6 +204,9 @@ def main():
     parser.add_argument("--apply-shader", action="store_true")
     parser.add_argument("--legacy", action="store_true",
                         help="apply the shader with the fork's face work switched off, i.e. as upstream shades it")
+    parser.add_argument("--new-face", action="store_true",
+                        help="apply the fork's face shading (legacy is the addon's default now, so this is what "
+                             "has to be asked for explicitly)")
     parser.add_argument("--cheek-strength", type=float, default=None,
                         help="passed to the Shading operator when --apply-shader is used")
     parser.add_argument("--light-from", default="upper-right",
@@ -258,6 +261,8 @@ def main():
         kwargs = {}
         if args.legacy:
             kwargs["legacy_shading"] = True
+        elif args.new_face:
+            kwargs["legacy_shading"] = False
         if args.cheek_strength is not None:
             kwargs["cheek_shading_strength"] = args.cheek_strength
         print(f"== apply_shader({kwargs}) -> {bpy.ops.uma.apply_shader(**kwargs)}")
