@@ -1129,13 +1129,22 @@ public static class UmaHeadlessExport
                               + $"({mean.x:F4},{mean.y:F4},{mean.z:F4}) angles to mean -> "
                               + string.Join(" ", parts));
                 }
-                    float blueSum = 0f;
-                    foreach (var c in colours) blueSum += c.b;
+                    Vector4 colourTotal = Vector4.zero;
+                    foreach (var c in colours) colourTotal += (Vector4)c;
+                    Vector4 meanColour = colourTotal / colours.Length;
                     Debug.Log($"{Tag} [face] vertex colours: {colours.Length} entries, "
                               + $"r {min.x:F3}-{max.x:F3} g {min.y:F3}-{max.y:F3} "
-                              + $"b {min.z:F3}-{max.z:F3} a {min.w:F3}-{max.w:F3}, b mean {blueSum / colours.Length:F4}");
+                              + $"b {min.z:F3}-{max.z:F3} a {min.w:F3}-{max.w:F3}");
+                    // the four means separately: the export packs this colour into the pmx's third
+                    // extra uv as (r,g,b,a), so which channel is the blue is a question of order,
+                    // and r and b measure close enough on this model that blue's mean alone cannot
+                    // tell them apart
+                    Debug.Log($"{Tag} [face] colour channel means: r {meanColour.x:F4} g {meanColour.y:F4} "
+                              + $"b {meanColour.z:F4} a {meanColour.w:F4}");
                 }
             }
+
+            DumpMeshArrays(renderer, mesh, root);
 
             foreach (var material in renderer.sharedMaterials)
             {
@@ -1176,6 +1185,74 @@ public static class UmaHeadlessExport
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Writes the arrays the exporter reads for one renderer, so the pmx it produced can be compared
+    /// against the game's own data vertex by vertex rather than through a histogram. The positions are
+    /// written in exactly the space the exporter writes them in
+    /// (root.InverseTransformPoint(renderer.transform.TransformPoint(baked.vertices[i]))), which makes
+    /// the pmx's own order a valid alignment for the rest.
+    /// </summary>
+    private static void DumpMeshArrays(SkinnedMeshRenderer renderer, Mesh mesh, GameObject root)
+    {
+        string exportPath = SessionState.GetString(KeyOutPath, "");
+        if (string.IsNullOrEmpty(exportPath)) return;
+
+        var baked = new Mesh();
+        renderer.BakeMesh(baked, true);
+        var lines = new List<string>
+        {
+            $"renderer {renderer.name}",
+            $"mesh {mesh.name}",
+            $"isReadable {mesh.isReadable}",
+            $"vertexCount {mesh.vertexCount}",
+            $"bakedVertexCount {baked.vertexCount}",
+            $"subMeshCount {mesh.subMeshCount}",
+            $"rootWorldToLocal {MatrixText(root.transform.worldToLocalMatrix)}",
+            $"rendererLocalToWorld {MatrixText(renderer.transform.localToWorldMatrix)}",
+        };
+
+        var normals = mesh.normals;
+        var bakedNormals = baked.normals;
+        var colours = mesh.colors;
+        var uv = mesh.uv;
+        var uv2 = mesh.uv2;
+        var uv3 = mesh.uv3;
+
+        lines.Add($"positions {mesh.vertexCount}");
+        for (int i = 0; i < mesh.vertexCount; i++)
+        {
+            var p = root.transform.InverseTransformPoint(renderer.transform.TransformPoint(baked.vertices[i]));
+            lines.Add($"{p.x:R} {p.y:R} {p.z:R}");
+        }
+
+        lines.Add($"normals {normals.Length}");
+        foreach (var n in normals) lines.Add($"{n.x:R} {n.y:R} {n.z:R}");
+        lines.Add($"bakedNormals {bakedNormals.Length}");
+        foreach (var n in bakedNormals) lines.Add($"{n.x:R} {n.y:R} {n.z:R}");
+
+        lines.Add($"colours {colours.Length}");
+        foreach (var c in colours) lines.Add($"{c.r:R} {c.g:R} {c.b:R} {c.a:R}");
+        lines.Add($"uv {uv.Length}");
+        foreach (var t in uv) lines.Add($"{t.x:R} {t.y:R}");
+        lines.Add($"uv2 {uv2.Length}");
+        foreach (var t in uv2) lines.Add($"{t.x:R} {t.y:R}");
+        lines.Add($"uv3 {uv3.Length}");
+        foreach (var t in uv3) lines.Add($"{t.x:R} {t.y:R}");
+
+        string dumpPath = exportPath + ".mesh.txt";
+        File.AppendAllLines(dumpPath, lines);
+        Debug.Log($"{Tag} [face] wrote {lines.Count} lines of mesh arrays to {dumpPath}");
+    }
+
+    private static string MatrixText(Matrix4x4 m)
+    {
+        var parts = new List<string>(16);
+        for (int row = 0; row < 4; row++)
+            for (int column = 0; column < 4; column++)
+                parts.Add(m[row, column].ToString("R"));
+        return string.Join(" ", parts);
     }
 
     private static void DumpMaterials(GameObject root, string stem)
