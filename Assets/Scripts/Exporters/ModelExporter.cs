@@ -1,4 +1,4 @@
-﻿using Gallop;
+using Gallop;
 using LibMMD.Material;
 using LibMMD.Model;
 using LibMMD.Reader;
@@ -652,8 +652,12 @@ public class ModelExporter
 
         // what the game's face shader needs and an MMD material has no field for. _faceShadow* gates the cheek and
         // nose regions, so without them the addon cannot tell a character whose regions are on from one whose are
-        // off; _CylinderBlend is 0 on the face but 0.25 for hair and eyes; _NormalizeNormal 0 means the game uses
-        // the raw vertex normal rather than a normalised one.
+        // off; _NormalizeNormal 0 means the game uses the raw vertex normal rather than a normalised one.
+        //
+        // _CylinderBlend is read from the *live* material rather than the shipped asset, which matters: the asset
+        // stores 0 on the face while the viewer sets it to 0.25 for the face, hair and eye keywords as it loads
+        // them (UmaContainerCharacter.cs:856,861,865,933), so the value the viewer actually renders with - and the
+        // one a match has to carry - is 0.25.
         Number("cylinder_blend", "_CylinderBlend");
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
