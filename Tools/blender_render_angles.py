@@ -37,14 +37,19 @@ UMA_ADDON = "bl_ext.user_default.uma_addon"
 # 0.60 it is 140 against 150. That 51-level gap is what both handoff documents called the largest
 # unexplained difference in this project; it was the framing.
 # The other three views have not been checked this way.
-# Calibrated against the viewer's own view distances. Matching the visible extent at the subject's depth is
-#     ours = viewer_nominal * (H_viewer / H_blender) * tan(fov_viewer / 2) / tan(19.8deg)
-# and the viewer's shot renders through the editor's projection rather than the 39.6 degrees it sets - the
-# note above calls it "about twice as wide" - while its model measures 2.92 units tall against this tool's
-# 1.5994. The product is 4.19, which predicts 0.63 for the face against the 0.60 that was measured by
-# rendering four candidate distances and tiling them against the viewer's shot. The face value is measured;
-# the other three follow from the same camera and projection and have not been checked individually.
-VIEW_DISTANCE = {"face": 0.60, "head": 1.17, "upper": 3.35, "full": 7.96}
+# The face factor is measured, not tuned by eye. With the facial shadow implemented, the change between an
+#     alpha-off and an alpha-on render is a clean mask of the face in both renderers, so its area as a fraction
+#     of the frame is a scale measure that needs no background or skin test:
+#         ours at 0.60   3.36% of the frame
+#         ours at 0.40   8.27%
+#         viewer         9.78%
+#     0.40 is within 15% of the viewer; 0.60 is three times out, and 0.30 (the value this file used to carry)
+#     was tighter still. An earlier attempt read a row of framings by eye and concluded 0.60; that is too
+#     coarse an instrument for this and the mask area is not.
+#     The viewer's own nominal face distance is 0.15 of *its* model height, so the calibration constant is
+#     [measured face factor] / 0.15. The other three view distances follow from the same camera and
+#     projection: 0.28, 0.80 and 1.90 times that constant. Only the face one is measured.
+VIEW_DISTANCE = {"face": 0.40, "head": 0.75, "upper": 2.14, "full": 5.07}
 VIEW_LENS = 50.0
 
 
