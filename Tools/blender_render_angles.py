@@ -202,6 +202,8 @@ def main():
     parser.add_argument("--yaws", default="0,45,-45", help="comma separated camera angles")
     parser.add_argument("--view", default="face", choices=list(VIEW_DISTANCE))
     parser.add_argument("--apply-shader", action="store_true")
+    parser.add_argument("--no-cylinder-blend", action="store_true",
+                        help="apply the game shading without the cylinder normal blend, to isolate its effect")
     parser.add_argument("--legacy", action="store_true",
                         help="apply the shader with the fork's face work switched off, i.e. as upstream shades it")
     parser.add_argument("--subdivide", type=int, default=0,
@@ -293,6 +295,8 @@ def main():
             kwargs["legacy_shading"] = True
         elif args.new_face:
             kwargs["legacy_shading"] = False
+        if getattr(args, "no_cylinder_blend", False):
+            kwargs["game_cylinder_blend"] = False
         if args.cheek_strength is not None:
             kwargs["cheek_shading_strength"] = args.cheek_strength
         print(f"== apply_shader({kwargs}) -> {bpy.ops.uma.apply_shader(**kwargs)}")
