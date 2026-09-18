@@ -790,10 +790,32 @@ public static class UmaHeadlessExport
     /// view-rotated light direction, and _ViewDirX/_ViewDirY are what rotate it. Half a turn either way covers
     /// the face from both sides.
     /// </summary>
+    private static Quaternion s_lightRestRotation;
+    private static bool s_lightRestCaptured;
+
     private static void ApplyLightAzimuth(double azimuth)
     {
+        // The scene's directional light is what the character's shading follows, so that is what turns. The
+        // first call remembers where it started, and every azimuth is measured from there - so azimuth 0 gives
+        // back exactly the viewer's own default lighting.
+        int turned = 0;
+        foreach (Light light in UnityEngine.Object.FindObjectsByType<Light>(
+                     FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (light.type != LightType.Directional) continue;
+            if (!s_lightRestCaptured)
+            {
+                s_lightRestRotation = light.transform.rotation;
+                s_lightRestCaptured = true;
+            }
+            light.transform.rotation = s_lightRestRotation * Quaternion.Euler(0f, (float)azimuth, 0f);
+            turned++;
+            Debug.Log($"{Tag} turned the directional light '{light.name}' to azimuth {azimuth:+0;-0;0} degrees "
+                      + $"(elevation {light.transform.eulerAngles.x:F0}, at {light.transform.eulerAngles.y:F0})");
+        }
+
+        // and the Nars face shader's own control, for a model that does use it
         int applied = 0;
-        // every renderer in the scene: only the character's materials carry the property, so nothing else moves
         foreach (Renderer renderer in UnityEngine.Object.FindObjectsByType<Renderer>(
                      FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
@@ -804,7 +826,11 @@ public static class UmaHeadlessExport
                 applied++;
             }
         }
-        Debug.Log($"{Tag} light azimuth {azimuth:+0;-0;0} degrees on {applied} material(s)");
+        if (turned == 0)
+            Debug.LogWarning($"{Tag} no directional light in the scene to turn; _ViewDirX set on {applied} "
+                             + "material(s) instead");
+        else if (applied > 0)
+            Debug.Log($"{Tag} and _ViewDirX on {applied} material(s)");
     }
 
     /// <summary>
