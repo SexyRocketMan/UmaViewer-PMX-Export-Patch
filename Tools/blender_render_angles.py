@@ -202,6 +202,8 @@ def main():
     parser.add_argument("--yaws", default="0,45,-45", help="comma separated camera angles")
     parser.add_argument("--view", default="face", choices=list(VIEW_DISTANCE))
     parser.add_argument("--apply-shader", action="store_true")
+    parser.add_argument("--legacy", action="store_true",
+                        help="apply the shader with the fork's face work switched off, i.e. as upstream shades it")
     parser.add_argument("--cheek-strength", type=float, default=None,
                         help="passed to the Shading operator when --apply-shader is used")
     parser.add_argument("--light-from", default="upper-right",
@@ -254,6 +256,8 @@ def main():
         mesh.select_set(True)
         bpy.context.view_layer.objects.active = mesh
         kwargs = {}
+        if args.legacy:
+            kwargs["legacy_shading"] = True
         if args.cheek_strength is not None:
             kwargs["cheek_shading_strength"] = args.cheek_strength
         print(f"== apply_shader({kwargs}) -> {bpy.ops.uma.apply_shader(**kwargs)}")
