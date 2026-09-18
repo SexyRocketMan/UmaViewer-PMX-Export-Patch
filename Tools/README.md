@@ -234,6 +234,11 @@ aspect rather than the square target, so it comes out about twice as wide as the
 operator, and the camera orbits a fixed scene exactly as the viewer's does. The lighting cannot be matched
 exactly - the game has its own sun and tone mapping - so compare the *shape* of the shading, not the colour.
 
+`--window 0.66,0.90` writes a second pair of images per angle with that luminance window stretched to full
+range. On skin tones a shading difference of a couple of levels is invisible until it is stretched, which is
+how the game's own face shading was read: with the window it clearly shows a painted band along the cheek and
+jaw, plus a few faceted patches where its mask meets the low-poly mesh.
+
 ### Checking where the bones point
 
 A PMX bone's tail is either a child index or an offset, and head -> tail is what Blender draws. The uma rig
