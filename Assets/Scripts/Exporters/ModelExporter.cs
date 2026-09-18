@@ -1,4 +1,4 @@
-using Gallop;
+﻿using Gallop;
 using LibMMD.Material;
 using LibMMD.Model;
 using LibMMD.Reader;
@@ -608,6 +608,16 @@ public class ModelExporter
                 colour.b.ToString("0.###", CultureInfo.InvariantCulture),
                 colour.a.ToString("0.###", CultureInfo.InvariantCulture)));
         }
+        void Vector(string key, string property)
+        {
+            if (!material.HasProperty(property)) return;
+            Vector4 value = material.GetVector(property);
+            comment.Append(' ').Append(key).Append('=').Append(string.Join(",",
+                value.x.ToString("0.####", CultureInfo.InvariantCulture),
+                value.y.ToString("0.####", CultureInfo.InvariantCulture),
+                value.z.ToString("0.####", CultureInfo.InvariantCulture),
+                value.w.ToString("0.####", CultureInfo.InvariantCulture)));
+        }
         void Map(string key, string property)
         {
             if (!material.HasProperty(property)) return;
@@ -639,6 +649,18 @@ public class ModelExporter
         Number("emissive_rim_power", "_EmissiveRimPower");
         Number("emissive_rim_intensity", "_EmissiveRimIntensity");
         Number("use_option_mask", "_UseOptionMaskMap");
+
+        // what the game's face shader needs and an MMD material has no field for. _faceShadow* gates the cheek and
+        // nose regions, so without them the addon cannot tell a character whose regions are on from one whose are
+        // off; _CylinderBlend is 0 on the face but 0.25 for hair and eyes; _NormalizeNormal 0 means the game uses
+        // the raw vertex normal rather than a normalised one.
+        Number("cylinder_blend", "_CylinderBlend");
+        Number("normalize_normal", "_NormalizeNormal");
+        Number("face_shadow_alpha", "_faceShadowAlpha");
+        Number("face_shadow_end_y", "_faceShadowEndY");
+        Number("face_shadow_length", "_faceShadowLength");
+        Number("vertex_color_toon_power", "_VertexColorToonPower");
+        Vector("original_light", "_OriginalDirectionalLightDir");
 
         // the maps an MMD material has no field for, by name so the addon does not have to guess file names
         Map("triple", "_TripleMaskMap");
