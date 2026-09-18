@@ -225,10 +225,18 @@ images are in `umaviewer_exports\shadercheck\facetoggle\` and `...\face_light\`.
   agreeing on the same maths.
 * Cygames Tech Conference 2021, `ウマ娘 プリティーダービー 3DCGキャラクター事例` - first-party: the head uses a
   detail mask for cheeks and nose, and before it "the shadow looked distorted and unnatural".
-* Two more game mechanisms we do **not** reproduce yet: a per-texel bias on the toon threshold from `_base`.R
-  (the shadow mask), and the cheek/nose detail mask in `_base`.G, which replaces N·L with a half-plane test in
-  the head's own forward/up frame. A face close-up of the game (`game_face.png`, from `-Screenshot`) shows the
-  result: no toon step crosses the face at all.
+* **The detail mask is now reproduced** (the addon's `Face shading from the base map's detail mask`): the base
+  texture's green channel sits at 0.5 over the face and at 0 on the hair and body, so it picks the face out,
+  and the shading normal there is replaced by the direction the character is looking. Measured at a grazing
+  light with two mouth morphs at 1.0: the face is flat and clean, where without it a gradient and patches
+  cross the cheeks (28% of the pixels differ at rest, 32% with the morphs) - the game's flat face in
+  `game_face.png` is now what Blender renders too.
+* **The red channel measured as a no-op**: the game biases its shade step per texel with it
+  (`base.red * halfLambert` against the toon step), but on character 1001 that channel is a binary mask and the
+  shipped `Uma Shader` group already gates its shading with it, so implementing the bias changes 0.0% of the
+  pixels. It is available as an option, off by default, for a model where the boundary really does cross it.
+* Still open: the game's per-texel cheek/nose *colour* override (a half-plane test against the light direction
+  in the head's frame) rather than a replaced normal, and the second normal set the outlines read.
 
 ## What still cannot be matched, and why
 
