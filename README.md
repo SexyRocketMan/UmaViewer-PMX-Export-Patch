@@ -103,9 +103,8 @@ tag `patch` · 2026-03-30 — the first release of this fork
   bone without one (finger tips, hair ends, the roll helpers) continues the segment leading into it. The head
   bone points up out of the neck instead of at the cheek offset it happened to be parented to first,
   `ShoulderRoll_L/R` and `ArmRoll_L/R` mirror each other instead of one of them pointing back at the neck, and
-  the eye bones keep pointing straight out of the face (MMD's convention for an eye bone - carried along the
-  chain they would look inward) - `pmx_inspect.py tails` asserts all of it, see
-  [Tools/README.md](Tools/README.md).
+  the eye bones and ankles point the way four known-good MMD models do (out of the face, and forward as well
+  as down towards the toes) - `pmx_inspect.py tails` asserts all of it, see [Tools/README.md](Tools/README.md).
 - **A screenshot of the game's own render**: `headless_export.ps1 -Screenshot <png> -ShotView face|head|upper|full`
   writes what the viewer draws, with its own lighting and post processing, so a Blender material or shading
   setup can be compared against the real thing instead of against memory. `-ShotOnly` takes the picture without

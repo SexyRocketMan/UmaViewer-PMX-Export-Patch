@@ -453,13 +453,21 @@ public class ModelExporter
             Transform child = bone.GetChild(i);
             if (bonelist.IndexOf(child) < 0) continue;
             if (child.name.Contains("_Handle")) continue;
-            Vector3 delta = child.position - bone.position;
-            if (delta.sqrMagnitude < 1e-10f) continue;
+            Transform candidate = child;
+            Vector3 delta = candidate.position - bone.position;
+            if (delta.sqrMagnitude < 1e-10f)
+            {
+                // look through a child sitting on the bone, the same way the tail itself does
+                candidate = PMXTailChild(child, bonelist, 0);
+                if (candidate == null) continue;
+                delta = candidate.position - bone.position;
+                if (delta.sqrMagnitude < 1e-10f) continue;
+            }
             float alignment = Vector3.Dot(delta.normalized, chain.normalized);
             if (alignment > bestAlignment)
             {
                 bestAlignment = alignment;
-                best = child;
+                best = candidate;
             }
         }
         return best;
@@ -469,16 +477,26 @@ public class ModelExporter
     /// The first child that describes a direction: one that is in the export, not a "_Handle" helper, and not
     /// sitting at the bone's own position. Children that were filtered out of the export (the Col_* colliders)
     /// and the "_Handle" helpers describe no direction at all.
+    ///
+    /// A child sitting exactly on the bone describes no direction either, but the chain can still continue
+    /// through it: the ankle's own children are the ankle offset and the IK handle, both exactly on the ankle,
+    /// and the toe that continues the foot hangs off the offset. Looking one level further in matches what a
+    /// known-good MMD model does with its ankle - measured on four of them, 足首 points down and forward
+    /// towards the toes, never straight down the way the knee segment arrives.
     /// </summary>
-    private static Transform PMXTailChild(Transform bone, List<Transform> bonelist)
+    private static Transform PMXTailChild(Transform bone, List<Transform> bonelist, int depth = 1)
     {
         for (int i = 0; i < bone.childCount; i++)
         {
             Transform child = bone.GetChild(i);
             if (bonelist.IndexOf(child) < 0) continue;
             if (child.name.Contains("_Handle")) continue;
-            if ((child.position - bone.position).sqrMagnitude < 1e-10f) continue;
-            return child;
+            if ((child.position - bone.position).sqrMagnitude > 1e-10f) return child;
+            if (depth > 0)
+            {
+                Transform deeper = PMXTailChild(child, bonelist, depth - 1);
+                if (deeper != null) return deeper;
+            }
         }
         return null;
     }

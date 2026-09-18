@@ -223,16 +223,27 @@ uv run Tools/pmx_inspect.py tails D:/out/1001_00.pmx
 It prints the direction of the bones a user notices (`--named`), each left/right pair's mirroring
 (`--pairs`, tolerated to `--mirror-tolerance` degrees, 5 by default) and exits non-zero when a pair is not
 mirrored, plus how many bones turn away from the segment leading into them - strands of hair and costume
-ribbons are expected there, a body chain bone is not. Measured on character 1001: 79 of 253 bones turn more
-than 5 degrees, and 73 of those are hair, mantle, ribbon, skirt and tail strands - the other six are the eye
-and eye-locator bones, which deliberately point out of the face instead of along the chain that arrives at
-them (see below).
+ribbons are expected there, a body chain bone is not. Measured on character 1001: 82 of 253 bones turn more
+than 5 degrees, 73 of them hair, mantle, ribbon, skirt and tail strands, six the eye and eye-locator bones and
+two the ankles, all of which are deliberate (see below). The leaf bones turn 2.70 degrees on average, the
+worst being the ankles at 44 degrees, which is the forward component spelled out next.
 
-The eye bones are the one place where the chain is the wrong answer. `Eye_L`/`Eye_R` and the locators that
-drive them hang off the head in the middle of the skull, so the segment leading into them runs up and out
-towards the temple: a tail along it makes a gaze rotation read as a roll, and the eyes look inward. MMD points
-an eye bone at the viewer, so those six bones take the head's own forward axis instead - measured on character
-1001 they come out as `(0.00, 0.00, -0.73)`, straight along the direction the model faces.
+The tail rule was checked against four known-good MMD models (`Appearance Miku_BDEF_mod-v03`, `GUMIβ_V3`,
+`Tda Luka Admin`, `Casual Miku`): they agree with this export on the head and neck pointing up, the limbs and
+thighs pointing down and out, and they differ in two places that were then fixed here:
+
+* **Eye bones** point forward, not along the chain that arrives at them. `Eye_L`/`Eye_R` and the locators that
+  drive them hang off the head in the middle of the skull, so the segment leading into them runs up and out
+  towards the temple: a tail along it makes a gaze rotation read as a roll, and the eyes look inward. Every
+  reference model points 両目 (both eyes) at exactly `(0, 0, -1)` - straight out of the face - and `目.L` at a
+  slight outward tilt; this export now gives `(0.00, 0.00, -0.73)` for the eyes and a slight outward tilt for
+  the locators.
+* **Ankles** point forward as well as down, towards the toes. The uma rig's own ankle children are the ankle
+  offset and the IK handle, both exactly on the ankle, with the toe hanging off the offset - so the search for
+  a tail now looks through a co-located child one level, which lands the ankle on the toe. Measured after the
+  change: `(0.00, -0.71, -0.70)`, inside the range the four reference models show (`-0.31` to `-0.88` in z).
+  Before, it was `(0.00, -1.00, +0.07)`: straight down, the direction the knee segment arrives in, which no
+  reference model does.
 
 ### Known harmless warning
 
