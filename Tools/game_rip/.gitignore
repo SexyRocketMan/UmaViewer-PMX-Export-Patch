@@ -3,3 +3,5 @@ game_shaders/
 bin/
 obj/
 sqlite3mc_x64.dll
+dxbc_disasm/bin/
+dxbc_disasm/obj/
