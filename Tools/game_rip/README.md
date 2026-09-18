@@ -70,7 +70,47 @@ python find_toon_shaders.py          # every Gallop/3D/Chara shader with its pro
 python face_shader_and_material.py   # the face shaders, and the real mtl_chr1001_00_face values
 ```
 
+### Which compiled program is which variant
+
+The blob region holds one program per keyword combination, and two things about them are not readable
+from the typetree:
+
+- **The mapping.** Unity keeps compiled programs in each pass's `m_SubPrograms`, but for these baked
+  shaders that array is **empty** - there is nothing to index the region with. The mapping is in the
+  region itself: each container is preceded by a small record carrying the keywords that select it, in
+  plain ASCII (`_ADDITIONAL_LIGHTS`, `USE_MASK_COLOR`, ...). The record holds more than keywords - it
+  also names the constant buffers a variant binds (`Globals`, `UnityPerDraw`, `UnityPerMaterial`) and
+  sometimes material constants - so filter what you find against `m_ParsedForm.m_KeywordNames`.
+- **The texture register names.** The shipped containers have **no `RDEF` chunk** at all, so a
+  disassembly's `t0..tN` genuinely have no names in the bytecode. The names come from the shader's own
+  property table: `m_ParsedForm.m_PropInfo` lists properties in declaration order and Unity assigns
+  sampler units to the texture-typed ones in that order. The variant register counts are the check on
+  it - a variant that does not use a texture declares one fewer, *trailing*, register.
+
+```powershell
+python variant_map.py <bundle.unity3d> "Gallop/3D/Chara/ToonFace/TSER" <scratch dir>
+```
+
+Worked example, `Gallop/3D/Chara/ToonFace/TSER` (the shader the viewer's loaded face material carries):
+28 containers - 4 vertex programs, 12 full pixel variants, 12 small programs for the other passes. Its
+eight keyword names are `STEREO_INSTANCING_ON`, `UNITY_SINGLE_PASS_STEREO`, `STEREO_MULTIVIEW_ON`,
+`STEREO_CUBEMAP_RENDER_ON`, `_MAIN_LIGHT_SHADOWS`, `_ADDITIONAL_LIGHTS`, `USE_MASK_COLOR`,
+`_ADDITIONAL_LIGHT_SHADOWS`, and its texture properties in declaration order are `_MainTex`,
+`_TripleMaskMap`, `_OptionMaskMap`, `_ToonMap`, `_EnvMap`, `_DirtTex`, `_EmissiveTex`, `_MaskColorTex`
+= `t0..t7`. The register count agrees exactly: the plain variant declares `t0-t6` (all but the last,
+which only `USE_MASK_COLOR` uses) and that variant declares `t0-t7`.
+
+Two consequences worth knowing before reading a face program:
+
+- **`USE_MASK_COLOR` is what adds the eighth texture**, and it is a `multi_compile` keyword: an exported
+  material that does not enable it runs the *plain* variant, in which `_MaskColorTex` is never sampled.
+- The keyword a material reports is not necessarily a keyword of its shader. The face material's live
+  keyword set is `_USEOPTIONMASKMAP_ON`, which is **not in that list of eight at all** - it selects
+  nothing. The option mask is a *uniform* branch instead (`_UseOptionMaskMap` = 1, and
+  `_OptionMaskMap` bound to the character's `*_ctrl` texture, which is `t2`).
+
 ## 4. Finding which asset is which
+
 
 The names in the database are the key to everything: `3d/chara/head/chr1001_00/textures/tex_chr1001_00_face_diff`
 is a texture, `sourceresources/3d/chara/head/chr1001_00/materials/mtl_chr1001_00_face` is a material and its `d`

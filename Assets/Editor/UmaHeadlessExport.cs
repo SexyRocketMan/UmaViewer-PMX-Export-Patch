@@ -243,6 +243,7 @@ public static class UmaHeadlessExport
         SessionState.SetString(KeyOutPath, "");
         _runStartedUtc = DateTime.UtcNow;
         _playModeRetries = 0;
+        _faceDumped = false;
         CurrentStage = Stage.WaitPlayMode;
 
         Debug.Log($"{Tag} opening scene {options.ScenePath}");
@@ -665,9 +666,11 @@ public static class UmaHeadlessExport
                             ? SceneStem(SessionState.GetString(KeyPropName, ""))
                             : "";
                         if (options.DumpFace) DumpFacePipeline(container.gameObject, stem);
-                        if (!options.DumpMaterials) return;
-                        DumpMaterials(container.gameObject, stem);
-                        DumpShaderProperties(container.gameObject, stem);
+                        if (options.DumpMaterials)
+                        {
+                            DumpMaterials(container.gameObject, stem);
+                            DumpShaderProperties(container.gameObject, stem);
+                        }
                     }
 
                     Debug.Log($"{Tag} exporting to {exportPath}");
