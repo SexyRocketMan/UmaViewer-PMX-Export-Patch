@@ -92,11 +92,15 @@ def scene_setup(args, mesh, armature):
         light_direction = facing
     elif args.light_from == "upper-left":
         light_direction = (facing + Vector((0.7, 0.0, 0.7))).normalized()
+    elif args.light_from == "upper-right":
+        light_direction = (facing + Vector((-0.7, 0.0, 0.7))).normalized()
     else:
         light_direction = (facing + Vector((0.0, 0.0, 1.0))).normalized()
-    light_data = bpy.data.lights.new("AngleKey", type="AREA")
-    light_data.energy = (distance * 1.2) ** 2 * 90
-    light_data.size = distance * 0.6
+    # A SUN, not an area light: the addon's cheek test reads the scene's sun lamp for its light direction (a
+    # shader cannot be handed one), so the shading and the cheek band agree on where the light is.
+    light_data = bpy.data.lights.new("AngleKey", type="SUN")
+    light_data.energy = args.light_energy
+    light_data.angle = 0.02
     light = bpy.data.objects.new("AngleKey", light_data)
     light.location = target + light_direction * distance
     light.rotation_euler = (target - light.location).to_track_quat("-Z", "Y").to_euler()
@@ -170,8 +174,13 @@ def main():
     parser.add_argument("--apply-shader", action="store_true")
     parser.add_argument("--cheek-strength", type=float, default=None,
                         help="passed to the Shading operator when --apply-shader is used")
-    parser.add_argument("--light-from", default="upper-left", choices=["front", "upper", "upper-left"])
+    parser.add_argument("--light-from", default="upper-right",
+                        choices=["front", "upper", "upper-left", "upper-right"],
+                        help="where the key light comes from; upper-right puts the cheek shadow on the side the "
+                             "+45 and -45 orbits look at, which is what the game's own shots show")
     parser.add_argument("--world", type=float, default=0.16)
+    parser.add_argument("--light-energy", type=float, default=3.0,
+                        help="sun lamp strength; the game's key light is brighter than a default scene light")
     parser.add_argument("--size", type=int, default=900)
     parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--compare", default="", help="directory of game shots named '<name>_yaw<N>.png'")
@@ -202,7 +211,11 @@ def main():
         print("!! no mesh in that model")
         return
 
+    camera, target, distance, facing = scene_setup(args, mesh, armature)
+
     if args.apply_shader:
+        # after the scene is built: the addon's cheek test reads the scene's sun lamp for its light direction,
+        # so the light has to exist before Shading runs, otherwise the test falls back to its own guess
         for other in bpy.data.objects:
             other.select_set(False)
         mesh.select_set(True)
@@ -211,8 +224,6 @@ def main():
         if args.cheek_strength is not None:
             kwargs["cheek_shading_strength"] = args.cheek_strength
         print(f"== apply_shader({kwargs}) -> {bpy.ops.uma.apply_shader(**kwargs)}")
-
-    camera, target, distance, facing = scene_setup(args, mesh, armature)
     written = {}
     for yaw in yaws:
         # negated: the viewer's yaw turns its camera the other way round from a Blender Z rotation, and the
