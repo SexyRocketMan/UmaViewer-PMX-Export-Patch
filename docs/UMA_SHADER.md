@@ -227,10 +227,12 @@ images are in `umaviewer_exports\shadercheck\facetoggle\` and `...\face_light\`.
   detail mask for cheeks and nose, and before it "the shadow looked distorted and unnatural".
 * **The detail mask is now reproduced** (the addon's `Face shading from the base map's detail mask`): the base
   texture's green channel sits at 0.5 over the face and at 0 on the hair and body, so it picks the face out,
-  and the shading normal there is replaced by the direction the character is looking. Measured at a grazing
-  light with two mouth morphs at 1.0: the face is flat and clean, where without it a gradient and patches
-  cross the cheeks (28% of the pixels differ at rest, 32% with the morphs) - the game's flat face in
-  `game_face.png` is now what Blender renders too.
+  and the face and eyebrow vertices' shading normals are pointed where the character is looking. Measured at a
+  grazing light with two mouth morphs at 1.0: the face is flat and clean, where without it a gradient and
+  patches cross the cheeks (28% of the pixels differ at rest, 32% with the morphs) - the game's flat face in
+  `game_face.png` is now what Blender renders too. The direction lives in the mesh's custom normals, which
+  Blender keeps in the corner fan space and the armature deforms, so **the face follows the head bone**: a 45
+  degree head turn turns the sampled face normals 45.0 degrees, with no driver in the file to keep alive.
 * **The red channel measured as a no-op**: the game biases its shade step per texel with it
   (`base.red * halfLambert` against the toon step), but on character 1001 that channel is a binary mask and the
   shipped `Uma Shader` group already gates its shading with it, so implementing the bias changes 0.0% of the
