@@ -662,9 +662,11 @@ public class ModelExporter
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
         Number("face_shadow_length", "_faceShadowLength");
-        // the alpha that gates the region path. In the game it is *driven* - FaceDrivenKeyTarget binds it to
-        // a Shade_Ctrl morph - so a static export can only carry its rest value; carrying it means a material
-        // that does set it renders its regions without anyone forcing the value.
+        // the alpha that gates the region path. In the game it is *driven*: Gallop/FaceDrivenKeyTarget binds it,
+        // with no curve between them, to the X scale of a locator named "Shade_Ctrl" (BindProperty.LocatorPart.ScaX,
+        // Type Shader, PropertyName "_faceShadowAlpha"). That locator is neither a bone nor a morph in the exported
+        // skeleton - the export has no node by that name at all - so what a static pmx can carry is the rest value.
+        // Writing it means a character whose material does set the alpha renders its regions with nobody forcing it.
         Number("face_shadow_alpha", "_faceShadowAlpha");
         Tint("face_shadow_color", "_faceShadowColor");
         // the two strengths the region gates compare `factor >= 1 - strength` against: named for exactly
@@ -678,10 +680,9 @@ public class ModelExporter
         // colour data rows at runtime (UmaContainerCharacter.SetMaskColor), so an export that omits them leaves the
         // region path with nothing to switch between. Six for the surface and six for the toon side, R/G/B in
         // pairs, matching the six colour constants the game's pixel program uses.
-        //
-        // Note that _faceShadowAlpha is deliberately *not* exported as a material value: it is a driven shader
-        // property of the facial driven-key system (Gallop/FaceDrivenKeyTarget binds it to a morph named
-        // "Shade_Ctrl"), so its value changes with the expression rather than with the material.
+        // (The region's own gate, _faceShadowAlpha, is written above with the other face-shader values. It is a
+        // *driven* property of the facial driven-key system - Gallop/FaceDrivenKeyTarget binds it to the X scale
+        // of a locator named "Shade_Ctrl" - so what the export can carry is its rest value. See the note there.)
         Tint("mask_r1", "_MaskColorR1");
         Tint("mask_r2", "_MaskColorR2");
         Tint("mask_g1", "_MaskColorG1");
