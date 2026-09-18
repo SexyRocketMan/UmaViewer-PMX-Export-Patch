@@ -209,6 +209,10 @@ def main():
                              "_TripleMaskMap (*_base), the register the game's pixel program actually reads, "
                              "and 'toon' is _ToonMap (*_shad_c), the earlier reading. Empty uses the addon's "
                              "own default")
+    parser.add_argument("--isolate-game-step", action="store_true",
+                        help="zero the shipped node group's own metallic, highlight, rim, ambient and "
+                             "emission terms, leaving only the game's lit/shaded step - which is all the "
+                             "port reproduces. For measuring how much of the difference the group accounts for")
     parser.add_argument("--legacy", action="store_true",
                         help="apply the shader with the fork's face work switched off, i.e. as upstream shades it")
     parser.add_argument("--subdivide", type=int, default=0,
@@ -311,6 +315,29 @@ def main():
         if args.cheek_strength is not None:
             kwargs["cheek_shading_strength"] = args.cheek_strength
         print(f"== apply_shader({kwargs}) -> {bpy.ops.uma.apply_shader(**kwargs)}")
+
+        if getattr(args, "isolate_game_step", False):
+            # The game's face program does its own specular, rim and environment terms, and the port
+            # implements the lit/shaded step only and hands the result to the shipped node group, which
+            # then adds its own metallic, highlight, rim and ambient lighting on top. Zeroing those
+            # leaves the step's colour alone, which is what the port actually reproduces - so this shows
+            # how much of the difference between our face and the game's is the group rather than the port.
+            zeroed = []
+            for material in bpy.data.materials:
+                if not material.use_nodes or "face" not in material.name.lower():
+                    continue
+                for node in material.node_tree.nodes:
+                    if node.type != "GROUP" or not node.node_tree:
+                        continue
+                    for socket_name in ("Metallic Intensity", "Highlight Intensity",
+                                        "Rimlight Intensity", "Ambient Rimlight Intensity",
+                                        "Emission Intensity"):
+                        socket = node.inputs.get(socket_name)
+                        if socket is not None and socket.default_value:
+                            socket.default_value = 0.0
+                            zeroed.append(f"{material.name}:{socket_name}")
+            print(f"== isolated the game's step: zeroed {len(zeroed)} group input(s)"
+                  + (f", e.g. {zeroed[:3]}" if zeroed else ""))
     written = {}
     for yaw in yaws:
         # negated: the viewer's yaw turns its camera the other way round from a Blender Z rotation, and the
