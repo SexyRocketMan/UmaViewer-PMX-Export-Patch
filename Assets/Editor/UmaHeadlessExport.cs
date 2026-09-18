@@ -796,6 +796,7 @@ public static class UmaHeadlessExport
     private static Quaternion s_lightRestRotation;
     private static bool s_lightRestCaptured;
     private static double s_lightElevation = -1.0;
+    private static float s_lightRestYaw = 0f;
 
     private static void ApplyLightAzimuth(double azimuth, double elevation)
     {
@@ -811,10 +812,13 @@ public static class UmaHeadlessExport
             if (!s_lightRestCaptured)
             {
                 s_lightRestRotation = light.transform.rotation;
+                // the scene's own azimuth is the zero: it is the direction the viewer lights the character from,
+                // and rebuilding the direction without it put the sun behind the model
+                s_lightRestYaw = light.transform.eulerAngles.y;
                 s_lightRestCaptured = true;
             }
             light.transform.rotation = s_lightElevation >= 0.0
-                ? Quaternion.Euler((float)s_lightElevation, (float)azimuth, 0f)
+                ? Quaternion.Euler((float)s_lightElevation, s_lightRestYaw + (float)azimuth, 0f)
                 : Quaternion.Euler(0f, (float)azimuth, 0f) * s_lightRestRotation;
             turned++;
             Debug.Log($"{Tag} turned the directional light '{light.name}' to azimuth {azimuth:+0;-0;0} degrees "
