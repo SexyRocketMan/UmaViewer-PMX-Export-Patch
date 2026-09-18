@@ -78,3 +78,63 @@ column lists its dependencies (`shader`, other textures). Search by path fragmen
 
 Texture `m_PathID`/`m_FileID` references inside a material can be resolved against the bundle's own object list,
 which is how to confirm which file a `_TripleMaskMap` or `_ToonMap` slot actually points at.
+
+## Reproducing this from zero
+
+Everything needed, in the order it has to be done. The asset identifiers are recorded so a later reader can tell
+whether they are looking at the same data.
+
+**What is needed:** the installed game, .NET, Python with `UnityPy` and `Pillow`, and `sqlite3mc_x64.dll` copied
+from the viewer's `Assets/Plugins/` next to the built `meta_dump`.
+
+**The face shader, character 1001:**
+
+| asset | bundle hash | entry key |
+| --- | --- | --- |
+| the shader catalogue (`n = 'shader'`, 499 shaders) | `MEC5L6UQQ4MIEEDH2IW5VVZRUB5HSOHF` | `5460498415719320078` |
+| the face material bundle (`mtl_chr1001_00_face`) | `3GQR2HQJSCOKRZXBD7UY5OJARUQRDIL4` | `6614454798242685316` |
+
+```powershell
+cd Tools/game_rip
+dotnet run -c Release --project . -- <meta path> "shader" 4          # find the shader bundle
+dotnet run -c Release --project . -- <meta path> "%chr1001_00_face%" 12   # the face material and its textures
+python rip_shader.py MEC5L6UQQ4MIEEDH2IW5VVZRUB5HSOHF 5460498415719320078 shader_bundle
+python extract_blob.py                                               # the blob layout of the face shader
+python decompress_blob.py                                            # writes face_blob_region.bin
+dotnet run --project dxbc_disasm -- <game_shaders>/face_blob_region.bin <game_shaders>/dxbc
+```
+
+The face shader is `Gallop/3D/Chara/DitherToonFace/TSER`. Names are empty in the top-level `m_Name`, so find it by
+`m_ParsedForm.m_Name`. Its region holds 28 DXBC containers: four vertex programs and eleven full pixel variants
+(8 and 9 textures), plus small programs for other passes.
+
+**The textures:**
+
+| asset | bundle hash | entry key |
+| --- | --- | --- |
+| `tex_chr0001_00_face000_0_area` | `6MQFGZXC62KGRJM4XDQVETKUJLTT6QFK` | `-614143197183374756` |
+| `tex_chr0001_00_face000_0_area_wet` | `ZKVOWNLO2E2RUQFBFE45TE3OK3LEUUK5` | `2350644591724972638` |
+
+```powershell
+python extract_area.py     # writes the area texture, or use rip_shader.py for any other bundle
+python dump_face_textures.py
+python face_channel_sheet.py    # red, green and blue side by side - the only way to see a soft mask
+```
+
+**Expect:** `Player.log`-style console output is not needed; every step prints what it found. The most likely
+failure is a wrong key, which surfaces as *file is not a database* rather than as an error at `sqlite3_key`.
+
+## The saved sources
+
+`shader_sources/` holds the disassembly the conclusions came from, so a reader can check them without the game
+installed:
+
+| file | what it is |
+| --- | --- |
+| `face_vertex.asm.txt` | the vertex program: skinning, `_NormalizeNormal`, and the cylinder blend |
+| `face_pixel_use_mask_color.asm.txt` | the pixel variant with `cb1[40]`, the `USE_MASK_COLOR` path the face runs |
+| `face_pixel_8tex.asm.txt` | the smaller pixel variant, for comparison |
+| `pass_2tex.asm.txt`, `pass_no_textures.asm.txt` | two of the small passes, for the shape of the rest |
+
+These are disassemblies of the game's own bytecode. The raw blobs and the extracted bundles are not kept: they are
+the game's assets, and this repository is public. What is kept is the analysis.
