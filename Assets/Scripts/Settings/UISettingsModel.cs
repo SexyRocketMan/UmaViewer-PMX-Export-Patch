@@ -168,14 +168,12 @@ public class UISettingsModel : MonoBehaviour
         {
             case PmxMorphNameMode.BlenderCompatible:
                 return "Tagged: EyeBrow_1_R(WaraiA)[M_Face]\n"
-                       + "The stock Blender addon finds these, but the name is 27 bytes and a motion can only "
-                       + "hold 15 - so a recorded vmd cannot drive these morphs.";
+                       + "Original UmaViewer naming schema: stock Uma Blender Addon compatible. Too long for the VMD 15-byte limit, morphs are not resolved in Blender.";
             case PmxMorphNameMode.ShortEnglish:
-                return "Short english: EyeBrow_1_R\n"
-                       + "Fits a motion, but the name says nothing about what the morph does.";
+                return "Short english: EyeBrow_1_R. Fits a motion, but the name says nothing about what the morph does.";
             case PmxMorphNameMode.Both:
                 return "Both: EyeBrow_1_R(WaraiA)[M_Face] + EyeBrow_1_R\n"
-                       + "The addon stays happy and motions still land, at the cost of twice as many morphs.";
+                       + "The addon stays happy and motions still land; twice as many morphs.";
             default:
                 return "Unified: Brow_WaraiA_R\n"
                        + "English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive "
