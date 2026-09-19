@@ -1,4 +1,4 @@
-﻿#if UNITY_EDITOR
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -553,8 +553,13 @@ public static class UmaHeadlessExport
                     string folder = Path.GetDirectoryName(shotPath);
                     foreach (double azimuth in azimuths)
                     {
-                        if (azimuths.Length > 1)
-                            ApplyLightAzimuth(azimuth, options.ShotLightElevation);
+                        // the light is applied for every shot, not only when there are several azimuths. A
+                        // single azimuth is a legitimate request - "render this view with the light at 90
+                        // degrees" - and skipping it silently renders the scene's own light instead, which
+                        // makes a one-value-per-run light sweep look as though the light does not matter.
+                        // Found by sweeping the light through six azimuths and measuring a 0.98 overlap
+                        // between two opposite ones.
+                        ApplyLightAzimuth(azimuth, options.ShotLightElevation);
                         foreach (double yaw in yaws)
                         {
                             bool grid = yaws.Length * azimuths.Length > 1;
