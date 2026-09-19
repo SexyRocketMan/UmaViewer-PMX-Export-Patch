@@ -853,16 +853,21 @@ public class UmaContainerCharacter : UmaContainer
                             break;
                         case "Gallop/3D/Chara/ToonFace/TSER":
                             m.shader = UmaAssetManager.FaceShader;
-                            m.SetFloat("_CylinderBlend", 0.25f);
+                            // `_CylinderBlend` is deliberately *not* overridden here. The game sets the rim,
+                            // toon and saturation values at runtime (Gallop/Live/Director.cs:215-258) and never
+                            // sets this one, so the material asset's own value - 0 on the face - is what the
+                            // game renders with, and it is what the exporter has to carry: it reads this live
+                            // material, so an override here would end up in the exported material comment and
+                            // the Blender port would shade with a value the game never uses. Measured, the
+                            // override was worth 0.04 of a level on the face crop's mean luminance, so the
+                            // change is a correctness one rather than a visible one.
                             m.SetColor("_RimColor", new Color(0, 0, 0, 0));
                             break;
                         case "Gallop/3D/Chara/ToonEye/T":
                             m.shader = UmaAssetManager.EyeShader;
-                            m.SetFloat("_CylinderBlend", 0.25f);
                             break;
                         case "Gallop/3D/Chara/ToonHair/TSER":
                             m.shader = UmaAssetManager.HairShader;
-                            m.SetFloat("_CylinderBlend", 0.25f);
                             break;
                         case "Gallop/3D/Chara/ToonMayu":
                             m.shader = UmaAssetManager.EyebrowShader;
@@ -930,7 +935,8 @@ public class UmaContainerCharacter : UmaContainer
                 {
                     case "Gallop/3D/Chara/ToonHair/TSER":
                         m.shader = UmaAssetManager.HairShader;
-                        m.SetFloat("_CylinderBlend", 0.25f);
+                        // see the face case above: the game does not set `_CylinderBlend` at runtime, so the
+                        // asset's value is the one the exporter has to carry
                         break;
                     default:
                         Debug.Log(m.shader.name);

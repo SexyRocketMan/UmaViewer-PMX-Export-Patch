@@ -654,10 +654,11 @@ public class ModelExporter
         // nose regions, so without them the addon cannot tell a character whose regions are on from one whose are
         // off; _NormalizeNormal 0 means the game uses the raw vertex normal rather than a normalised one.
         //
-        // _CylinderBlend is read from the *live* material rather than the shipped asset, which matters: the asset
-        // stores 0 on the face while the viewer sets it to 0.25 for the face, hair and eye keywords as it loads
-        // them (UmaContainerCharacter.cs:856,861,865,933), so the value the viewer actually renders with - and the
-        // one a match has to carry - is 0.25.
+        // _CylinderBlend comes from the material, and after this round it is the *shipped asset's* value rather
+        // than an override: the game sets the rim, toon and saturation values at runtime
+        // (Gallop/Live/Director.cs:215-258) and never sets this one, so the asset's value is what the game
+        // renders with. The viewer used to force 0.25 here, which the exporter then carried; that override is
+        // gone. The cost of the change was measured at 0.04 of a level on the face crop's mean luminance.
         Number("cylinder_blend", "_CylinderBlend");
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
