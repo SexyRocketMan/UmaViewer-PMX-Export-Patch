@@ -164,6 +164,14 @@ python face_channel_sheet.py    # red, green and blue side by side - the only wa
 **Expect:** `Player.log`-style console output is not needed; every step prints what it found. The most likely
 failure is a wrong key, which surfaces as *file is not a database* rather than as an error at `sqlite3_key`.
 
+**Do not look for the constant names in the bytecode.** None of the 28 containers in the face shader's region
+carries an `RDEF` chunk, so no compiled program names its own constants and there is no reflection data to read:
+`python reflection_search.py` walks every container and prints its chunk list to show it. Every statement about
+which `cb1[..]` slot is which property therefore comes from matching the *values* in the material asset to the
+slots the disassembly reads, never from a name in the program. The slots' offsets are also worth reading rather
+than guessing - DXBC addresses them as byte offsets in 16-byte units, so a `float4` declaration at offset 16 is
+`cb1[1]` while a lone float at offset 40 is `cb1[10].x`.
+
 ## The saved sources
 
 `shader_sources/` holds the disassembly the conclusions came from, so a reader can check them without the game
