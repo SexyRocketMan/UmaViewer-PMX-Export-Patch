@@ -190,8 +190,11 @@ foreach ($entry in ($ShotFloat -split ';')) {
 foreach ($entry in ($ShotTexture -split ';')) {
     if ($entry.Trim()) { $arguments += @("-umaShotTexture", $entry.Trim()) }
 }
+    # the camera angle and the light height are independent: the editor side reads -umaShotYaw for the
+    # camera and -umaShotLightElevation to rebuild the light's direction. Passing either one used to drop
+    # the other, so a run that asked for both rendered the camera at yaw 0 with the light raised.
+    $arguments += @("-umaShotYaw", $ShotYaw)
     if ($ShotLightElevation -ge 0) { $arguments += @("-umaShotLightElevation", $ShotLightElevation) }
-    else { $arguments += @("-umaShotYaw", $ShotYaw) }
     if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
     if ($ShotOnly) { $arguments += "-umaShotOnly" }
 }
@@ -236,6 +239,7 @@ if ($marker.Line -match "FAILED") {
     exit 1
 }
 
-# leave the project free for the next run in a chain (run_workflow.ps1 starts several)
+# leave the project free for the next run in a chain (the companion dev tooling's run_workflow.ps1
+# starts several in a row)
 [void](Wait-UnityExit -Project $ProjectPath)
 exit 0

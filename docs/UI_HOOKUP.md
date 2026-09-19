@@ -80,8 +80,8 @@ Two more that show the other rules:
 Over the whole character, mode 0 writes **240** morph entries (same morph on `M_Face` and `M_Mayu` kept
 apart), modes 1 and 3 write **192** (those 48 duplicates merge), and mode 2 writes **432** - the union of
 mode 0 and mode 1. The complete mapping, all 192 morphs in all four spellings, is in
-[`MORPH_NAMES.md`](MORPH_NAMES.md), and `Tools/morph_name_table.py` regenerates it from four exports and
-fails if a name in it is not actually in the corresponding `.pmx`.
+[`MORPH_NAMES.md`](MORPH_NAMES.md), and `morph_name_table.py` in the companion `UmaViewer-DevTools` tooling
+regenerates it from four exports and fails if a name in it is not actually in the corresponding `.pmx`.
 
 ## Step by step (by duplicating an existing row)
 
@@ -113,9 +113,8 @@ the scene's saved tick was the only thing the panel showed until you clicked it.
 * **Any of them**: click the control, then open `Config.json` next to the exe - the value is written
   immediately (`UpdateConfig(false)`, no restart prompt; unlike Language/Region/WorkMode).
 * **A-pose rest pose**: export a model and import it in Blender - the arms should already hang in the
-  A-pose. Or headless:
-  `Tools\run_workflow.ps1 -Char 1001 -Costume 00 -Motion anm_rac_type01_run02_stride -APose`
-  (renders a clip without posing anything by hand).
+  A-pose. Or headless: `Tools\headless_export.ps1 -Char 1001 -Costume 00 -APose -Out x.pmx`, then import
+  `x.pmx` together with a recorded motion and pose nothing by hand.
 * **Morph naming**: `Tools\headless_export.ps1 -Char 1001 -Costume 00 -Out x.pmx` then
   `uv run Tools/pmx_inspect.py names x.pmx --require Eye_XRange_L,Eye_XRange_R` for mode 3, plus
   `uv run Tools/pmx_inspect.py names x.pmx` to see every name and its byte length.
@@ -150,4 +149,4 @@ the scene's saved tick was the only thing the panel showed until you clicked it.
 | `Config.json` keys and their tooltips | `Assets/Scripts/Config.cs` |
 | Auto-record button | `UmaViewerUI.AutoRecordVMD` in `Assets/Scripts/UmaViewerUI.cs` |
 | Texture set rows | `UISettingsModel.LoadTextureSetPanel` + `Assets/Scripts/UmaEnvTextureSet.cs` |
-| Command line equivalents of every option | `Assets/Editor/UmaHeadlessExport.cs` |
+| Command line equivalents of every option | `Assets/Editor/UmaHeadlessExport.cs`, documented in [`CLI.md`](CLI.md) |

@@ -1,4 +1,4 @@
-﻿<!-- superseded -->
+<!-- superseded -->
 > **Note.** Its account of the custom split normals is right and worth reading. Its _CylinderBlend value is wrong: it records 0.25 for ToonFace/ToonEye/ToonHair, but the shipped material asset stores **0.0** for the face and the disassembly agrees, so the weight on this material is the vertex colour's blue channel alone. It was also written before the game's own face shader was read properly; docs/GROUND_TRUTH.md and docs/VERIFICATION_WORKFLOW.md in the Blender addon repository are current.
 
 # The uma shader: what Blender gets, what the game does, and where the gap is
@@ -217,7 +217,8 @@ switches with the two largest mouth morphs at 1.0:
 | face branch off, authored normals | clean | hard seam and dark spikes around the lips |
 | face branch off, normals cleared | hard angular patches | hard seam |
 
-The scripts used for that live in the scratch tooling (`face_toggle_matrix.py`, `cylinder_normals.py`), and the
+The scripts used for that were scratch tooling (`face_toggle_matrix.py`, `cylinder_normals.py`), kept outside
+this repository along with the rest of the development harness, and the
 images are in `umaviewer_exports\shadercheck\facetoggle\` and `...\face_light\`.
 
 ### Where that came from
@@ -255,8 +256,10 @@ images are in `umaviewer_exports\shadercheck\facetoggle\` and `...\face_light\`.
 
 ## Checking it
 
-`Tools/blender_render_motion.py` renders an exported model (optionally with a recorded motion) headlessly,
-and `Tools/render_stats.py` checks the result numerically. For shader work the useful check is a comparison
+`blender_render_motion.py` (in the companion `UmaViewer-DevTools` tooling) renders an exported model,
+optionally with a recorded motion, headlessly, and `render_stats.py` checks the result numerically. For shader
+work the useful check is a comparison
 against the viewer's own look at the same camera angle, which is a job for the eye rather than a script -
-but `umashader_test.py` in the scratch tooling reports what the operator wired up (materials, textures and
-their colourspaces, the outline modifier and its inputs) so a regression shows up as a changed list.
+but the shading A/B harness there (`blender_render_angles.py`, `shading_ab.ps1`) renders the same model with
+legacy and new shading and tiles the pairs, so a regression shows up as a visible difference rather than a
+changed list.

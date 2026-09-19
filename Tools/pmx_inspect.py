@@ -4,16 +4,19 @@
 # ///
 """Inspect / diff PMX files without Blender or Unity.
 
-  uv run pmx_inspect.py summary <file.pmx> [more.pmx ...]
-  uv run pmx_inspect.py bones   <file.pmx>
-  uv run pmx_inspect.py weights <file.pmx> [--material M_Eye]
-  uv run pmx_inspect.py morphs  <file.pmx> [--grep Eye_2]
-  uv run pmx_inspect.py diff    <a.pmx> <b.pmx>
-  uv run pmx_inspect.py check   <file.pmx>        # uma_addon morph-name contract + eye skinning
+  uv run pmx_inspect.py summary   <file.pmx> [more.pmx ...]
+  uv run pmx_inspect.py bones     <file.pmx>
+  uv run pmx_inspect.py tails     <file.pmx> [--named] [--pairs]
+  uv run pmx_inspect.py weights   <file.pmx> [--material M_Eye]
+  uv run pmx_inspect.py morphs    <file.pmx> [--grep Eye_2]
+  uv run pmx_inspect.py names     <file.pmx> [--require Name1,Name2]  # vmd byte limit + duplicates
+  uv run pmx_inspect.py integrity <file.pmx>                          # declared index sizes vs counts
+  uv run pmx_inspect.py check     <file.pmx>        # the uma_addon eye contract + eye skinning
+  uv run pmx_inspect.py diff      <a.pmx> <b.pmx>
 
-`check` verifies the invariants the Blender uma_addon relies on:
-  * the four eye-range morphs are named "<name>(<tag>)[M_Face]" (used by "Refine Structure"
-    to build the Eye_L(L)/Eye_L(R)/... controls),
+`check` verifies what the Blender uma_addon relies on once "Refine Structure" runs:
+  * the four eye-range morphs exist in one of the spellings the exporter can write - tagged
+    (BlenderCompatible, which is what the stock addon matches), short, or unified (the default),
   * the eyeball geometry is skinned to the Eye_L / Eye_R bones.
 """
 
@@ -41,6 +44,16 @@ ADDON_EYE_RANGE_MORPHS = [
     "Eye_21_R(YRange)[M_Face]",
     "Eye_21_L(YRange)[M_Face]",
 ]
+
+# The same four morphs in every spelling the exporter can write (Config.PmxMorphNameMode): the stock
+# addon only resolves "tagged", the fork's naming resolver matches the other two by meaning. A check
+# that only accepted the tagged spelling reported a perfectly good default export as broken.
+EYE_RANGE_SPELLINGS = {
+    "tagged": ("Eye_20_R(XRange)[M_Face]", "Eye_20_L(XRange)[M_Face]",
+               "Eye_21_R(YRange)[M_Face]", "Eye_21_L(YRange)[M_Face]"),
+    "short": ("Eye_20_R", "Eye_20_L", "Eye_21_R", "Eye_21_L"),
+    "unified": ("Eye_XRange_R", "Eye_XRange_L", "Eye_YRange_R", "Eye_YRange_L"),
+}
 
 
 class Reader:
@@ -444,15 +457,24 @@ def cmd_check(paths: list[str], args) -> int:
         m = read_model(path)
         print(f"== {path}")
         names = set(m.morph_names)
-        missing = [n for n in ADDON_EYE_RANGE_MORPHS if n not in names]
-        short = [n for n in ("Eye_20_R", "Eye_20_L", "Eye_21_R", "Eye_21_L") if n in names]
-        print(f"   uma_addon tagged eye-range morphs present: "
-              f"{len(ADDON_EYE_RANGE_MORPHS) - len(missing)}/{len(ADDON_EYE_RANGE_MORPHS)}")
-        if missing:
-            print(f"      MISSING: {missing}")
-            if short:
-                print(f"      found short names instead: {short}  <- uma_addon will silently skip the eye controls")
+
+        # The four eye-range morphs have to be resolvable by some spelling the exporter can write; which
+        # spelling decides which addon can use them. Failing on a spelling the model is not written in
+        # said nothing about the model - the default is Unified.
+        complete = [scheme for scheme, wanted in EYE_RANGE_SPELLINGS.items()
+                    if all(n in names for n in wanted)]
+        if complete:
+            print(f"   eye-range morphs present as: {', '.join(complete)}")
+            if "tagged" not in complete:
+                print("      the stock uma_addon resolves only the tagged spelling; this one needs the "
+                      "fork's naming resolver (MorphNaming.cs / the addon's utils/naming.py)")
+        else:
             ok = False
+            print("   !! none of the four eye-range morphs is complete in any spelling:")
+            for scheme, wanted in EYE_RANGE_SPELLINGS.items():
+                found = [n for n in wanted if n in names]
+                print(f"      {scheme:8} {len(found)}/4 present"
+                      + (f", missing {[n for n in wanted if n not in names]}" if found else ""))
 
         vids = material_vertices(m, "_eye")
         if vids is None:

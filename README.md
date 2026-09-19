@@ -10,7 +10,8 @@ Maintained on a best-effort basis.
 Tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
 
 Jump to: [What each release fixed](#what-each-release-fixed) - [Fork vs og UmaViewer](#fork-vs-og-umaviewer) -
-[Installation](#requirementsinstallation) - [Build it yourself](#for-developerscontributors)
+[Installation](#requirementsinstallation) - [Build it yourself](#for-developerscontributors) -
+[Command line export](docs/CLI.md)
 
 ## What each release fixed
 
@@ -59,8 +60,9 @@ tag `patch` · 2026-03-30 — the first release of this fork
 - **Eye bones keep working after Blender's `Refine Structure`**: the name shortener used to strip the
   `(Tag)[Mesh]` suffix that Blender's `uma_addon` matches on, so the addon deleted the `Eye_L`/`Eye_R` vertex
   groups and never built the replacement eye controls - the eye bones went dead while a plain import still
-  looked fine. Morph naming is now a single shared implementation with a selectable scheme (see
-  [Tools/README.md](Tools/README.md)).
+  looked fine. Morph naming is now a single shared implementation with a selectable scheme
+  ([docs/MORPH_NAMES.md](docs/MORPH_NAMES.md) lists every morph in every spelling, and the mode is a
+  `-MorphNameMode` argument - see [docs/CLI.md](docs/CLI.md)).
 - **One naming scheme for models and motions**: descriptive, romaji tags + english groups, always within the
   VMD 15-byte limit, and identical for the exported model and the exported motion - so morph mapping just
   works. The old short-english and Blender-compatible spellings are still selectable in `Config.json`
@@ -91,28 +93,27 @@ tag `patch` · 2026-03-30 — the first release of this fork
   material using one default. The uma sphere and toon maps deliberately stay out of MMD's sphere and toon slots -
   both were tried and both made the model look wrong on import - and the models remain perfectly usable in
   Blender *without* the addon; for a literal pre-2.6 export (no comment, no uma specular or outline values) set
-  `"PmxUmaMaterialFields": false` or pass `-PlainMaterials` to the command line tools. See
+  `"PmxUmaMaterialFields": false` or pass `-PlainMaterials` to the CLI (`Tools/headless_export.ps1`). See
   [docs/UMA_SHADER.md](docs/UMA_SHADER.md).
 - **Optional A-pose rest pose**: an exported model can be written with both upper arms rotated into the
   38.5° A-pose that recorded motions are relative to, so model and motion line up in Blender without posing
   anything by hand and without importing the motion with *Use current pose as rest pose*. It is **off by
   default** - a T-pose rest is what rigging and retargeting tools expect - and can be turned on with
-  `"PmxAPoseRestPose": true` in `Config.json`, or `-APose` on the command line tools. The result was checked
-  against the hand recipe down to 6e-4 blender units, see [Tools/README.md](Tools/README.md).
+  `"PmxAPoseRestPose": true` in `Config.json`, or `-APose` on `Tools/headless_export.ps1`. The result was checked
+  against the hand recipe down to 6e-4 blender units.
 - **Bone tails follow the rig's chains**: an exported bone points at the child that continues its chain, and a
   bone without one (finger tips, hair ends, the roll helpers) continues the segment leading into it. The head
   bone points up out of the neck instead of at the cheek offset it happened to be parented to first,
   `ShoulderRoll_L/R` and `ArmRoll_L/R` mirror each other instead of one of them pointing back at the neck, and
   the eye bones and ankles point the way four known-good MMD models do (out of the face, and forward as well
-  as down towards the toes) - `pmx_inspect.py tails` asserts all of it, see [Tools/README.md](Tools/README.md).
-- **A screenshot of the game's own render**: `headless_export.ps1 -Screenshot <png> -ShotView face|head|upper|full`
+  as down towards the toes) - `Tools/pmx_inspect.py tails` asserts all of it.
+- **A screenshot of the game's own render**: `Tools/headless_export.ps1 -Screenshot <png> -ShotView face|head|upper|full`
   writes what the viewer draws, with its own lighting and post processing, so a Blender material or shading
   setup can be compared against the real thing instead of against memory. `-ShotOnly` takes the picture without
   exporting a model.
 - **VMD key reduction is applied** (it was silently ignored because the save method shadowed the setting).
 - **Command line export**: models, motions, props and scene material tables can be exported and verified
-  without clicking, and the whole chain (export → record → check → render → encode) has a one-command
-  workflow. See [Tools/README.md](Tools/README.md).
+  without clicking, from a terminal or a script. See [docs/CLI.md](docs/CLI.md).
 
 ## Fork vs og UmaViewer
 
@@ -127,7 +128,7 @@ tag `patch` · 2026-03-30 — the first release of this fork
 | Blender `Refine Structure` kills the eye bones | Fixed - eye controls are built *(unreleased)* |
 | Scenes/props render and export with untextured (white) materials | Environment texture sets resolved + switchable *(unreleased)* |
 | Recorded motions need trimming, retiming, or a manual T→A rest pose | Button records one clean loop, one shots included; optional A-pose rest pose *(unreleased)* |
-| Exporting means clicking through the UI | Headless CLI + end-to-end workflow script *(unreleased)* |
+| Exporting means clicking through the UI | Headless CLI: export a model, record a motion, take a screenshot from a terminal *(unreleased)* |
 
 Known upstream behaviour that is **not** a bug: after importing a motion you may see
 `not found bone Ankle_L_IK` - exported PMX models have no IK-constrained bones, so the VMD's IK track is
