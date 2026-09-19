@@ -1,137 +1,35 @@
 # Uma Viewer — Ultimate Agemasen Edition
 
-A fork of [katboi01/UmaViewer](https://github.com/katboi01/UmaViewer) that focuses on **PMX model and VMD
-motion export that you can actually open in Blender**. Upstream can export models and animations, but the
-results regularly need surgery: corrupted geometry, missing materials, motions whose morph/expression
-tracks land on nothing. This fork ships those fixes and leaves the viewer itself alone.
+A fork of [katboi01/UmaViewer](https://github.com/katboi01/UmaViewer) that focuses on **asset ripping with Blender (via mmd_tools) as the primary target**. Upstream can export models and animations, but the
+results either need heavy postprocessing, or are lost on export. 
+
+
 
 Maintained on a best-effort basis.
 
-Tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
+Latest tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
+  
+## Key differences from upstream / fixes
 
-Jump to: [What each release fixed](#what-each-release-fixed) - [Fork vs og UmaViewer](#fork-vs-og-umaviewer) -
-[Installation](#requirementsinstallation) - [Build it yourself](#for-developerscontributors)
+### *The Ultimate Agemasen Edition* (v3)
 
-## What each release fixed
+- **Naming scheme for models and motions reworked**: the new name schema contains both the mesh group and the romaji tag and fits in the VMD 15-byte limit. The naming schema can be selected from the model panel via a dropdown.  
+  `Unified` is the default and recommended option (supports both seemless motion ripping and Rigify generation via the Agemasen version of the Uma Addon). Other options provide legacy compatibility (e.g. with the original Uma Addon).
+- **Fixed some props and scenes rendering white**: environment texture sets are resolved from the asset database and can be switched from a row in the materials panel
+- **Autorecord**: `Auto Record VMD` records a motion with a single click, from start to finish. Saves time on trimmming the clips in Blender. Both looped and one-shot animations supported.
+- VMD saving now triggers a save dialog, with descriptive default names, last directory memory. Camera VMDs use the same name as the motion VMD with `_cam` tag.  
+- Added an option to export the Uma models in A-pose (compatible with the ripped motions).  
+- Bone orientations adjusted to match common mmd practices.  
+- Added a baseline for future CLI implementation (batch headless export).  
+  
+### *The Ultimate Agemasen Edition* (v2)
+- **Short english names for exported bones and morphs**, selectable in the settings tab. The og naming for the morphs did not fit in the VMD format's 15-byte name field - morph tracks
+  were discarded by mmd_tools on import. With both the options enabled, motions can be imported in blender without a custom translation dictionary (both bone and morph keyframes)
+- Full Mini-uma motion export support.
 
-### Agemasen 2 — *Ultimate Agemasen Edition (global db key updated)*
-[release](https://github.com/SexyRocketMan/UmaViewer-PMX-Export-Patch/releases/tag/Agemasen2) · 2026-07-26
-
-- **`Database not found` / viewer won't start**: the database key was refreshed, so this build works like the
-  current og UmaViewer again instead of failing on a new game version.
-
-### Agemasen 1 — *The Ultimate Agemasen Edition*
-[release](https://github.com/SexyRocketMan/UmaViewer-PMX-Export-Patch/releases/tag/Agemasen1) · 2026-06-29
-
-- **Short english names for exported bones and morphs**, selectable in the settings tab. The og naming is
-  Japanese/verbose, which no longer fits the VMD format's 15-byte name field - so morph (expression) tracks
-  were dropped or landed on nothing when you imported the motion next to a model. With short names an
-  exported motion maps onto an exported model in Blender without any custom translation dictionary.
-- **Mini-uma (chibi) motion export fixed properly** - the neck and shoulder bones are no longer broken in the
-  exported VMD. A couple of finger mappings are still off.
-- New app icon.
-- Note: models exported with an older version don't carry the new names - **re-export your models with this
-  version** or the morphs of a short-named motion won't match them.
-
-### patch_3
-tag `patch_3` · 2026-05-17
-
-- **Mini-uma motion export** got a first, hacky bypass so a recorded chibi motion could be exported at all.
-- **Settings could not be changed after quitting on mobile** - fixed (desktop was unaffected).
-
-### patch_2
-tag `patch_2` · 2026-03-31
-
-- **Some scenes could not be exported at all**: a failed texture-list name lookup aborted the export. There is
-  now a fallback texture assignment, so those scenes export.
-
-### patch — *PMX Export Patch*
-tag `patch` · 2026-03-30 — the first release of this fork
-
-- **Broken geometry on models/scenes with more than 65535 vertices**: the exporter wrote 2-byte vertex indices,
-  so everything past the limit turned into a mess of faces that cannot be repaired after the fact. Now 4-byte
-  indices are used when needed. No character or prop hits the limit, but several scenes do.
-- **Missing materials in exported models** - fixed.
-- New app icon and build settings.
-
-### Unreleased — branch `fix/eye-bone-export`
-
-- **Eye bones keep working after Blender's `Refine Structure`**: the name shortener used to strip the
-  `(Tag)[Mesh]` suffix that Blender's `uma_addon` matches on, so the addon deleted the `Eye_L`/`Eye_R` vertex
-  groups and never built the replacement eye controls - the eye bones went dead while a plain import still
-  looked fine. Morph naming is now a single shared implementation with a selectable scheme (see
-  [Tools/README.md](Tools/README.md)).
-- **One naming scheme for models and motions**: descriptive, romaji tags + english groups, always within the
-  VMD 15-byte limit, and identical for the exported model and the exported motion - so morph mapping just
-  works. The old short-english and Blender-compatible spellings are still selectable in `Config.json`
-  (`PmxMorphNameMode`).
-- **Props and scenes stop rendering white**: environment texture sets are resolved from the asset database and
-  can be switched from a row in the materials panel, so a home/live/race scene shows its real textures instead
-  of flat white. Exports now also warn about every material slot they could not resolve.
-- **One clean loop, recorded by a button**: `Record VMD` records exactly one pass over the playing
-  animation, rewinding to its first frame first (frame count = length × fps + 1). A looping clip closes on
-  itself, so the motion loops without a jump; a one shot keeps its own ending. No trimming or retiming in
-  Blender afterwards, and no T-pose frame sneaking in at the start.
-- **One shot animations record properly**: a clip that has already finished is parked on its last frame and
-  Unity never advances a finished state, so recording after the animation ended used to write that single
-  pose for every frame - a motion that does not move at all. That is fixed by the rewind, which keeps the
-  pose the viewer is showing for every bone the clip does not animate.
-- **The camera motion lands next to the motion**: one save dialog, `<name>.vmd` plus `<name>_cam.vmd`.
-- **The file dialogs remember where you last saved** - models and motions separately, and across restarts
-  (`Config.json` → `LastModelFolder` / `LastMotionFolder`).
-- **Sensible default file names**: the dialogs suggest the uma's own name instead of the container id, plus
-  the costume for models and the tail of the animation for motions - `special_week_stride.vmd` for Special
-  Week running `anm_rac_type01_run02_stride`, `special_week_res_001.vmd` for a race result animation,
-  `special_week.pmx` for the model and `special_week_<costume>.pmx` when the costume has a name (the game's
-  own costume titles, so the wording follows the database language; the upgraded costume, for instance,
-  comes out as `special_week_upgraded.pmx`).
-- **Exported materials carry the uma shading setup**: the twenty shader settings an MMD material has no field
-  for (light threshold, rim, specular, character grade, outline width, and the names of the uma maps) travel in
-  the material comment, where the Blender addon reads them back, so exports shade per material instead of every
-  material using one default. The uma sphere and toon maps deliberately stay out of MMD's sphere and toon slots -
-  both were tried and both made the model look wrong on import - and the models remain perfectly usable in
-  Blender *without* the addon; for a literal pre-2.6 export (no comment, no uma specular or outline values) set
-  `"PmxUmaMaterialFields": false` or pass `-PlainMaterials` to the command line tools. See
-  [docs/UMA_SHADER.md](docs/UMA_SHADER.md).
-- **Optional A-pose rest pose**: an exported model can be written with both upper arms rotated into the
-  38.5° A-pose that recorded motions are relative to, so model and motion line up in Blender without posing
-  anything by hand and without importing the motion with *Use current pose as rest pose*. It is **off by
-  default** - a T-pose rest is what rigging and retargeting tools expect - and can be turned on with
-  `"PmxAPoseRestPose": true` in `Config.json`, or `-APose` on the command line tools. The result was checked
-  against the hand recipe down to 6e-4 blender units, see [Tools/README.md](Tools/README.md).
-- **Bone tails follow the rig's chains**: an exported bone points at the child that continues its chain, and a
-  bone without one (finger tips, hair ends, the roll helpers) continues the segment leading into it. The head
-  bone points up out of the neck instead of at the cheek offset it happened to be parented to first,
-  `ShoulderRoll_L/R` and `ArmRoll_L/R` mirror each other instead of one of them pointing back at the neck, and
-  the eye bones and ankles point the way four known-good MMD models do (out of the face, and forward as well
-  as down towards the toes) - `pmx_inspect.py tails` asserts all of it, see [Tools/README.md](Tools/README.md).
-- **A screenshot of the game's own render**: `headless_export.ps1 -Screenshot <png> -ShotView face|head|upper|full`
-  writes what the viewer draws, with its own lighting and post processing, so a Blender material or shading
-  setup can be compared against the real thing instead of against memory. `-ShotOnly` takes the picture without
-  exporting a model.
-- **VMD key reduction is applied** (it was silently ignored because the save method shadowed the setting).
-- **Command line export**: models, motions, props and scene material tables can be exported and verified
-  without clicking, and the whole chain (export → record → check → render → encode) has a one-command
-  workflow. See [Tools/README.md](Tools/README.md).
-
-## Fork vs og UmaViewer
-
-| Problem in og UmaViewer | In this fork |
-| --- | --- |
-| Geometry corrupt on models/scenes over 65535 vertices (2-byte indices) | 4-byte indices where needed *(patch)* |
-| Exported models missing materials | Fixed *(patch)* |
-| Some scenes abort export on a texture-list lookup failure | Fallback texture assignment *(patch_2)* |
-| Mini-uma motions export with broken neck/shoulder bones | Bypass *(patch_3)*, then properly fixed *(Agemasen 1)* |
-| Japanese/verbose bone and morph names - morph tracks don't fit the VMD 15-byte name field and need a translation dictionary | Short english names *(Agemasen 1)*, now one descriptive unified scheme used by both models and motions *(unreleased)* |
-| `Database not found` on a newer game version | Refreshed database key *(Agemasen 2)* |
-| Blender `Refine Structure` kills the eye bones | Fixed - eye controls are built *(unreleased)* |
-| Scenes/props render and export with untextured (white) materials | Environment texture sets resolved + switchable *(unreleased)* |
-| Recorded motions need trimming, retiming, or a manual T→A rest pose | Button records one clean loop, one shots included; optional A-pose rest pose *(unreleased)* |
-| Exporting means clicking through the UI | Headless CLI + end-to-end workflow script *(unreleased)* |
-
-Known upstream behaviour that is **not** a bug: after importing a motion you may see
-`not found bone Ankle_L_IK` - exported PMX models have no IK-constrained bones, so the VMD's IK track is
-inert and can be ignored.
+### patch — *PMX Export Patch* (agemasen edition v1)
+- Fixed broken geometry on models/scenes with more than 65535 vertices: the exporter wrote 2-byte vertex indices, causing an overflow and corrupting the exported model. Now 4-byte indices are used when needed. No character or prop hits the limit, but several scenes do.
+- Fixed missing materials in exported models
 
 # Original readme follows:
 Unity application that makes it easy to view assets from Uma Musume: Pretty Derby.
