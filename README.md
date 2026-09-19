@@ -14,7 +14,7 @@ Latest tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
 ### *The Ultimate Agemasen Edition* (v3)
 
 - **Naming scheme for models and motions reworked**: the new name schema contains both the mesh group and the romaji tag and fits in the VMD 15-byte limit. The naming schema can be selected from the model panel via a dropdown.  
-  `Unified` is the default and recommended option (supports both seemless motion ripping and Rigify generation via the Agemasen version of the Uma Addon). Other options provide legacy compatibility (e.g. with the original Uma Addon).
+  `Unified` is the default and recommended option (supports both seemless motion ripping and Rigify generation via the [Agemasen version](https://github.com/SexyRocketMan/uma_addon_agemasen) of the Uma Addon). Other options provide legacy compatibility (e.g. with the original Uma Addon).
 - **Fixed some props and scenes rendering white**: environment texture sets are resolved from the asset database and can be switched from a row in the materials panel
 - **Autorecord**: `Auto Record VMD` records a motion with a single click, from start to finish. Saves time on trimmming the clips in Blender. Both looped and one-shot animations supported.
 - VMD saving now triggers a save dialog, with descriptive default names, last directory memory. Camera VMDs use the same name as the motion VMD with `_cam` tag.  
