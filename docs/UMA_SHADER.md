@@ -1,3 +1,6 @@
+﻿<!-- superseded -->
+> **Note.** Its account of the custom split normals is right and worth reading. Its _CylinderBlend value is wrong: it records 0.25 for ToonFace/ToonEye/ToonHair, but the shipped material asset stores **0.0** for the face and the disassembly agrees, so the weight on this material is the vertex colour's blue channel alone. It was also written before the game's own face shader was read properly; docs/GROUND_TRUTH.md and docs/VERIFICATION_WORKFLOW.md in the Blender addon repository are current.
+
 # The uma shader: what Blender gets, what the game does, and where the gap is
 
 Two separate things are involved when an exported model is shaded:
