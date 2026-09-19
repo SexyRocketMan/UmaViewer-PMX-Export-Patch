@@ -144,6 +144,8 @@ class Model:
     bones: list[Bone] = field(default_factory=list)
     morph_names: list[str] = field(default_factory=list)
     morph_cats: list[int] = field(default_factory=list)
+    end_offset: int = 0
+    file_size: int = 0
 
 
 def read_model(path: str) -> Model:
@@ -169,8 +171,9 @@ def read_model(path: str) -> Model:
     for _ in range(r.i32()):
         pos = r.vec(3)
         r.vec(3); r.vec(2)
-        if g[1]:
-            r.vec(4 * g[1])
+        # each extra uv is one Vector4, so a config with three of them costs twelve floats. Reading
+        # 4 * g[1] floats is right by luck; reading one float per component is what the writer does.
+        extra_uvs = [r.vec(4) for _ in range(g[1])]
         wt = r.u8()
         bones: list[int] = []
         weights: list[float] = []
@@ -278,6 +281,36 @@ def read_model(path: str) -> Model:
                 r.index(sizes["morph"]); r.f32()
         else:
             raise ValueError(f"unknown morph type {mtype}")
+
+    # Display frames, then rigid bodies and joints. The exporter always writes at least one frame (a
+    # "Root" frame holding morph index 0), so a reader that stops after the morphs leaves those bytes
+    # unread - which is why the integrity check compares the cursor to the file length.
+    for _ in range(r.i32()):
+        text(); text()
+        r.u8()                          # isSpecial
+        for _ in range(r.i32()):
+            is_morph = r.u8()
+            r.index(sizes["morph"] if is_morph else sizes["bone"])
+
+    for _ in range(r.i32()):
+        text(); text()
+        r.index(sizes["bone"])          # the bone the body is attached to
+        r.u8()                          # group
+        r.u16()                         # collision mask
+        r.u8()                          # shape
+        r.vec(3); r.vec(3); r.vec(3)    # size, position, rotation
+        r.f32(); r.f32(); r.f32(); r.f32(); r.f32(); r.u8()   # mass, damping, restitution, friction, mode
+
+    for _ in range(r.i32()):
+        text(); text()
+        r.u8()                          # dof type
+        r.index(sizes["rigidbody"]); r.index(sizes["rigidbody"])
+        r.vec(3); r.vec(3)
+        r.vec(3); r.vec(3); r.vec(3); r.vec(3)
+        r.vec(3); r.vec(3)
+
+    model.end_offset = r.p
+    model.file_size = len(data)
     return model
 
 
@@ -441,6 +474,139 @@ def cmd_check(paths: list[str], args) -> int:
     return 0 if ok else 1
 
 
+def cmd_integrity(paths: list[str], args) -> int:
+    """Audit the file's sizes and every index in it against what it declares.
+
+    This is the check for the defect class that broke exported geometry before: the pmx header declares how
+    many bytes each kind of index occupies, and if a size is chosen without regard to the count it has to
+    hold, then either the index cannot address the last entry or every record after the first is misaligned.
+    Both are silent in a viewer that clamps - the file simply renders wrong.
+
+    Three things are checked, in order, because the first failure makes the rest meaningless:
+
+    1. the reader consumes exactly the file, byte for byte, when it walks the header's declared sizes;
+    2. each declared size can actually address the count that follows it (vertex indices must reach
+       vertex_count - 1, and so on for texture, material, bone and morph);
+    3. every index that is read lies inside the range it addresses, including the -1 sentinels pmx uses for
+       "none" where the format allows one.
+    """
+    ok = True
+    for path in paths:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+        if head != b"PMX ":
+            print(f"== {path}\n   !! not a pmx file")
+            ok = False
+            continue
+        m = read_model(path)
+        print(f"== {path}")
+        print(f"   {len(m.vertices)} vertices, {len(m.surfaces)} surface indices, {len(m.textures)} textures, "
+              f"{len(m.materials)} materials, {len(m.bones)} bones, {len(m.morph_names)} morphs")
+        print(f"   declared index sizes: " + ", ".join(f"{k}={v}" for k, v in m.sizes.items()))
+
+        # 1. did the parse consume the file exactly?
+        if m.end_offset == m.file_size:
+            print(f"   [ok] the parse consumed all {m.file_size} bytes")
+        else:
+            print(f"   [FAIL] the parse stopped at {m.end_offset} of {m.file_size} bytes "
+                  f"({m.file_size - m.end_offset:+d}) - the declared sizes do not match what was written")
+            ok = False
+
+        # 2. can each declared size address its count?
+        limits = {"vertex": len(m.vertices), "texture": len(m.textures), "material": len(m.materials),
+                  "bone": len(m.bones), "morph": len(m.morph_names)}
+        for kind, count in limits.items():
+            size = m.sizes.get(kind)
+            if size not in (1, 2, 4):
+                print(f"   [FAIL] {kind} index size {size} is not 1, 2 or 4")
+                ok = False
+                continue
+            if kind == "vertex":
+                capacity = 256 ** size          # a pmx vertex index is unsigned
+            else:
+                capacity = 128 * 256 ** (size - 1)      # the rest are signed
+            if count > capacity:
+                print(f"   [FAIL] {kind}: {count} entries need more than {capacity} "
+                      f"that a {size} byte index can address")
+                ok = False
+            else:
+                print(f"   [ok] {kind}: {count} entries fit a {size} byte index (capacity {capacity})")
+
+        # 3. every index in range
+        problems = 0
+        high = max(m.surfaces) if m.surfaces else -1
+        if m.surfaces and high >= len(m.vertices):
+            print(f"   [FAIL] a surface index is {high}, past the last vertex ({len(m.vertices) - 1})")
+            problems += 1
+        elif m.surfaces:
+            print(f"   [ok] surface indices run 0..{high} inside {len(m.vertices)} vertices")
+
+        total_faces = sum(mat.face_count for mat in m.materials)
+        if total_faces != len(m.surfaces):
+            print(f"   [FAIL] the materials' face counts sum to {total_faces}, "
+                  f"but the file holds {len(m.surfaces)} indices")
+            problems += 1
+        else:
+            cursor = 0
+            bad = None
+            for mat in m.materials:
+                if mat.face_count % 3:
+                    bad = f"material {mat.index} ({mat.name}) has {mat.face_count} indices, not a multiple of 3"
+                    break
+                cursor += mat.face_count
+            if bad:
+                print(f"   [FAIL] {bad}")
+                problems += 1
+            else:
+                print(f"   [ok] the materials' face counts sum to the surface list exactly, all multiples of 3")
+
+        for mat in m.materials:
+            for label, value, count in (("texture", mat.texture, len(m.textures)),
+                                        ("sphere", mat.sphere_texture, len(m.textures)),
+                                        ("toon", mat.toon_texture, len(m.textures))):
+                if value is None:
+                    continue
+                if value == -1:
+                    continue
+                if not 0 <= value < count:
+                    print(f"   [FAIL] material {mat.index} ({mat.name}) {label} index {value} "
+                          f"is outside 0..{count - 1}")
+                    problems += 1
+        for bone in m.bones:
+            # a pmx signposts "no bone" with -1, and the root bone of an exported uma model is exactly
+            # that, so -1 is in range for the fields that allow it; an ik target may not be -1.
+            if not -1 <= bone.parent < len(m.bones):
+                print(f"   [FAIL] bone {bone.index} ({bone.name}) parent {bone.parent} "
+                      f"is outside -1..{len(m.bones) - 1}")
+                problems += 1
+            if bone.tail_bone is not None and not -1 <= bone.tail_bone < len(m.bones):
+                print(f"   [FAIL] bone {bone.index} ({bone.name}) tail {bone.tail_bone} out of range")
+                problems += 1
+            if bone.ik:
+                if not 0 <= bone.ik["target"] < len(m.bones):
+                    print(f"   [FAIL] bone {bone.index} ({bone.name}) ik target out of range")
+                    problems += 1
+                for link in bone.ik["links"]:
+                    if not 0 <= link["bone"] < len(m.bones):
+                        print(f"   [FAIL] bone {bone.index} ({bone.name}) ik link out of range")
+                        problems += 1
+        weighted = 0
+        for index, vertex in enumerate(m.vertices):
+            for bone in vertex.bones:
+                weighted += 1
+                if not 0 <= bone < len(m.bones):
+                    print(f"   [FAIL] vertex {index} is skinned to bone {bone}, "
+                          f"outside 0..{len(m.bones) - 1}")
+                    problems += 1
+                    break
+        if not problems:
+            print(f"   [ok] every texture, bone and skinning index is inside its range "
+                  f"({weighted} bone references over {len(m.vertices)} vertices)")
+        else:
+            ok = False
+    return 0 if ok else 1
+
+
 def cmd_names(paths: list[str], args) -> int:
     """Validate morph names: they must be unique and fit a vmd's 15 byte shift-jis name field."""
     ok = True
@@ -596,6 +762,8 @@ def main() -> int:
     p = sub.add_parser("names")
     p.add_argument("paths", nargs="+")
     p.add_argument("--require", help="comma separated morph names that must exist")
+    p = sub.add_parser("integrity")
+    p.add_argument("paths", nargs="+")
     p = sub.add_parser("diff")
     p.add_argument("paths", nargs=2)
     p = sub.add_parser("tails")
@@ -611,7 +779,7 @@ def main() -> int:
     args = ap.parse_args()
     return {"summary": cmd_summary, "bones": cmd_bones, "weights": cmd_weights,
             "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check,
-            "names": cmd_names, "tails": cmd_tails}[args.cmd](args.paths, args)
+            "names": cmd_names, "tails": cmd_tails, "integrity": cmd_integrity}[args.cmd](args.paths, args)
 
 
 if __name__ == "__main__":
