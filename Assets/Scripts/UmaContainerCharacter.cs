@@ -41,7 +41,7 @@ public class UmaContainerCharacter : UmaContainer
     public GameObject HeadBone;
     public Transform TrackTarget;
     public float EyeHeight;
-    public bool EnableEyeTracking = true;
+    public bool EnableEyeTracking = false;
     public Material FaceMaterial;
 
     [Header("Cheek")]

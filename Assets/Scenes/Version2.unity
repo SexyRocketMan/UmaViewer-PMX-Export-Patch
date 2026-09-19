@@ -20673,8 +20673,8 @@ MonoBehaviour:
   _lookAtCamera: {fileID: 784878933}
   _faceOverride: {fileID: 1026628213}
   _outlineWidthSlider: {fileID: 833989150}
-  _aPoseRestPose: {fileID: 0}
-  _morphNameMode: {fileID: 0}
+  _aPoseRestPose: {fileID: 1672338317}
+  _morphNameMode: {fileID: 2113179805}
   _morphNameModeText: {fileID: 0}
   _textureSetRowPrefab: {fileID: 0}
   MaterialsList: {fileID: 2057017232}
@@ -73461,7 +73461,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Use APose
+  m_text: Export with APose
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 309c10a796fa90746889302436dac032, type: 2}
   m_sharedMaterial: {fileID: 1876532955194943090, guid: 309c10a796fa90746889302436dac032,
@@ -73489,8 +73489,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 22
-  m_fontSizeBase: 22
+  m_fontSize: 21
+  m_fontSizeBase: 21
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
