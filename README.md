@@ -20,6 +20,7 @@ Latest tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
 - VMD saving now triggers a save dialog, with descriptive default names, last directory memory. Camera VMDs use the same name as the motion VMD with `_cam` tag.  
 - Added an option to export the Uma models in A-pose (compatible with the ripped motions).  
 - Bone orientations adjusted to match common mmd practices.  
+- Added automatic database search in common locations (the directory list will be expanded as we go)
 - Added a baseline for future CLI implementation (batch headless export).  
   
 ### *The Ultimate Agemasen Edition* (v2)
