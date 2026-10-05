@@ -44,6 +44,14 @@ public class ModelExporter
             model = ReadPMXModel(container, textures, container.CharaEntry);
         }
 
+        if (FbxExporter.IsFbxPath(path))
+        {
+            WriteFbx(path, model);
+            RemoveBillboard(container);
+            ClearBlendShape(container);
+            return;
+        }
+
         FileStream fileStream = new FileStream(path, FileMode.Create);
         BinaryWriter writer = new BinaryWriter(fileStream);
         var config = new ModelConfig() { GlobalToonPath = "Toon" };
@@ -62,6 +70,12 @@ public class ModelExporter
 
         var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject);
         var model = ReadPMXModel(container, textures);
+
+        if (FbxExporter.IsFbxPath(path))
+        {
+            WriteFbx(path, model);
+            return;
+        }
 
         // Vertex index size fix
         PmxConfig pmxConfig = new PmxConfig()
@@ -86,6 +100,52 @@ public class ModelExporter
         fileStream.Close();
 
         UmaViewerUI.Instance.ShowMessage($"PMX Save at {path}", UIMessageType.Success);
+    }
+
+    /// <summary>
+    /// Writes the model as FBX instead of PMX. Same model, same code path that read it - only the writer
+    /// changes - and the uma refinement step is applied here and nowhere else, so it can be turned off
+    /// without touching either writer. The texture paths are the model's own list: the texture exporter has
+    /// already written the files next to the model by the time this is called.
+    /// </summary>
+    public static void WriteFbx(string path, RawMMDModel model)
+    {
+        FbxExporter.Options options = new FbxExporter.Options
+        {
+            Creator = $"UmaViewer {Application.version}",
+            TextureFolder = "Texture2D",
+            EmbedTextures = Config.Instance == null || Config.Instance.FbxEmbedTextures
+        };
+        bool refine = Config.Instance != null && Config.Instance.FbxApplyUmaRefinement;
+
+        // The helpers go before the skeleton is built: dropping bones renumbers the ones after them, and
+        // the skeleton, the skin clusters and the vertex weights all refer to bones by index.
+        int omitted = refine ? UmaModelRefinement.OmitHiddenBones(model) : 0;
+        FbxExporter.Skeleton skeleton = FbxExporter.Skeleton.FromModel(model, options.LeafBones);
+
+        // The FBX writer converts Unity space to FBX space, so it is worth saying in the log what it was
+        // handed: a rig and a mesh that disagree on scale would show up here before it shows up in Blender.
+        if (model.Bones != null && model.Bones.Length > 1 && model.Vertices != null && model.Vertices.Length > 0)
+        {
+            Debug.Log($"{Tag} fbx source: {model.Bones.Length} bones, {model.Bones[0].Name} at "
+                      + $"{model.Bones[0].Position}, {model.Bones[1].Name} at {model.Bones[1].Position}; "
+                      + $"vertex 0 at {model.Vertices[0].Coordinate}");
+        }
+
+        if (refine)
+        {
+            UmaModelRefinement.Report report = UmaModelRefinement.Apply(model, skeleton);
+            report.HiddenBonesOmitted = omitted;
+            Debug.Log(Tag + " " + report.Summary());
+        }
+
+        Debug.Log($"{Tag} fbx: {skeleton.Bones.Count} bone nodes "
+                  + $"({model.Bones.Length} bones and {skeleton.Bones.Count - model.Bones.Length} leaf stubs), "
+                  + $"arrays {(options.CompressArrays ? "deflated" : "raw")}"
+                  + $", textures {(options.EmbedTextures ? "embedded" : "referenced")}");
+        FbxExporter.Write(path, model, skeleton, options);
+
+        UmaViewerUI.Instance.ShowMessage($"FBX Save at {path}", UIMessageType.Success);
     }
 
     public static RawMMDModel ReadPMXModel(UmaContainer container, string[] textures, CharaEntry entry = null)

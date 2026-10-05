@@ -28,7 +28,12 @@ using UnityEngine.Rendering;
 ///                        (see -umaListProps)
 ///   -umaMotion &lt;path&gt;    load a specific motion onto the character before exporting/recording
 ///                        (e.g. 3d/motion/racemain/body/type01/anm_rac_type01_run02_stride)
-///   -umaOut &lt;path&gt;       .pmx file to write. Defaults to &lt;project&gt;/HeadlessExports/&lt;char&gt;_&lt;costume&gt;.pmx
+///   -umaOut &lt;path&gt;       .pmx or .fbx file to write (the extension picks the writer). Defaults to
+///                          &lt;project&gt;/HeadlessExports/&lt;char&gt;_&lt;costume&gt;.pmx
+///   -umaRefine &lt;bool&gt;    FBX only: the optional uma refinement step (eye bones aimed as the Blender
+///                          addon aims them). Defaults to Config.json's FbxApplyUmaRefinement
+///   -umaEmbedTextures &lt;bool&gt;  FBX only: carry the PNGs inside the file as well as next to it.
+///                          Defaults to Config.json's FbxEmbedTextures
 ///   -umaScene &lt;path&gt;     scene to boot, default Assets/Scenes/Version2.unity
 ///   -umaListChars        print every character id together with its costume ids, then exit
 ///   -umaListCostumes     print the costume ids of -umaChar, then exit
@@ -97,6 +102,14 @@ public static class UmaHeadlessExport
         public int CharId = -1;
         public string CostumeId = "";
         public string OutPath = "";
+        /// <summary>
+        /// FBX only: -1 keeps Config.json's FbxApplyUmaRefinement, 0 turns the optional uma refinement off
+        /// and 1 turns it on. An int rather than a bool?, because Options travels through SessionState as
+        /// JsonUtility JSON and JsonUtility drops nullable fields.
+        /// </summary>
+        public int Refine = -1;
+        /// <summary>FBX only: -1 keeps Config.json's FbxEmbedTextures, 0 off, 1 on.</summary>
+        public int EmbedTextures = -1;
         public string Prop = "";
         public string Motion = "";
         public bool ListChars;
@@ -168,6 +181,8 @@ public static class UmaHeadlessExport
                     case "-umaChar": options.CharId = int.Parse(Next()); break;
                     case "-umaCostume": options.CostumeId = Next(); break;
                     case "-umaOut": options.OutPath = Next(); break;
+                    case "-umaRefine": options.Refine = bool.Parse(Next()) ? 1 : 0; break;
+                    case "-umaEmbedTextures": options.EmbedTextures = bool.Parse(Next()) ? 1 : 0; break;
                     case "-umaScene": options.ScenePath = Next(); break;
                     case "-umaProp": options.Prop = Next(); break;
                     case "-umaMotion": options.Motion = Next(); break;
@@ -373,6 +388,25 @@ public static class UmaHeadlessExport
                         Config.Instance.PmxUmaMaterialFields = false;
                         Debug.Log($"{Tag} exporting plain MMD materials: no uma shader settings in the material "
                                   + "comment, and the plain diffuse/specular/outline values");
+                    }
+
+                    if (options.Refine >= 0)
+                    {
+                        Config.Instance.FbxApplyUmaRefinement = options.Refine == 1;
+                        Debug.Log($"{Tag} FBX uma refinement "
+                                  + (Config.Instance.FbxApplyUmaRefinement ? "on" : "off")
+                                  + (Config.Instance.FbxApplyUmaRefinement
+                                      ? " (eye bones aimed at the gaze as the Blender addon aims them)"
+                                      : " (the rig is exported exactly as the viewer holds it)"));
+                    }
+
+                    if (options.EmbedTextures >= 0)
+                    {
+                        Config.Instance.FbxEmbedTextures = options.EmbedTextures == 1;
+                        Debug.Log($"{Tag} FBX textures "
+                                  + (Config.Instance.FbxEmbedTextures
+                                      ? "embedded (the file stays textured when moved on its own)"
+                                      : "referenced only (keep the Texture2D folder next to the file)"));
                     }
 
                     if (options.ListChars)
@@ -722,9 +756,15 @@ public static class UmaHeadlessExport
                     // the exporter records what it writes, so the pmx can be compared against the game's
                     // own data vertex by vertex rather than by matching positions after the fact
                     ModelExporter.VertexDumpPath = options.DumpFace ? exportPath + ".vertices.txt" : null;
+                    bool fbx = FbxExporter.IsFbxPath(exportPath);
+                    Debug.Log($"{Tag} format: {(fbx ? "FBX" : "PMX")}"
+                              + (fbx
+                                  ? ", uma refinement " + (Config.Instance.FbxApplyUmaRefinement ? "on" : "off")
+                                  : ""));
                     if (container is UmaContainerCharacter character)
                     {
-                        Debug.Log($"{Tag} the save dialog would suggest '{ExportNaming.ModelFile(character)}.pmx'");
+                        Debug.Log($"{Tag} the save dialog would suggest "
+                                  + $"'{ExportNaming.ModelFile(character)}{(fbx ? ".fbx" : ".pmx")}'");
                         ModelExporter.ExportModel(character, exportPath);
                     }
                     else

@@ -248,9 +248,9 @@ public class UISettingsModel : MonoBehaviour
         var container = Builder.CurrentUMAContainer;
         if (container)
         {
-            var path = StandaloneFileBrowser.SaveFilePanel("Save PMX File",
+            var path = StandaloneFileBrowser.SaveFilePanel("Save Model File",
                 Config.Instance.ModelSaveFolder(Config.Instance.MainPath),
-                ExportNaming.ModelFile(container), "pmx");
+                ExportNaming.ModelFile(container), ModelExportFilters);
             if (!string.IsNullOrEmpty(path))
             {
                 ModelExporter.ExportModel(container, path);
@@ -261,8 +261,9 @@ public class UISettingsModel : MonoBehaviour
         var prop_container = Builder.CurrentOtherContainer;
         if (prop_container)
         {
-            var path = StandaloneFileBrowser.SaveFilePanel("Save PMX File",
-                Config.Instance.ModelSaveFolder(Config.Instance.MainPath), $"{prop_container}", "pmx");
+            var path = StandaloneFileBrowser.SaveFilePanel("Save Model File",
+                Config.Instance.ModelSaveFolder(Config.Instance.MainPath), $"{prop_container}",
+                ModelExportFilters);
             if (!string.IsNullOrEmpty(path))
             {
                 ModelExporter.ExportModel(prop_container, path);
@@ -274,4 +275,14 @@ public class UISettingsModel : MonoBehaviour
         UmaViewerUI.Instance.ShowMessage("Not supported on this platform", UIMessageType.Warning);
 #endif
     }
+
+    /// <summary>
+    /// What the save dialog offers. The extension the name ends up with decides which writer runs
+    /// (<see cref="ModelExporter.ExportModel"/>), so both formats are reachable from this one dialog.
+    /// </summary>
+    private static readonly ExtensionFilter[] ModelExportFilters =
+    {
+        new ExtensionFilter("PMX model", "pmx"),
+        new ExtensionFilter("FBX model", "fbx")
+    };
 }

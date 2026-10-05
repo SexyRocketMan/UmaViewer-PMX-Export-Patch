@@ -122,9 +122,12 @@ public class UmaViewerUI : MonoBehaviour
 
     public FaceDrivenKeyTarget currentFaceDrivenKeyTarget;
 
+    private UIShortcuts shortcuts;
+
     private void Awake()
     {
         Instance = this;
+        shortcuts = new UIShortcuts(this);
     }
 
     private void Start()
@@ -162,6 +165,8 @@ public class UmaViewerUI : MonoBehaviour
 
     private void Update()
     {
+        shortcuts?.Update();
+
         if (Builder.CurrentAudioSources.Count > 0 && Builder.CurrentAudioSources[0])
         {
             AudioSource MianSource = Builder.CurrentAudioSources[0];
@@ -191,7 +196,8 @@ public class UmaViewerUI : MonoBehaviour
         foreach (var t in mainObject.GetComponentsInChildren<UmaUIContainer>())
         {
             if (t.transform.parent != mainObject) continue;
-            t.ToggleImage.enabled = (t == child);
+            // the container the paged lists share has no highlight image of its own
+            if (t.ToggleImage) t.ToggleImage.enabled = (t == child);
         }
     }
 
@@ -227,6 +233,7 @@ public class UmaViewerUI : MonoBehaviour
 
             var container3 = Instantiate(UmaContainerPrefab, CharactersList.content).GetComponent<UmaUIContainer>();
             container3.Name = container3.name = chara.Id + " " + chara.GetName();
+            container3.Keywords = CharaSearchText(chara);
             container3.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(CharactersList.content, container3);
@@ -241,6 +248,7 @@ public class UmaViewerUI : MonoBehaviour
 
             var container4 = Instantiate(UmaContainerPrefab, AnimationSetList.content).GetComponent<UmaUIContainer>();
             container4.Name = container4.name = chara.Id + " " + chara.GetName();
+            container4.Keywords = container3.Keywords;
             container4.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(AnimationSetList.content, container4);
@@ -261,6 +269,7 @@ public class UmaViewerUI : MonoBehaviour
             var pageentry = new PageManager.Entry();
 
             pageentry.Name = chara.GetName();
+            pageentry.Keywords = CharaSearchText(chara);
             pageentry.OnClick = (container) =>
             {
                 HighlightChildImage(MobCharactersList.content, container);
@@ -290,6 +299,7 @@ public class UmaViewerUI : MonoBehaviour
             var charaInstance = chara;
             var container2 = Instantiate(UmaContainerPrefab, MiniCharactersList.content).GetComponent<UmaUIContainer>();
             container2.Name = container2.name = chara.Id + " " + chara.GetName();
+            container2.Keywords = CharaSearchText(chara);
             container2.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(MiniCharactersList.content, container2);
@@ -304,6 +314,7 @@ public class UmaViewerUI : MonoBehaviour
 
             var container3 = Instantiate(UmaContainerPrefab, MiniAnimationSetList.content).GetComponent<UmaUIContainer>();
             container3.Name = container3.name = chara.Id + " " + chara.GetName();
+            container3.Keywords = CharaSearchText(chara);
             container3.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(MiniAnimationSetList.content, container3);
@@ -515,6 +526,14 @@ public class UmaViewerUI : MonoBehaviour
     public void LoadNormalSoundPanels()
     {
         NormalSoundCtrl.Clear();
+        // the key walk carries on into the clips of whichever awb it lands on, instead of stopping at the
+        // file that holds them. Wired here rather than in the inspector: the page manager lives on a prefab
+        // every paged list shares, so a value set there would apply to all of them at once.
+        if (NormalSoundCtrl && NormalSubSoundList)
+            NormalSoundCtrl.SubList = NormalSubSoundList;
+        else
+            Debug.LogWarning("NormalSoundCtrl or NormalSubSoundList is not assigned, so the key walk will " +
+                             "not go into the sound clips: it will step over each awb instead.");
         var pageentrys = new List<PageManager.Entry>();
         foreach (var entry in Main.AbSounds.Where(a => (!a.Name.Contains("live")) && a.Name.EndsWith("awb")))
         {
@@ -839,7 +858,13 @@ public class UmaViewerUI : MonoBehaviour
     {
         for (int i = NormalSubSoundList.content.childCount - 1; i >= 0; i--)
         {
-            Destroy(NormalSubSoundList.content.GetChild(i).gameObject);
+            // Hidden before it is destroyed, because a destroy only happens at the end of the frame: the
+            // key walk reads this content in the same frame, and an old row still sitting there is a row it
+            // can land on. That played the previous awb's clip a second time and left the highlight on a row
+            // that vanished moments later, so no clip looked selected.
+            var row = NormalSubSoundList.content.GetChild(i).gameObject;
+            row.SetActive(false);
+            Destroy(row);
         }
 
         var subSounds = UmaViewerBuilder.LoadAudio(awb);
@@ -874,68 +899,44 @@ public class UmaViewerUI : MonoBehaviour
         && !a.Name.EndsWith($"_e")
         );
 
+        IEnumerable<UmaDatabaseEntry> motions;
         if (umaId == -1)
         {
-            var pageentrys = new List<PageManager.Entry>();
-            foreach (var entry in filteredList.Where(a => (a.Name.Contains($"/type0") || a.Name.Contains($"/type99") || a.Name.Contains($"anm_sty_")) && !a.Name.Contains($"/tail") && !a.Name.EndsWith($"_pos") && !a.Name.Contains($"prop") && !a.Name.EndsWith($"_pose") && !a.Name.Contains($"_defaultmotion")))
-            {
-                var pageentry = new PageManager.Entry();
-                pageentry.Name = Path.GetFileName(entry.Name);
-                pageentry.FontSize = 20;
-                pageentry.OnClick = (container) =>
-                {
-                    HighlightChildImage(animationList.content, container);
-                    (Builder.CurrentUMAContainer)?.LoadAnimation(entry);
-                    LoadedAnimation();
-                };
-                pageentrys.Add(pageentry);
-            }
-            pageManager.Initialize(pageentrys, animationList);
+            motions = filteredList.Where(a => (a.Name.Contains($"/type0") || a.Name.Contains($"/type99") || a.Name.Contains($"anm_sty_")) && !a.Name.Contains($"/tail") && !a.Name.EndsWith($"_pos") && !a.Name.Contains($"prop") && !a.Name.EndsWith($"_pose") && !a.Name.Contains($"_defaultmotion"));
         }
         else if (umaId == -2)
         {
-            foreach (var entry in filteredList.Where(a => a.Name.Contains($"/tail")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-            pageManager.ResetCtrl();
+            motions = filteredList.Where(a => a.Name.Contains($"/tail"));
         }
         else if (umaId == -3)
         {
-            foreach (var entry in Main.AbMotions.Where(a => a.Name.Contains($"type00_ear") && !a.Name.EndsWith("driven") && !a.Name.Contains("touch")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-            pageManager.ResetCtrl();
+            motions = Main.AbMotions.Where(a => a.Name.Contains($"type00_ear") && !a.Name.EndsWith("driven") && !a.Name.Contains("touch"));
         }
         else
         {
-            //Common animations
-            foreach (var entry in filteredList.Where(a => a.Name.Contains($"chara/chr{umaId}") && !a.Name.Contains("pose")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-
-            //Skill animations
-            foreach (var entry in filteredList.Where(a => a.Name.Contains($"card/body/crd{umaId}")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-            pageManager.ResetCtrl();
+            //Common animations, then skill animations. Concat rather than one Where, so the two groups
+            //stay in that order whatever order the motions happen to be listed in.
+            motions = filteredList.Where(a => a.Name.Contains($"chara/chr{umaId}") && !a.Name.Contains("pose"))
+                .Concat(filteredList.Where(a => a.Name.Contains($"card/body/crd{umaId}")));
         }
-    }
 
-    void CreateAnimationSelectionPanel(UmaDatabaseEntry entry, Transform parent)
-    {
-        var container = Instantiate(UmaContainerPrefab, parent).GetComponent<UmaUIContainer>();
-        container.Name = container.name = Path.GetFileName(entry.Name);
-        container.FontSize = 20;
-        container.Button.onClick.AddListener(() =>
+        // Every one of these lists goes through the page manager, which is what gives it paging, the
+        // search box and the key walk over the whole list, instead of a second way to build rows.
+        var pageentrys = new List<PageManager.Entry>();
+        foreach (var entry in motions)
         {
-            HighlightChildImage(parent, container);
-            (Builder.CurrentUMAContainer)?.LoadAnimation(entry);
-            LoadedAnimation();
-        });
+            var pageentry = new PageManager.Entry();
+            pageentry.Name = Path.GetFileName(entry.Name);
+            pageentry.FontSize = 20;
+            pageentry.OnClick = (container) =>
+            {
+                HighlightChildImage(animationList.content, container);
+                (Builder.CurrentUMAContainer)?.LoadAnimation(entry);
+                LoadedAnimation();
+            };
+            pageentrys.Add(pageentry);
+        }
+        pageManager.Initialize(pageentrys, animationList);
     }
 
     string getCharaName(string id)
@@ -943,6 +944,12 @@ public class UmaViewerUI : MonoBehaviour
         var entry = Main.Characters.FirstOrDefault(a => a.Id.ToString().Equals(id));
         return (entry == null) ? id.ToString() : entry.GetName();
     }
+
+    /// <summary>
+    /// What a search box on a character list matches besides the row text: the id, and whichever of the
+    /// two names the row is not showing.
+    /// </summary>
+    static string CharaSearchText(CharaEntry chara) => $"{chara.Id} {chara.Name} {chara.EnName}";
 
     public string getCharaTailPath(CharaEntry chara)
     {

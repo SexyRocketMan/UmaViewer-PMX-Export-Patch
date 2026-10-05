@@ -61,6 +61,12 @@ public class Config
     public string PmxUmaMaterialFieldsTip = "true/false. Writes the uma material data an MMD material has no field for into the exported materials: the shader settings (shade threshold, rim, specular, outline, map names) as one line in the material comment, which the Blender uma addon reads back, and the material's specular and outline values. false exports plain MMD materials (white diffuse, no specular, black outline at 0.4) for models meant to be used without that addon.";
     public bool PmxUmaMaterialFields = true;
 
+    public string FbxApplyUmaRefinementTip = "true/false. FBX export only, and optional on purpose: aims the eye bones the way the Blender uma addon's \"Refine Structure\" aims them (Y out of the face along the gaze, roll so Z points down) and keeps the eyeball skinned to Eye_L/Eye_R, so rotating an eye bone moves the gaze without any driver - which is what FBX cannot carry. true (default) exports the rig as close to an addon-refined model as the format allows; false exports the rig exactly as the viewer holds it.";
+    public bool FbxApplyUmaRefinement = true;
+
+    public string FbxEmbedTexturesTip = "true/false. FBX export only. Carries the PNGs inside the .fbx as well as writing the Texture2D folder next to it, so the model stays textured when the file is copied somewhere on its own (Blender packs the embedded copy into the .blend). Costs the size of the textures. false writes the relative paths only, which is what the .pmx does.";
+    public bool FbxEmbedTextures = true;
+
     public string AntiAliasingTip = "Display, screenshot antialiasing level. 0 - no AA, 1 - 2x MSAA, 2 - 4x MSAA, 3 - 8x MSAA";
     public int AntiAliasing = 2;
 

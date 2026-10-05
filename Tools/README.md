@@ -8,7 +8,7 @@ argument, and what the errors mean. This file is only the map.
 
 | File | What it does |
 |---|---|
-| `headless_export.ps1` | The CLI. Runs Unity in batch mode, boots the viewer scene, loads a character, costume or prop, and then writes a `.pmx`, records one loop of a motion into a `.vmd`, and/or renders the game's own view to a PNG - the same code paths the in-app buttons use. |
+| `headless_export.ps1` | The CLI. Runs Unity in batch mode, boots the viewer scene, loads a character, costume or prop, and then writes a `.pmx` or an `.fbx`, records one loop of a motion into a `.vmd`, and/or renders the game's own view to a PNG - the same code paths the in-app buttons use. The model's extension picks the writer. |
 | `pmx_inspect.py` | Blender-free PMX inspector and differ: `summary`, `bones`, `tails`, `weights`, `morphs`, `names`, `integrity`, `check`, `diff`. |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator: `summary`, `loop`, `motion`. |
 
@@ -25,8 +25,15 @@ uv run Tools/vmd_inspect.py loop     D:/out/1001_00.vmd
 # list characters and their costume ids
 ./Tools/headless_export.ps1 -ListChars
 
-# one model
+# one model; use an .fbx path for FBX instead of PMX
 ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.fbx
+
+# FBX without the uma refinement step (eye bones left as the viewer holds them)
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Refine off -Out D:/out/1001_00.fbx
+
+# FBX referencing its textures instead of carrying them (smaller file)
+./Tools/headless_export.ps1 -Char 1001 -Costume 00 -EmbedTextures off -Out D:/out/1001_00.fbx
 
 # one model and one loop of a motion
 ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Motion anm_rac_type01_run02_stride `

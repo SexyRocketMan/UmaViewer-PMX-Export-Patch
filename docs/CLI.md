@@ -25,6 +25,7 @@ line, runs it, and prints the interesting lines of the log afterwards.
 |---|---|
 | See which characters and costumes exist | `./Tools/headless_export.ps1 -ListChars` |
 | Export a model | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/special_week.pmx` |
+| Export it as FBX instead | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/special_week.fbx` |
 | Record one loop of a motion | `./Tools/headless_export.ps1 -Char 1001 -Motion anm_rac_type01_run02_stride -RecordVmd D:/out/run.vmd` |
 | Do both in one run | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Motion <motion> -Out m.pmx -RecordVmd m.vmd` |
 | Screenshot the game's own render | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/face.png -ShotOnly` |
@@ -80,6 +81,41 @@ Prints one line per character - id, name, available costume ids - and exits with
 `.pmx` **and a `Texture2D/` folder next to it** - the model refers to those files, so keep them together.
 
 Without `-Out` the file lands in `<project>/HeadlessExports/<charid>_<costume>.pmx`.
+
+**FBX instead of PMX:** give `-Out` an `.fbx` path. Same model, same code path that read it - only the
+writer differs - and the `Texture2D/` folder next to it works the same way. The two formats differ in what
+they can carry, which is worth knowing before choosing:
+
+| | `.pmx` | `.fbx` |
+|---|---|---|
+| who imports it | mmd_tools in Blender, MMD itself | Blender, Unity, Unreal, anything with an FBX importer |
+| bones | all 437, with the tails the exporter derives | all 437, same names, same positions and orientations; FBX stores no bone length |
+| morphs | all, as MMD vertex morphs | all, as blend shapes with the same names |
+| materials | MMD materials, with the uma shader settings in the material comment | Phong materials; the uma settings travel as a `UmaMaterial` user property instead |
+| extra UV channels | the 3 PMX extra UVs (mmd_tools shows them as UV1..UV3, _UV2, _UV3) | the same six layers, same names |
+| eye rig | the Blender add-on's `Refine Structure` turns the gaze morphs into eight driven shape keys | the eye bones are aimed so rotating them moves the gaze, with no driver (`-Refine`) |
+| bone collections, connected bones, hidden bones | the add-on's `Set Bone Collections` / `Refine Structure` | **not in the format** - see [FBX_EXPORT.md](FBX_EXPORT.md) §7 |
+
+The one option of its own is `-Refine on|off` (default: `Config.json`'s `FbxApplyUmaRefinement`, which is
+on): `off` exports the rig exactly as the viewer holds it, all 437 bones; `on` leaves out the **167 bones
+the Blender add-on hides** - its `Handle` collection and *Refine Structure*'s own hidden list - and aims the
+eye bones the way the add-on aims them, keeping the eyeball skinned to them so rotating `Eye_L`/`Eye_R`
+moves the gaze. An FBX has no visibility flag, so omitting is the only way a file can look like the rig the
+add-on shows; any weight an omitted bone carried moves to the bone it belongs to. Only affects FBX.
+
+Two things about the FBX worth knowing before comparing it with the PMX:
+
+* **The textures are inside it.** The PNGs are written to `Texture2D/` *and* embedded in the file, so the
+  model stays textured when the `.fbx` is copied somewhere on its own (Blender packs the embedded copy).
+  `-EmbedTextures off` writes the relative paths only, like the PMX. Either way the file is about the size
+  of the `.pmx`.
+* **Import it with *Ignore Leaf Bones* ticked.** An FBX carries no bone length, so a reader infers one from
+  the distance to a bone's children; the writer adds a stub at the tip of every chain end - the same trick
+  Blender's own exporter has as `add_leaf_bones` - so that the tips have a length at all. Ticking the box
+  drops the 160 stubs and leaves the 270 bones the refined rig has, lengths intact. Without it you get 430
+  bones, the extra ones being the stubs.
+  [FBX_EXPORT.md](FBX_EXPORT.md#8-bone-lengths-in-an-fbx) has the measured detail and what stays
+  approximate either way.
 
 ### 3. Record a motion
 

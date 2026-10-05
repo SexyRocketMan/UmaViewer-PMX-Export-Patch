@@ -156,6 +156,15 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public MorphRecorder morphRecorder;
     public MorphRecorder morphRecorderSaved;
 
+    /// <summary>
+    /// The fixed timestep the app was using before a recording pinned it to the recording rate, or -1
+    /// while nothing is pinned. It is put back by <see cref="StopRecording"/>: the manual recorder samples
+    /// in FixedUpdate, so the pin cannot be released any earlier than that. Static, because a live
+    /// recording builds one recorder per character and they all pin the same global - the first to
+    /// initialise sets the app's own value aside and the first to stop puts it back.
+    /// </summary>
+    private static float previousFixedDeltaTime = -1f;
+
     private UmaContainer container;
 
     public bool IsLive;
@@ -181,9 +190,18 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
     public void Initialize()
     {
+        if (previousFixedDeltaTime < 0f) previousFixedDeltaTime = Time.fixedDeltaTime;
         Time.fixedDeltaTime = FPSs;
         container = GetComponentInParent<UmaContainer>();
         List<Transform> objs = GetComponentsInChildren<Transform>().ToList();
+
+        // A component outlives a take whose save dialog was cancelled - only SaveVMD destroys it - and
+        // AutoRecordVMD calls Initialize again for the next take. BoneDictionary is replaced below, but the
+        // three dictionaries built further down are only ever added to, so without this the second run
+        // throws "An item with the same key has already been added" and nothing gets recorded.
+        transformDictionary.Clear();
+        positionDictionary.Clear();
+        rotationDictionary.Clear();
 
         // === DIAGNOSTIC TOOL ===
         if (container != null && UmaViewerBuilder.Instance.CurrentUMAContainer.IsMini) 
@@ -315,6 +333,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         if (BoneDictionary[BoneNames.右足ＩＫ] != null)
             RightFootIKOffset = Quaternion.Inverse(transform.rotation) * (BoneDictionary[BoneNames.右足ＩＫ].position - transform.position);
 
+        // the previous take's ghosts go before a new set is built, whether or not that take was saved
+        DestroyBoneGhosts();
         boneGhost = new BoneGhost(BoneDictionary, UseBottomCenter);
         morphRecorder = new MorphRecorder(transform);
 
@@ -671,6 +691,19 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             {
                 if (pair.Key != null) pair.Key.cullingMode = pair.Value;
             }
+
+            // Put playback back where the take found it. The take rewinds every layer to 0 and steps it
+            // through the clip, so without this the character and the camera are both left on the last
+            // frame of a motion the viewer was only part way through - and a camera motion is a one shot
+            // fly through, so being left on its last frame parks the view somewhere it cannot come back
+            // from. Restoring every layer together is what keeps the two in step: putting only the camera
+            // back makes it replay the move against a character that has already finished.
+            foreach (var layer in layers)
+            {
+                if (layer.Animator != null)
+                    layer.Animator.Play(layer.StateHash, layer.Layer, layer.NormalizedTime);
+            }
+
             StopRecording();
         }
 
@@ -825,10 +858,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public IEnumerator RecordCurrentLoop(AnimationClip clip, int fps = 30, Action onFinished = null)
     {
         var character = GetComponentInParent<UmaContainerCharacter>();
-        var animators = character == null
-            ? new Animator[0]
-            : new[] { character.UmaAnimator, character.UmaFaceAnimator }.Where(a => a != null).ToArray();
-        return RecordClipLoop(clip, fps, animators, onFinished);
+        var animators = new List<Animator>();
+        if (character != null)
+        {
+            if (character.UmaAnimator) animators.Add(character.UmaAnimator);
+            if (character.UmaFaceAnimator) animators.Add(character.UmaFaceAnimator);
+        }
+
+        // The motion's camera is played by its own animator, and it belongs in this list: rewinding is
+        // what puts everything at the first frame of the take, so without it the recorded camera vmd
+        // starts wherever the camera happened to be and lines up with neither the body motion nor the
+        // frame the take began on. Going through here also means it gets the same speed, culling and
+        // playback position handling as the body, instead of being left on the last frame of its move.
+        var cameraAnimator = UmaViewerBuilder.Instance ? UmaViewerBuilder.Instance.AnimationCameraAnimator : null;
+        if (cameraAnimator && cameraAnimator.runtimeAnimatorController == null) cameraAnimator = null;
+        if (cameraAnimator) animators.Add(cameraAnimator);
+
+        return RecordClipLoop(clip, fps, animators.ToArray(), onFinished);
     }
 
     private class RecordedLayer
@@ -837,6 +883,12 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         public int Layer;
         /// <summary>Short name hash of the state, which is what <see cref="Animator.Play(int, int, float)"/> takes.</summary>
         public int StateHash;
+        /// <summary>
+        /// Where the layer had got to, so the take can put playback back where it found it. Capped at 1,
+        /// because a looping state reports an ever growing time: the end of a loop is the start of it, so
+        /// landing on the last frame of one is the same place.
+        /// </summary>
+        public float NormalizedTime;
     }
 
     /// <summary>
@@ -857,7 +909,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 {
                     Animator = animator,
                     Layer = layer,
-                    StateHash = state.shortNameHash
+                    StateHash = state.shortNameHash,
+                    NormalizedTime = Mathf.Min(state.normalizedTime, 1f)
                 });
             }
         }
@@ -885,13 +938,47 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             rotationDictionary.Add(boneName, new List<Quaternion>());
         }
         morphRecorder = new MorphRecorder(transform);
-        
+
+        // the take is over, saved or not, so the app gets its own fixed timestep back instead of staying
+        // pinned to the recording rate for the rest of the session
+        if (previousFixedDeltaTime > 0f)
+        {
+            Time.fixedDeltaTime = previousFixedDeltaTime;
+            previousFixedDeltaTime = -1f;
+        }
+
         if (IsLive)
         {
             var director = Gallop.Live.Director.instance;
             director._liveTimelineControl.RecordUma -= LiveSaveFrame;
         }
     }
+
+    /// <summary>
+    /// Destroys the ghost objects <see cref="BoneGhost"/> built. They are GameObjects parented to the
+    /// character's bones, and SaveVMD used to be the only thing that freed them - so a take whose save
+    /// dialog was cancelled leaked a whole set every time <see cref="Initialize"/> ran again.
+    /// </summary>
+    private void DestroyBoneGhosts()
+    {
+        if (boneGhost == null) return;
+
+        foreach (var pair in boneGhost.GhostDictionary)
+        {
+            try
+            {
+                if (pair.Value.ghost != null) Destroy(pair.Value.ghost.gameObject);
+            }
+            catch (Exception ex)
+            {
+                // mini-uma motion export is what throws in here
+                Debug.LogWarning($"Failed to destroy ghost for {pair.Key}: {ex.Message}");
+            }
+        }
+        boneGhost = null;
+    }
+
+    private void OnDestroy() => DestroyBoneGhosts();
 
     /// <summary>
     /// VMDを作成する
@@ -1106,22 +1193,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 binaryWriter.Close();
             }
         }
-        if (boneGhost != null)
-        {   
-            // Mini-umas motion export cause an exception here
-            foreach(var pair in boneGhost.GhostDictionary)
-            {
-                try 
-                {
-                    if (pair.Value.ghost != null) Destroy(pair.Value.ghost.gameObject);
-                } 
-                catch (Exception ex) 
-                {
-                    Debug.LogWarning($"Failed to destroy ghost for {pair.Key}: {ex.Message}");
-                }
-            }
-            
-        }
+        DestroyBoneGhosts();
         Destroy(this);
     }
 

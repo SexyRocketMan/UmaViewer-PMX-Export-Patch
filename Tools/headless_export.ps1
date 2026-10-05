@@ -48,6 +48,8 @@ param(
     [int]$MorphNameMode = -1,
     [switch]$APose,
     [switch]$PlainMaterials,
+    [ValidateSet("on", "off", "config")][string]$Refine = "config",
+    [ValidateSet("on", "off", "config")][string]$EmbedTextures = "config",
     [string]$Screenshot = "",
     [ValidateSet("face", "head", "upper", "full")][string]$ShotView = "full",
     [int]$ShotWidth = 1280,
@@ -172,6 +174,8 @@ if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 if ($APose) { $arguments += "-umaAPose" }
 if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
+if ($Refine -ne "config") { $arguments += @("-umaRefine", ($Refine -eq "on")) }
+if ($EmbedTextures -ne "config") { $arguments += @("-umaEmbedTextures", ($EmbedTextures -eq "on")) }
 if ($Screenshot) {
     $arguments += @("-umaScreenshot", $Screenshot, "-umaShotView", $ShotView,
                     "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
