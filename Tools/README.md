@@ -54,8 +54,9 @@ bit-exact against the game's own C# by `spring_probe/` (a small .NET project tha
 
 | File | What it does |
 |---|---|
-| `uma_spring_dump.py` | Reads a costume prefab, finds the CySpring chains in it, and writes one chain as a JSON spec: the game's parameters, bone positions in game units, and a scripted parent swing. `--segments parent` and `--segments child` pick which way a link's length is read (child is right - see the file). |
+| `uma_spring_dump.py` | Reads a costume prefab, finds the CySpring chains in it, and writes one chain as a JSON spec: the game's parameters, bone positions in game units, and a scripted parent wag (`--swing`, `--axis`). A link's distance and axis always run from a bone down to its child, which is what `CySpringBoneBase.Initialize` measures. |
 | `cyspring_port.py` | The solver itself: a float32 transcription of `CySpringNative.UpdateNativeCloth`, with `--compare` against the C# trace, `--trace`, and `--no-colliders`. Also the module the Blender bake imports. |
+| `cyspring_metrics.py` | The same run as numbers: per link the rest length against the prefab's, droop under gravity, how far a link hangs behind its parent, its lag in frames, overshoot, settle time, ringing, and frame-to-frame step - plus the tip's path against a rigid chain's. `--motion impulse` steps the parent once and holds it, which is the cleanest spring read. |
 | `spring_probe/` | The .NET harness that runs the game's own structs and solver and dumps a trace, so the Python port can be compared frame by frame (`dotnet run -- --trace out.txt`). |
 | `blender_cyspring_demo.py` | Imports a PMX with mmd_tools, bakes a spec's motion onto the model's own spring bones as world rotations, and can render an mp4. Needs `--model`; MMD's rigid-body physics is left out because the bake *is* the motion. |
 
@@ -65,9 +66,12 @@ python Tools/uma_spring_dump.py 1001 00 --chain Sp_Hi_Tail0 --segments child > t
     tail.json tail.blend --model model.pmx --mp4 tail.mp4
 ```
 
-One trap worth knowing: `scene.render.filepath` is not respected while rendering if the user's startup
-add-ons rewrite it (a dataset add-on that hooks `render_init` will send the frames into its own folder).
-The demo renders without `write_still` and calls `Image.save_render()` instead, which writes where it is told.
+Two traps worth knowing. `scene.render.filepath` is not respected while rendering if the user's startup
+add-ons rewrite it (a dataset add-on that hooks `render_init` will send the frames into its own folder);
+the demo renders without `write_still` and calls `Image.save_render()` instead, which writes where it is
+told. And the solver's rotations live in the prefab's frame, not the armature's: a bake that applies them
+directly turns the tail about axes about 87 degrees from the solver's. The demo carries them over per bone
+(`M @ R @ M^-1`) and verifies every frame against the solver afterwards, so a bad bake shows as a number.
 
 ## Quick start
 

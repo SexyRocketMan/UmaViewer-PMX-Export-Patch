@@ -3,9 +3,16 @@
     blender -b -P Tools/blender_cyspring_demo.py -- <spec.json> <out.blend> --model <model.pmx> \
         [--mp4 out.mp4] [--frames N] [--prefix Sp_Hi_Tail0] [--colliders]
 
-`spec.json` is one real chain from `uma_spring_dump.py 1001 00 --chain <root> --segments child`: the game's
-own parameters, its bone positions in game units, and a scripted parent swing. The solver is
-`cyspring_port.py`, the port that is bit-exact against the game's own C#.
+`spec.json` is one real chain from `uma_spring_dump.py 1001 00 --chain <root> --swing 35`: the game's own
+parameters, its bone positions in game units, and a scripted parent wag. The solver is `cyspring_port.py`,
+the port that is bit-exact against the game's own C#, and `cyspring_metrics.py` reads the same run as
+numbers (droop, lag, overshoot, settle) - worth running before baking, since a chain that does not lag in
+the numbers will not lag on the model either.
+
+What the bake has to get right, and did not at first: the solver's rotations are in the *prefab's* frame
+(Unity, Y up) while the imported armature is in Blender's (Z up, and its own rest shape), so a rotation
+crosses over as `M @ R @ M^-1`, with `M` taken per bone from that bone's own rest direction. Applied
+directly, the tail turned about axes about 87 degrees away from the ones the solver used.
 
 The PMX is imported with mmd_tools (meshes and armature only - MMD's own rigid-body physics is left out,
 since the bake *is* the motion) and the swing is written onto the model's own spring bones by name. What is
@@ -23,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import sys
@@ -68,6 +76,32 @@ def import_model(path: str):
     raise SystemExit(f"{path} imported without an armature")
 
 
+def model_frame(obj: bpy.types.Object, spec: dict, baked: list[str]) -> dict[str, Quaternion]:
+    """For each bone, the rotation carrying the prefab's frame onto the armature's.
+
+    The spec's axes come from the prefab, the bones come from the PMX, and the importer puts the model in
+    Blender's Z-up frame: the two are the same tail seen from two origins, so a solver rotation has to cross
+    as `M @ R @ M^-1`. Applying it directly (which this file did first) leaves the baked chain ten degrees
+    away from the solver's shape on every joint.
+
+    `M` is taken per bone, from that bone's own rest direction, not once for the whole chain: the model's
+    rest shape is a little different from the prefab's positions (they agree to about seven degrees), and a
+    chain-wide `M` would smear that difference into the motion. Per bone, the bake reproduces the solver's
+    rotation *relative to each bone's own rest*, which is what a tail looks like on this model.
+    """
+    rest = {name: obj.data.bones[name].matrix_local.to_quaternion() for name in baked}
+    frames = {}
+    for bone in spec["bones"]:
+        if bone["name"] not in rest:
+            continue
+        spec_axis = Vector(bone["axis"]).normalized()
+        model_axis = (rest[bone["name"]] @ Vector((0.0, 1.0, 0.0))).normalized()
+        frames[bone["name"]] = spec_axis.rotation_difference(model_axis)
+    return frames
+
+
+
+
 def bake(obj: bpy.types.Object, spec: dict, frames: list, prefix: str) -> list[str]:
     """Key the solver's world rotations onto the model's bones, on top of each bone's rest orientation."""
     scene = bpy.context.scene
@@ -83,6 +117,10 @@ def bake(obj: bpy.types.Object, spec: dict, frames: list, prefix: str) -> list[s
         raise SystemExit("none of the chain's bones are in this model")
 
     rest_rotation = {name: obj.data.bones[name].matrix_local.to_quaternion() for name in baked}
+    frame_to_model = model_frame(obj, spec, baked)
+    angles = [math.degrees(rotation.angle) for rotation in frame_to_model.values()]
+    print(f"  prefab frame -> model frame: {min(angles):.1f} to {max(angles):.1f} deg per bone "
+          f"(the importer's Y-up to Z-up turn, plus the tail's own rest bend)")
 
     for frame_index, frame in enumerate(frames):
         scene.frame_set(frame_index)
@@ -92,15 +130,62 @@ def bake(obj: bpy.types.Object, spec: dict, frames: list, prefix: str) -> list[s
                 continue
             x, y, z, qx, qy, qz, qw = frame[index * 7:index * 7 + 7]
             delta = Quaternion((qw, qx, qy, qz))          # the world rotation the solver produced
+            carry = frame_to_model[name]
+            applied = carry @ delta @ carry.inverted()
             bpy.context.view_layer.update()
             pose_bone = obj.pose.bones[name]
             head = pose_bone.head.copy()                   # where the parent's pose put this bone
-            pose_bone.matrix = Matrix.Translation(head) @ (delta @ rest_rotation[name]).to_matrix().to_4x4()
+            pose_bone.matrix = Matrix.Translation(head) @ (applied @ rest_rotation[name]).to_matrix().to_4x4()
             pose_bone.keyframe_insert("rotation_quaternion", frame=frame_index)
             pose_bone.keyframe_insert("location", frame=frame_index)
 
     scene.frame_end = max(1, len(frames) - 1)
     return baked
+
+
+def verify_bake(obj: bpy.types.Object, spec: dict, frames: list, baked: list[str]) -> None:
+    """Read the keyed animation back and say numerically what it does.
+
+    A bake is only as good as what it keyed, and the failure that matters - every link welded to its parent -
+    looks like a very smooth, very quiet set of numbers. So this walks the scene again and reports, per bone,
+    how far it turns per frame and how far it sits from the bone above it: a tail with no lag has the second
+    column at zero, and a tail that jumps shows up in the maximum.
+    """
+    scene = bpy.context.scene
+    names = [name for name in baked]
+    directions: list[dict[str, Vector]] = []
+    for frame_index in range(len(frames)):
+        scene.frame_set(frame_index)
+        row = {}
+        for name in names:
+            pose = obj.pose.bones[name]
+            row[name] = (obj.matrix_world.to_quaternion() @ (pose.matrix.to_quaternion()
+                                                             @ Vector((0.0, 1.0, 0.0)))).normalized()
+        directions.append(row)
+
+    print("  read back from the armature:")
+    print(f"    {'bone':<22}{'turn mean°':>11}{'turn max°':>10}{'from above mean°':>18}{'max°':>7}"
+          f"{'vs solver°':>12}")
+    for index, name in enumerate(names):
+        turns = [math.degrees(directions[f][name].angle(directions[f - 1][name]))
+                 for f in range(1, len(directions))]
+        if index == 0:
+            above = [0.0, 0.0]
+        else:
+            gaps = [math.degrees(directions[f][name].angle(directions[f][names[index - 1]]))
+                    for f in range(len(directions))]
+            above = [sum(gaps) / len(gaps), max(gaps)]
+        # the bake is exact if every baked direction is the solver's link direction carried into the model
+        carry = model_frame(obj, spec, baked)[name]
+        residuals = []
+        bone_index = [entry["name"] for entry in spec["bones"]].index(name)
+        for frame_index, frame in enumerate(frames):
+            _, _, _, qx, qy, qz, qw = frame[bone_index * 7:bone_index * 7 + 7]
+            delta = Quaternion((qw, qx, qy, qz))
+            expected = (carry @ (delta @ Vector(spec["bones"][bone_index]["axis"]))).normalized()
+            residuals.append(math.degrees(directions[frame_index][name].angle(expected)))
+        print(f"    {name:<22}{sum(turns) / len(turns):11.3f}{max(turns):10.3f}"
+              f"{above[0]:18.3f}{above[1]:7.3f}{max(residuals):12.4f}")
 
 
 def frame_chain(obj: bpy.types.Object, baked: list[str]) -> None:
@@ -186,6 +271,7 @@ def main() -> int:
         raise SystemExit("--model is needed: an armature alone renders as nothing")
     armature = import_model(args.model)
     baked = bake(armature, spec, frames, args.prefix)
+    verify_bake(armature, spec, frames, baked)
     frame_chain(armature, baked)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.blend)), exist_ok=True)

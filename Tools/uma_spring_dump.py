@@ -458,8 +458,34 @@ def chain_geometry(UnityPy, con, dump: dict, root: str):
     return container, chain, merged, parent_of, referenced, reference, absent
 
 
+def wag_motion(frames: int, swing: float, swing_axis: str = "y", rise: int = 3, hold: int = 10) -> list[dict]:
+    """A parent motion that actually excites the chain: quick flicks with still stretches between them.
+
+    The solver's drag force is `drag * velocity`, and the velocity of a gently swept chain is a thousandth
+    of its stiffness force, so a slow sweep is followed rigidly and shows nothing. A tail wag is fast - the
+    flicks below turn `swing` degrees in `rise` frames - and the still stretches afterwards are what show
+    how it settles.
+    """
+    keys = [(0.0, 0.0), (rise, swing), (rise + hold, swing), (2 * rise + hold, -swing),
+            (2 * rise + 2 * hold, -swing), (3 * rise + 2 * hold, 0.0)]
+    direction = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}[swing_axis]
+
+    motion = []
+    for frame in range(frames + 1):
+        angle = 0.0
+        for (start, begin), (end, finish) in zip(keys, keys[1:]):
+            if start <= frame <= end:
+                angle = begin + (finish - begin) * ((frame - start) / (end - start))
+                break
+        radians = math.radians(angle) / 2.0
+        motion.append({"frame": frame,
+                       "rotation": [direction[0] * math.sin(radians), direction[1] * math.sin(radians),
+                                    direction[2] * math.sin(radians), math.cos(radians)]})
+    return motion
+
+
 def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
-               segments: str = "parent") -> dict:
+               swing_axis: str = "y") -> dict:
     container, chain, merged, parent_of, referenced, reference, absent = chain_geometry(UnityPy, con, dump, root)
 
     bones = []
@@ -481,20 +507,22 @@ def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
         else:
             parent_position = merged[parent_name]
 
-        # Which segment this bone's distance and axis describe. `Initialize` stores a bone's values on its
-        # *parent*, so on a bent chain the two readings differ by the angle between consecutive segments -
-        # and the tail is bent, so this is not a detail.
-        if segments == "child" and index + 1 < len(chain["bones"]) \
-                and chain["bones"][index + 1]["name"] in merged:
-            anchor_position = merged[chain["bones"][index + 1]["name"]]
-        elif segments == "child":
-            anchor_position = parent_position
+        # What this bone's `distance` and `axis` describe. `CySpringBoneBase.Initialize` measures the link
+        # between a bone and its *child* (`_parentBone.InitBoneDistance = Distance(child, parent)`, axis from
+        # parent to child) and a leaf with no child copies its parent's values, so:
+        #   - a bone with a child below it: the link from this bone's head to the next bone's head, pointing
+        #     down the chain;
+        #   - a leaf: the same link, measured from the bone above it - pointing down the chain as well.
+        # Both point down the chain, and reading the first case upwards is what folded the baked tail in half.
+        next_name = chain["bones"][index + 1]["name"] if index + 1 < len(chain["bones"]) else None
+        if next_name is not None and next_name in merged:
+            neighbour = merged[next_name]
+            offset = (neighbour[0] - position[0], neighbour[1] - position[1], neighbour[2] - position[2])
         else:
-            anchor_position = parent_position
-
-        offset = (position[0] - anchor_position[0],
-                  position[1] - anchor_position[1],
-                  position[2] - anchor_position[2])
+            # a leaf has no child to measure against: the game copies its parent's link, which runs from
+            # the parent's head down to this bone's head
+            offset = (position[0] - parent_position[0], position[1] - parent_position[1],
+                      position[2] - parent_position[2])
         distance = math.sqrt(offset[0] ** 2 + offset[1] ** 2 + offset[2] ** 2)
         if distance == 0.0:
             dropped.append(entry["name"])
@@ -536,19 +564,8 @@ def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
             "parent": target,
         })
 
-    pivot = merged.get(reference, bones[0]["position"])
-    motion = []
-    if swing:
-        half = max(1, frames // 4)
-        for frame in range(frames + 1):
-            if frame <= half:
-                angle = swing * (frame / half)
-            elif frame <= 2 * half:
-                angle = swing * (1.0 - (frame - half) / half)
-            else:
-                angle = 0.0
-            radians = math.radians(angle) / 2.0
-            motion.append({"frame": frame, "rotation": [math.sin(radians), 0.0, 0.0, math.cos(radians)]})
+    pivot = bones[0]["position"]        # the chain turns about its own attachment, not the chest
+    motion = wag_motion(frames, swing, swing_axis) if swing else []
 
     return {
         "format": "UMA-SPRING-CHAIN",
@@ -577,14 +594,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--chain", default="", help="write one chain as a solver run instead of the whole dump")
     parser.add_argument("--frames", type=int, default=120, help="frames for --chain")
     parser.add_argument("--swing", type=float, default=0.0, help="swing the chain's parent by this many degrees")
-    parser.add_argument("--segments", choices=("parent", "child"), default="parent",
-                        help="which segment a bone's distance and axis describe: the one above it or below it")
+    parser.add_argument("--axis", choices=("x", "y", "z"), default="y",
+                        help="axis the scripted parent swing turns about: y wags a hanging tail sideways")
     args = parser.parse_args(argv)
 
     if args.chain:
         UnityPy = _unitypy()
         data = dump(args.chara, args.costume, args.head)
-        spec = chain_spec(UnityPy, _asset_index(), data, args.chain, args.frames, args.swing, args.segments)
+        spec = chain_spec(UnityPy, _asset_index(), data, args.chain, args.frames, args.swing, args.axis)
         text = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as handle:

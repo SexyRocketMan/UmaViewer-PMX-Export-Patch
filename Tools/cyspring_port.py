@@ -367,14 +367,21 @@ def build_from_spec(spec: dict):
 
     bones = []
     for index, entry in enumerate(spec["bones"]):
+        # `CySpringBoneBase.Initialize` stores a bone's head in `_currentPosition` and `Reset` walks it out
+        # to `_currentPosition = _diff * _initBoneDistance + _oldPosition`: the solver holds the *tail* of
+        # each link, with the head in `_oldPosition`. Seeding the head into `_currentPosition` stretched the
+        # first link to wherever the anchor was, which is what made the baked chain look like a rod.
+        axis = tuple(entry["axis"])
+        head = tuple(entry["position"])
+        tail = v_add(head, v_scale(axis, entry["distance"]))
         bones.append(Bone(
             init_local_rotation=IDENTITY,
             old_rotation=IDENTITY,
             final_rotation=IDENTITY,
-            bone_axis=tuple(entry["axis"]),
-            current_position=tuple(entry["position"]),
-            prev_position=tuple(entry["position"]),
-            old_position=tuple(spec["pivot"]),     # replaced each frame by the animated anchor
+            bone_axis=axis,
+            current_position=tail,
+            prev_position=tail,
+            old_position=head,
             spring_force=(0.0, 0.0, 0.0),
             wind_power=(0.0, 0.0, 0.0),
             init_bone_distance=entry["distance"],
@@ -446,12 +453,12 @@ def _motion_at(spec: dict, frame: int):
 def simulate_spec(spec: dict, trace: bool = False):
     """Run a real chain: the parent's animated rotation carries the whole chain, the solver lags behind it."""
     bones, collisions, params, spec = build_from_spec(spec)
-    pivot = tuple(spec["pivot"])
+    # The chain turns about its own attachment: the root bone's head. `pivot` in the spec is whatever point
+    # the dump used for the collider parents' rotation, which for 1001 is the chest at the origin - rotating
+    # the tail about that translated the whole chain by a hand's width per frame.
+    root_head = tuple(spec["bones"][0]["position"])
+    pivot = tuple(spec.get("pivot") or root_head)
     rest_parent_positions = [tuple(p["position"]) for p in spec["parents"]]
-    root_parent = None
-    # the anchor is the bone the chain hangs from: the parent of its root bone
-    for index, parent in enumerate(spec["parents"]):
-        root_parent = index if root_parent is None else root_parent
 
     frames = []
     diagnostics = []
@@ -463,10 +470,10 @@ def simulate_spec(spec: dict, trace: bool = False):
         parent_positions = [v_add(pivot, q_rotate(rotation, v_sub(rest, pivot)))
                             for rest in rest_parent_positions]
         parent_rotations = [rotation for _ in rest_parent_positions]
-        anchor = parent_positions[root_parent] if parent_positions else pivot
-        # The root bone's transform comes from the thing that drives it, both its position (above) and its
-        # rotation - `CySpringRootBone.UpdateNativeOldTransform` is what does this in the game. Without the
-        # rotation the chain hangs by its rest orientation and never follows the animation.
+        # The root bone's transform comes from the thing that drives it, both its position (the animated
+        # pivot) and its rotation - `CySpringRootBone.UpdateNativeOldTransform` is what does this in the
+        # game. Without the rotation the chain hangs by its rest orientation and never follows the parent.
+        anchor = v_add(pivot, q_rotate(rotation, v_sub(root_head, pivot)))
         bones[0].old_position = anchor
         bones[0].old_rotation = q_mul(bones[0].init_local_rotation, rotation)
 
@@ -478,11 +485,10 @@ def simulate_spec(spec: dict, trace: bool = False):
 
         update(bones, collisions, params, parent_positions, parent_rotations)
 
-        worst_length = 0.0
-        for i in range(1, len(bones)):
-            worst_length = max(worst_length,
-                               abs(v_distance(bones[i].current_position, bones[i - 1].current_position)
-                                   - bones[i].init_bone_distance))
+        # A link runs from a bone's head - the `old_position` the step just used - to its own tail, so that
+        # is what the solver has to keep at `init_bone_distance`. Comparing two tails measures nothing.
+        worst_length = max(abs(v_distance(bone.current_position, bone.old_position) - bone.init_bone_distance)
+                           for bone in bones)
         clearance = None
         if collisions:
             clearance = min(v_distance(bone.current_position, parent_positions[collision["parent_index"]]
