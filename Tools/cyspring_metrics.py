@@ -44,6 +44,9 @@ import cyspring_port as port  # noqa: E402
 
 def drive(spec: dict, mode: str, swing: float, axis: str) -> list[dict]:
     """The parent's rotation per frame: the spec's own script, or a test drive of this file's making."""
+    if mode == "idle":
+        return [{"frame": f, "rotation": list(port.IDENTITY), "offset": [0.0, 0.0, 0.0]}
+                for f in range(spec["frames"] + 1)]
     if mode == "spec" and spec.get("motion"):
         return spec["motion"]
     if mode == "spec":
@@ -200,7 +203,8 @@ def tip_travel(spec: dict, data: dict) -> dict:
     actual_path = sum(port.v_length(port.v_sub(actual[f], actual[f - 1])) for f in range(1, len(actual)))
     rigid_path = sum(port.v_length(port.v_sub(rigid[f], rigid[f - 1])) for f in range(1, len(rigid)))
     sag = max(port.v_length(port.v_sub(actual[f], rigid[f])) for f in range(len(actual)))
-    return {"pathRatio": actual_path / rigid_path if rigid_path > 1e-9 else float("nan"),
+    # a still drive has no rigid path at all, which is the idle case: the wind is then the whole motion
+    return {"pathRatio": actual_path / rigid_path if rigid_path > 1e-9 else float("inf"),
             "sag": sag}
 
 
@@ -215,7 +219,9 @@ def report(spec: dict, motion: list[dict], metrics: list[dict], travel: dict, se
               f"{m['deviationMax']:8.2f}{m['deviationAtRest']:8.2f}{m['lagBehindParent']:7d}"
               f"{m['overshoot']:7.2f}{str(m['settleFrames']):>7}{m['ringCrossings']:5d}"
               f"{m['bendMean']:7.2f}{m['stepMean']:7.2f}{m['stepMax']:8.2f}")
-    print(f"  tip: path {travel['pathRatio']:.2f}x a rigid chain's, sag {travel['sag']:.3f} game units")
+    ratio = travel["pathRatio"]
+    shown = "no rigid drive at all (the wind is the whole motion)" if ratio == float("inf") else f"{ratio:.2f}x"
+    print(f"  tip: path {shown}, sag {travel['sag']:.3f} game units")
     print("  reading: dev is how far a link hangs behind its parent - 0 is the welded rod, and it should")
     print("  grow down the chain; lag fr should too. over/ring/settle are the spring's own answer after the")
     print("  parent stops; atRest is the static droop, the only number that is about the chain alone.")
@@ -224,9 +230,11 @@ def report(spec: dict, motion: list[dict], metrics: list[dict], travel: dict, se
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("spec")
-    parser.add_argument("--motion", choices=("spec", "impulse", "wag"), default="spec")
+    parser.add_argument("--motion", choices=("spec", "impulse", "wag", "idle"), default="spec")
     parser.add_argument("--swing", type=float, default=35.0)
     parser.add_argument("--axis", choices=("x", "y", "z"), default="y")
+    parser.add_argument("--wind", type=float, default=None,
+                        help="0 turns the wind off; None uses the spec's own 0.35")
     parser.add_argument("--no-colliders", action="store_true",
                         help="drop the chain's colliders (the default in the Blender bake, see FORMAT.md)")
     parser.add_argument("--json", default="", help="write every series here")
@@ -242,7 +250,7 @@ def main(argv: list[str]) -> int:
     spec["frames"] = len(motion) - 1
     spec["motion"] = motion
 
-    frames, _ = port.simulate_spec(spec, trace=True, warmup=24)
+    frames, _ = port.simulate_spec(spec, trace=True, warmup=24, wind_scale=args.wind)
     if frames is None:
         print("the solver produced nothing")
         return 1

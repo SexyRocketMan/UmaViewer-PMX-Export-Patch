@@ -452,6 +452,44 @@ def add_bob(motion: list[dict], vertical: float = 0.0, sideways: float = 0.0,
     return result
 
 
+def wind_force(spec: dict, bone: dict, frame: int, fps: float = 30.0,
+               scale: float = 0.35) -> tuple[float, float, float]:
+    """The wind a bone feels at a frame, from the container's authored wind parameters.
+
+    The game computes this in code that is not in the decompiled subset, so this is the one piece that is a
+    reconstruction rather than a transcription. What the data does say: a slow and a fast oscillation, each
+    with a cycle rate and an angle width, for a vertical and a horizontal component, plus per bone rates. So
+    a bone is pushed up and down by `sin(vertical angle)` and side to side by `sin(horizontal angle)`, with
+    the width and the rate coming from the asset and the rates scaling them per bone. `scale` sizes the force
+    against the bone's own stiffness, because a wind is only felt to the extent it can overcome the spring.
+    """
+    wind = spec.get("wind") or {}
+    rates = bone.get("wind") or {}
+    if not wind or not any(rates.values()):
+        return (0.0, 0.0, 0.0)
+
+    seconds = frame / fps
+    vertical = 0.0
+    horizontal = 0.0
+    if wind.get("verticalCycleSlow"):
+        vertical += rates.get("verticalSlow", 0.0) * math.sin(
+            2.0 * math.pi * wind["verticalCycleSlow"] * seconds) * wind.get("verticalAngleWidthSlow", 0.0)
+    if wind.get("verticalCycleFast"):
+        vertical += rates.get("verticalFast", 0.0) * math.sin(
+            2.0 * math.pi * wind["verticalCycleFast"] * seconds + 1.7) * wind.get("verticalAngleWidthFast", 0.0)
+    if wind.get("horizontalCycleSlow"):
+        horizontal += rates.get("horizontalSlow", 0.0) * math.sin(
+            2.0 * math.pi * wind["horizontalCycleSlow"] * seconds + 0.6) * wind.get("horizontalAngleWidthSlow", 0.0)
+    if wind.get("horizontalCycleFast"):
+        horizontal += rates.get("horizontalFast", 0.0) * math.sin(
+            2.0 * math.pi * wind["horizontalCycleFast"] * seconds + 2.3) * wind.get("horizontalAngleWidthFast", 0.0)
+
+    power = f32(scale * bone["stiffness"])
+    return (f32(power * math.sin(math.radians(horizontal))),
+            f32(power * math.sin(math.radians(vertical))),
+            0.0)
+
+
 def _offset_at(spec: dict, frame: int) -> tuple[float, float, float]:
     """The parent's translation at a frame, in game units.
 
@@ -486,7 +524,8 @@ def _motion_at(spec: dict, frame: int):
     return tuple(nearest["rotation"])
 
 
-def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0):
+def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0, fps: float = 30.0,
+                  wind_scale: float = None):
     """Run a real chain: the parent's animated rotation carries the whole chain, the solver lags behind it."""
     bones, collisions, params, spec = build_from_spec(spec)
     # The chain turns about its own attachment: the root bone's head. `pivot` in the spec is whatever point
@@ -494,6 +533,8 @@ def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0):
     # the tail about that translated the whole chain by a hand's width per frame.
     root_head = tuple(spec["bones"][0]["position"])
     pivot = tuple(spec.get("pivot") or root_head)
+    wind_scale = spec.get("windScale", 0.35) if wind_scale is None else wind_scale
+    wind_on = bool(spec.get("wind")) and wind_scale > 0.0
     rest_parent_positions = [tuple(p["position"]) for p in spec["parents"]]
 
     frames = []
@@ -515,6 +556,10 @@ def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0):
         anchor = v_add(v_add(pivot, q_rotate(rotation, v_sub(root_head, pivot))), offset)
         bones[0].old_position = anchor
         bones[0].old_rotation = q_mul(bones[0].init_local_rotation, rotation)
+        if wind_on:
+            for entry, bone in zip(spec["bones"], bones):
+                bone.wind_power = wind_force(spec, entry, frame, fps, wind_scale)
+                bone.wind = 1 if any((entry.get("wind") or {}).values()) else 0
 
         update(bones, collisions, params, parent_positions, parent_rotations)
 

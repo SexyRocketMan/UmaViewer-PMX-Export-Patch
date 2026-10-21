@@ -28,6 +28,9 @@ import cyspring_port as port  # noqa: E402
 
 def drive(spec: dict, mode: str, swing: float, axis: str) -> list[dict]:
     """The same three test drives `cyspring_metrics.py` uses, so a plot and its numbers agree."""
+    if mode == "idle":
+        return [{"frame": f, "rotation": list(port.IDENTITY), "offset": [0.0, 0.0, 0.0]}
+                for f in range(spec["frames"] + 1)]
     if mode == "spec" and spec.get("motion"):
         return spec["motion"]
     if mode == "spec":
@@ -294,9 +297,11 @@ def write_gif(spec: dict, data: dict, out: str, scale_ratio: float = 1.0) -> Non
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("spec")
-    parser.add_argument("--motion", choices=("spec", "impulse", "wag"), default="spec")
+    parser.add_argument("--motion", choices=("spec", "impulse", "wag", "idle"), default="spec")
     parser.add_argument("--swing", type=float, default=35.0)
     parser.add_argument("--axis", choices=("x", "y", "z"), default="y")
+    parser.add_argument("--wind", type=float, default=None,
+                        help="0 turns the wind off; None uses the spec's own 0.35")
     parser.add_argument("--no-colliders", action="store_true")
     parser.add_argument("--out", default="", help="where to write the html (default next to the spec)")
     parser.add_argument("--gif", default="", help="also write an animated gif here")
@@ -311,7 +316,7 @@ def main(argv: list[str]) -> int:
     spec["frames"] = len(motion) - 1
     spec["motion"] = motion
 
-    frames, _ = port.simulate_spec(spec, trace=True, warmup=24)
+    frames, _ = port.simulate_spec(spec, trace=True, warmup=24, wind_scale=args.wind)
     data = chain_points(spec, frames)
 
     # the deviation series the strip draws: each link against where the drive alone would put it

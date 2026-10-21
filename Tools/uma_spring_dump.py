@@ -540,6 +540,7 @@ def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
             "radius": entry["radius"],
             "capability": entry["capability"],
             "capabilityGroup": entry["capabilityGroup"],
+            "wind": entry["wind"],
             "colliders": [name for name in entry["colliders"] if name in referenced],
         })
     if not bones:
@@ -577,6 +578,8 @@ def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
         "colliders": colliders,
         "parents": [{"name": name, "position": position, "rotation": [0.0, 0.0, 0.0, 1.0]}
                     for name, position in parents.items()],
+        "wind": container["wind"],
+        "flags": container["flags"],
         "pivot": pivot,
         "motion": motion,
         "dropped": dropped,
