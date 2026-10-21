@@ -9,6 +9,10 @@ cd Tools/spring_probe
 dotnet run -c Release -- managed        # the solver the viewer ships, 120 frames, two scenarios
 dotnet run -c Release -- native         # the game's own plugin (see the finding below)
 dotnet run -c Release -- both
+
+# the frames it produces, for another implementation to be held to
+dotnet run -c Release -- managed --trace trace.json
+python ../cyspring_port.py --compare trace.json
 ```
 
 ## What it runs

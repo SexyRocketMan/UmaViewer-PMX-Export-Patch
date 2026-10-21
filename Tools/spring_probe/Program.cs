@@ -10,7 +10,10 @@
 //     the viewer ships. Printing both shows whether they agree, and either one can be the reference.
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
@@ -32,7 +35,8 @@ internal static class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
         string mode = args.Length > 0 ? args[0] : "managed";
-        string dll = args.Length > 1 ? args[1] : DefaultDll;
+        string dll = args.Length > 1 && !args[1].StartsWith("--") ? args[1] : DefaultDll;
+        string tracePath = OptionValue(args, "--trace");
 
         Console.WriteLine($"struct sizes: working={Marshal.SizeOf<NativeClothWorking>()} "
                           + $"collision={Marshal.SizeOf<NativeClothCollision>()} "
@@ -42,10 +46,18 @@ internal static class Program
         {
             Console.WriteLine();
             Console.WriteLine("== the viewer's managed port (the game's own equations), 120 frames, no colliders");
-            RunManaged(120, 0.0f);
+            RunManaged(120, 0.0f, "no-collider");
             Console.WriteLine();
             Console.WriteLine("== the same, with a sphere collider the chain would otherwise pass through");
-            RunManaged(120, 0.6f);
+            RunManaged(120, 0.6f, "sphere-collider");
+        }
+
+        if (!string.IsNullOrEmpty(tracePath))
+        {
+            WriteTrace(tracePath);
+            Console.WriteLine();
+            Console.WriteLine($"trace written to {tracePath} "
+                              + $"({Runs.Count} run(s), {Runs.Sum(r => r.Frames.Count)} frame(s))");
         }
 
         if (mode == "native" || mode == "both")
@@ -247,15 +259,19 @@ internal static class Program
         }
     }
 
-    private static void RunManaged(int frames, float colliderRadius)
+    private static void RunManaged(int frames, float colliderRadius, string traceName)
     {
         BuildChain(out NativeClothWorking[] bones, out NativeClothCollision[] collisions,
                    out NativeClothParameter[] parameters, out Vector3[] parentPosition,
                    out Quaternion[] parentRotation, colliderRadius);
+        var run = new Run { Name = traceName, ColliderRadius = colliderRadius };
+        Runs.Add(run);
+        Record(run, bones);
         Print("managed", 0, bones);
         for (int frame = 1; frame <= frames; frame++)
         {
             CySpringNative.UpdateNativeCloth(bones, collisions, parameters, parentPosition, parentRotation);
+            Record(run, bones);
             if (frame % 20 == 0 || frame == 1) Print("managed", frame, bones);
         }
         // a collider's position is relative to the bone it is attached to, which is what parentWorldPosition holds
@@ -323,6 +339,58 @@ internal static class Program
         return ok;
     }
 
+    /// <summary>One run of the solver: the frames it produced, so another implementation can be held to them.</summary>
+    private sealed class Run
+    {
+        public string Name;
+        public float ColliderRadius;
+        public readonly List<string> Frames = new List<string>();
+    }
+
+    private static readonly List<Run> Runs = new List<Run>();
+
+    private static void Record(Run run, NativeClothWorking[] bones)
+    {
+        var frame = new StringBuilder("[");
+        for (int i = 0; i < bones.Length; i++)
+        {
+            Vector3 p = bones[i]._currentPosition;
+            Quaternion q = bones[i]._finalRotation;
+            if (i > 0) frame.Append(',');
+            frame.Append(F(p.x)).Append(',').Append(F(p.y)).Append(',').Append(F(p.z)).Append(',')
+                 .Append(F(q.x)).Append(',').Append(F(q.y)).Append(',').Append(F(q.z)).Append(',')
+                 .Append(F(q.w));
+        }
+        frame.Append(']');
+        run.Frames.Add(frame.ToString());
+    }
+
+    /// <summary>Round-trippable for a float, so a comparison is not decided by the printer.</summary>
+    private static string F(float value) => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static void WriteTrace(string path)
+    {
+        var json = new StringBuilder();
+        json.Append("{\"scenario\":\"synthetic-tail\",\"linkLength\":");
+        json.Append(F(LinkLength)).Append(",\"bones\":").Append(Bones).Append(",\"runs\":[");
+        for (int r = 0; r < Runs.Count; r++)
+        {
+            if (r > 0) json.Append(',');
+            Run run = Runs[r];
+            json.Append("{\"name\":\"").Append(run.Name).Append("\",\"colliderRadius\":")
+                .Append(F(run.ColliderRadius)).Append(",\"frames\":[")
+                .Append(string.Join(",", run.Frames)).Append("]}");
+        }
+        json.Append("]}");
+        File.WriteAllText(path, json.ToString(), new UTF8Encoding(false));
+    }
+
+    private static string OptionValue(string[] args, string name)
+    {
+        int at = Array.IndexOf(args, name);
+        return at >= 0 && at + 1 < args.Length ? args[at + 1] : null;
+    }
+
     private static void WriteArray<T>(IntPtr target, T[] source) where T : struct
     {
         int size = Marshal.SizeOf<T>();
@@ -359,3 +427,4 @@ internal static class Program
         }
     }
 }
+
