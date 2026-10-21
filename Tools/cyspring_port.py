@@ -462,7 +462,11 @@ def simulate_spec(spec: dict, trace: bool = False):
                             for rest in rest_parent_positions]
         parent_rotations = [rotation for _ in rest_parent_positions]
         anchor = parent_positions[root_parent] if parent_positions else pivot
+        # The root bone's transform comes from the thing that drives it, both its position (above) and its
+        # rotation - `CySpringRootBone.UpdateNativeOldTransform` is what does this in the game. Without the
+        # rotation the chain hangs by its rest orientation and never follows the animation.
         bones[0].old_position = anchor
+        bones[0].old_rotation = q_mul(bones[0].init_local_rotation, rotation)
 
         if trace:
             frames.append([v for bone in bones
@@ -551,10 +555,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--compare", default="", help="compare against a trace written by Tools/spring_probe")
     parser.add_argument("--spec", default="", help="run a real chain written by Tools/uma_spring_chain.py")
     parser.add_argument("--trace-out", default="", help="write that run's frames here")
+    parser.add_argument("--no-colliders", action="store_true", help="ignore the chain's colliders")
     args = parser.parse_args(argv)
 
     if args.spec:
         spec = load_spec(args.spec)
+        if args.no_colliders:
+            spec = dict(spec)
+            spec["colliders"] = []
+            spec["bones"] = [dict(bone, colliders=[]) for bone in spec["bones"]]
         frames, diagnostics = simulate_spec(spec, trace=True)
         report(spec, diagnostics)
         if args.trace_out:
