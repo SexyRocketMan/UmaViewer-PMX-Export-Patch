@@ -46,6 +46,29 @@ python Tools/uma_master_probe.py                # list the master data's tables
 python Tools/uma_story_dump.py "story/data/04/1047/storytimeline_041047007"
 ```
 
+### Spring (CySpring) probes
+
+How the game's wiggle-bone solver works, and how to watch it move. The solver is ported to Python and held
+bit-exact against the game's own C# by `spring_probe/` (a small .NET project that compiles the repo's
+`CySpringNative.cs`); the chain spec and the Blender bake are what turned that into something visible.
+
+| File | What it does |
+|---|---|
+| `uma_spring_dump.py` | Reads a costume prefab, finds the CySpring chains in it, and writes one chain as a JSON spec: the game's parameters, bone positions in game units, and a scripted parent swing. `--segments parent` and `--segments child` pick which way a link's length is read (child is right - see the file). |
+| `cyspring_port.py` | The solver itself: a float32 transcription of `CySpringNative.UpdateNativeCloth`, with `--compare` against the C# trace, `--trace`, and `--no-colliders`. Also the module the Blender bake imports. |
+| `spring_probe/` | The .NET harness that runs the game's own structs and solver and dumps a trace, so the Python port can be compared frame by frame (`dotnet run -- --trace out.txt`). |
+| `blender_cyspring_demo.py` | Imports a PMX with mmd_tools, bakes a spec's motion onto the model's own spring bones as world rotations, and can render an mp4. Needs `--model`; MMD's rigid-body physics is left out because the bake *is* the motion. |
+
+```powershell
+python Tools/uma_spring_dump.py 1001 00 --chain Sp_Hi_Tail0 --segments child > tail.json
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b -P Tools/blender_cyspring_demo.py -- `
+    tail.json tail.blend --model model.pmx --mp4 tail.mp4
+```
+
+One trap worth knowing: `scene.render.filepath` is not respected while rendering if the user's startup
+add-ons rewrite it (a dataset add-on that hooks `render_init` will send the frames into its own folder).
+The demo renders without `write_still` and calls `Image.save_render()` instead, which writes where it is told.
+
 ## Quick start
 
 ```powershell

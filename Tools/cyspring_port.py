@@ -455,6 +455,8 @@ def simulate_spec(spec: dict, trace: bool = False):
 
     frames = []
     diagnostics = []
+    deltas = []
+    previous_direction = None
     for frame in range(spec["frames"] + 1):
         rotation = _motion_at(spec, frame)
 
@@ -489,11 +491,21 @@ def simulate_spec(spec: dict, trace: bool = False):
                             for bone in bones for collision in collisions)
         # how far the chain's own direction has drifted from where an animated parent would put it
         driven = v_normalized(q_rotate(rotation, tuple(spec["bones"][0]["axis"])))
+        # a solver that is fighting itself shows up here: the root's direction should change smoothly from
+        # frame to frame, not jump from one value to another and back
+        direction = v_normalized(v_sub(bones[0].current_position, anchor)) if bones else (0.0, 0.0, 0.0)
+        if previous_direction is not None:
+            step = math.degrees(math.acos(max(-1.0, min(1.0, v_dot(direction, previous_direction)))))
+            deltas.append(step)
+        previous_direction = direction
         lag = math.degrees(math.acos(max(-1.0, min(1.0, v_dot(driven, v_normalized(
             v_sub(bones[0].current_position, anchor))))))) if bones else 0.0
         diagnostics.append({"frame": frame, "lengthError": worst_length,
                             "clearance": clearance, "lagDegrees": lag})
 
+    if deltas:
+        diagnostics[0]["stepMax"] = max(deltas)
+        diagnostics[0]["stepMean"] = sum(deltas) / len(deltas)
     return (frames if trace else None), diagnostics
 
 
@@ -541,6 +553,9 @@ def report(spec: dict, diagnostics: list) -> None:
     if clearances:
         print(f"  clearance to the colliders: min {min(clearances):+.3f} "
               f"(negative means a bone ended up inside one)")
+    if "stepMax" in diagnostics[0]:
+        print(f"  root direction, frame to frame: mean {diagnostics[0]['stepMean']:.2f} deg, "
+              f"max {diagnostics[0]['stepMax']:.2f} deg")
     step = max(1, len(diagnostics) // 8)
     print("   frame   lag(deg)   link error")
     for d in diagnostics:

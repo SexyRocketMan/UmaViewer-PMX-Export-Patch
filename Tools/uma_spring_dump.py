@@ -458,7 +458,8 @@ def chain_geometry(UnityPy, con, dump: dict, root: str):
     return container, chain, merged, parent_of, referenced, reference, absent
 
 
-def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float) -> dict:
+def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
+               segments: str = "parent") -> dict:
     container, chain, merged, parent_of, referenced, reference, absent = chain_geometry(UnityPy, con, dump, root)
 
     bones = []
@@ -480,9 +481,20 @@ def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float) -
         else:
             parent_position = merged[parent_name]
 
-        offset = (position[0] - parent_position[0],
-                  position[1] - parent_position[1],
-                  position[2] - parent_position[2])
+        # Which segment this bone's distance and axis describe. `Initialize` stores a bone's values on its
+        # *parent*, so on a bent chain the two readings differ by the angle between consecutive segments -
+        # and the tail is bent, so this is not a detail.
+        if segments == "child" and index + 1 < len(chain["bones"]) \
+                and chain["bones"][index + 1]["name"] in merged:
+            anchor_position = merged[chain["bones"][index + 1]["name"]]
+        elif segments == "child":
+            anchor_position = parent_position
+        else:
+            anchor_position = parent_position
+
+        offset = (position[0] - anchor_position[0],
+                  position[1] - anchor_position[1],
+                  position[2] - anchor_position[2])
         distance = math.sqrt(offset[0] ** 2 + offset[1] ** 2 + offset[2] ** 2)
         if distance == 0.0:
             dropped.append(entry["name"])
@@ -565,12 +577,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--chain", default="", help="write one chain as a solver run instead of the whole dump")
     parser.add_argument("--frames", type=int, default=120, help="frames for --chain")
     parser.add_argument("--swing", type=float, default=0.0, help="swing the chain's parent by this many degrees")
+    parser.add_argument("--segments", choices=("parent", "child"), default="parent",
+                        help="which segment a bone's distance and axis describe: the one above it or below it")
     args = parser.parse_args(argv)
 
     if args.chain:
         UnityPy = _unitypy()
         data = dump(args.chara, args.costume, args.head)
-        spec = chain_spec(UnityPy, _asset_index(), data, args.chain, args.frames, args.swing)
+        spec = chain_spec(UnityPy, _asset_index(), data, args.chain, args.frames, args.swing, args.segments)
         text = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as handle:
