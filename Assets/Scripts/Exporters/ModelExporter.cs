@@ -151,17 +151,19 @@ public class ModelExporter
     public static RawMMDModel ReadPMXModel(UmaContainer container, string[] textures, CharaEntry entry = null)
     {
         RawMMDModel model = new RawMMDModel();
+        var character = container as UmaContainerCharacter;
+        string morphNote = ExtraMorphsNote(character);
         if (entry != null)
         {
             model.Name = entry.Name;
             model.NameEn = entry.GetName();
-            model.Description = model.DescriptionEn = $"{entry.GetName()}\n{modelInfo}";
+            model.Description = model.DescriptionEn = $"{entry.GetName()}\n{modelInfo}{morphNote}";
         }
         else
         {
             model.Name = container.gameObject.name;
             model.NameEn = container.gameObject.name;
-            model.Description = model.DescriptionEn = $"{container.gameObject.name}\n{modelInfo}";
+            model.Description = model.DescriptionEn = $"{container.gameObject.name}\n{modelInfo}{morphNote}";
         }
 
         //Rean Bones
@@ -185,7 +187,7 @@ public class ModelExporter
             model.TextureList.Add(new MMDTexture(texture));
         }
 
-        model.Parts = ReadPartMaterials(renderers, model);
+        model.Parts = ReadPartMaterials(renderers, model, character);
         model.Bones = ReadBones(bones);
         model.Morphs = ReadMorph(renderers);
         model.Rigidbodies = new MMDRigidBody[0];
@@ -766,7 +768,89 @@ public class ModelExporter
         return comment.ToString();
     }
 
-    private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model)    {
+    /// <summary>
+    /// The extra facial morphs that touch a material, as one <c>morph=</c> token in its comment.
+    ///
+    /// An MMD material has no slot for a texture swap or a shader property, but it does have a comment, and the
+    /// uma addon reads it back (<c>material.mmd_material.comment</c>). The grammar is one token per material,
+    /// holding every morph that binds it: <c>morph=&lt;morph&gt;:&lt;bind type&gt;:&lt;locator part&gt;:&lt;property&gt;[, ...]</c>,
+    /// so the cheek decal reads <c>morph=Cheek_Ctrl:Texture:ScaX:_CheekRate,ScaY:_CheekRate,ScaZ:_CheekRate</c>.
+    /// The locator part is the axis of the transform the game's own animation drives; turning that into a
+    /// driver is the addon's job. Anything that does not know the token sees a comment.
+    /// </summary>
+    private static string ExtraMorphComment(UmaContainerCharacter character, Material material)
+    {
+        if (character == null || material == null) return string.Empty;
+        if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return string.Empty;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null) return string.Empty;
+
+        string target = material.name.Replace(" (Instance)", "");
+        var morphs = new StringBuilder();
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null || morph.BindProperties == null) continue;
+            var bindings = new StringBuilder();
+            string type = null;
+            foreach (BindProperty property in morph.BindProperties)
+            {
+                if (property == null || property.BindMaterial == null) continue;
+                if (property.Type != BindProperty.BindType.Texture && property.Type != BindProperty.BindType.Shader)
+                    continue;
+                if (property.BindMaterial.name.Replace(" (Instance)", "") != target) continue;
+                bindings.Append(bindings.Length > 0 ? "," : "").Append(property.Part).Append(':')
+                        .Append(property.PropertyName);
+                type = property.Type.ToString();
+            }
+            if (bindings.Length == 0) continue;
+            morphs.Append(morphs.Length > 0 ? ";" : "").Append(morph.name).Append(':').Append(type)
+                  .Append(':').Append(bindings);
+        }
+        return morphs.Length == 0 ? string.Empty : " morph=" + morphs;
+    }
+
+    /// <summary>
+    /// The model-level note: what the extra morphs are, where the material-bound ones went, and the object-bound
+    /// ones (visibility, eye-manga selection, tears) that no material comment could hold.
+    ///
+    /// This is the "decode it one day" line. It goes into the model comment, which mmd_tools keeps as
+    /// <c>mmd_root</c>, and it names both token grammars and the document that defines them.
+    /// </summary>
+    private static string ExtraMorphsNote(UmaContainerCharacter character)
+    {
+        if (character == null) return string.Empty;
+        if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return string.Empty;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null || facial.OtherMorphs.Count == 0) return string.Empty;
+
+        var objects = new StringBuilder();
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null || morph.BindProperties == null) continue;
+            foreach (BindProperty property in morph.BindProperties)
+            {
+                if (property == null) continue;
+                if (property.Type == BindProperty.BindType.Texture || property.Type == BindProperty.BindType.Shader)
+                    continue;
+                string targets = property.BindPrefabs == null
+                    ? string.Empty
+                    : string.Join(",", property.BindPrefabs.Where(a => a != null).Select(a => a.name));
+                objects.Append(objects.Length > 0 ? ";" : "").Append(morph.name).Append(':')
+                       .Append(property.Type).Append(':').Append(property.Part).Append(':').Append(targets);
+            }
+        }
+
+        var note = new StringBuilder("\n");
+        note.Append("extra morphs: material comments carry a 'morph=' token "
+                    + "(<morph>:<bind type>:<locator part>:<property>) that drives what a pmx cannot hold; "
+                    + "see docs/PMX_EXTENSIONS.md");
+        if (objects.Length > 0) note.Append("\nobject morphs: ").Append(objects);
+        return note.ToString();
+    }
+
+    private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model,
+                                            UmaContainerCharacter character)
+    {
         List<Part> parts = new List<Part>();
         int baseShift = 0;
 
@@ -854,7 +938,8 @@ public class ModelExporter
                 // material values set above are then left alone, which is what an unadorned export looks like
                 if (Config.Instance == null || Config.Instance.PmxUmaMaterialFields)
                 {
-                    mat.MetaInfo = UmaMaterialComment(material, model);
+                    mat.MetaInfo = UmaMaterialComment(material, model)
+                                 + ExtraMorphComment(character, material);
 
                     // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
                     //
