@@ -53,27 +53,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=0)
     parser.add_argument("--colliders", action="store_true")
     parser.add_argument("--prefix", default="Sp_Hi_Tail0", help="bake bones whose name starts with this")
+    parser.add_argument("--import-scale", type=float, default=0.08,
+                        help="PMX units to Blender units; 0.08 is mmd_tools' default, and 1.0 makes a model "
+                             "12.5 times too big")
+    parser.add_argument("--body", default="", help="a VMD to put on the model first, so the tail moves on a "
+                                                   "character that is actually running")
+    parser.add_argument("--fps", type=float, default=0.0,
+                        help="scene frame rate; 0 takes the spec's, which is the rate the clip was recorded at")
+    parser.add_argument("--wind", type=float, default=None, help="wind scale; None uses the spec's own")
     return parser.parse_args(argv)
 
 
-def reset_scene() -> None:
+def reset_scene(fps: float) -> None:
     """Empty the scene without reloading the file: `read_factory_settings` also disables the extensions,
     and mmd_tools has to be loaded for the import."""
     for obj in list(bpy.data.objects):
         bpy.data.objects.remove(obj, do_unlink=True)
-    bpy.context.scene.render.fps = 24
+    bpy.context.scene.render.fps = int(round(fps))
     bpy.context.scene.frame_start = 0
 
 
-def import_model(path: str):
-    """The PMX, meshes and armature only: the rigid bodies would fight the bake."""
+def import_model(path: str, scale: float):
+    """The PMX, meshes and armature only: the rigid bodies would fight the bake.
+
+    `scale` is mmd_tools' PMX-units-to-Blender-units factor and its default is 0.08, which puts a character at
+    about its real height in metres. This file used to pass 1.0, which imported the model 12.5 times too big -
+    the animation was unaffected (the bake keys rotations, and the heads come from the rig), but the file
+    looked wrong next to anything else in the scene.
+    """
     before = set(bpy.data.objects)
-    bpy.ops.mmd_tools.import_model(filepath=path, scale=1.0, clean_model=True,
+    bpy.ops.mmd_tools.import_model(filepath=path, scale=scale, clean_model=True,
                                    types={"MESH", "ARMATURE"})
     for obj in bpy.data.objects:
         if obj.type == "ARMATURE" and obj not in before:
             return obj
     raise SystemExit(f"{path} imported without an armature")
+
+
+def import_body(obj: bpy.types.Object, path: str, scale: float) -> None:
+    """Put a recorded motion on the model, so the tail is baked onto a character that is actually moving.
+
+    The VMD and the model share their bone names (the recorder writes the game's own names), and the motion's
+    translations are in MMD units like the model, so the same `scale` keeps the two in step.
+    """
+    for item in bpy.context.view_layer.objects:
+        item.select_set(False)
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.mmd_tools.import_vmd(filepath=path, scale=scale, use_nla=False, update_scene_settings=False)
+    print(f"  body: {os.path.basename(path)} imported on the armature")
 
 
 def model_frame(obj: bpy.types.Object, spec: dict, baked: list[str]) -> dict[str, Quaternion]:
@@ -237,7 +265,7 @@ def configure_render(frames_dir: str) -> None:
     scene.display.shading.show_shadows = True
 
 
-def assemble(frames_dir: str, mp4: str) -> None:
+def assemble(frames_dir: str, mp4: str, fps: float = 24.0) -> None:
     import glob
     import subprocess
     frames = sorted(glob.glob(os.path.join(frames_dir, "frame_*.png")))
@@ -245,7 +273,7 @@ def assemble(frames_dir: str, mp4: str) -> None:
         print("no frames were rendered, so there is no video to assemble")
         return
     pattern = os.path.join(frames_dir, "frame_%04d.png")
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-framerate", "24", "-i", pattern,
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-framerate", f"{fps:g}", "-i", pattern,
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", mp4], check=False)
     print(f"{len(frames)} frames -> {mp4}")
 
@@ -261,15 +289,23 @@ def main() -> int:
         spec["colliders"] = []
         spec["bones"] = [dict(bone, colliders=[]) for bone in spec["bones"]]
 
-    reset_scene()
-    frames, _ = port.simulate_spec(spec, trace=True, warmup=24)
+    # the frame rate has to be the one the clip was recorded at, or the body animation and the tail drift apart
+    fps = args.fps or float(spec.get("fps") or 24)
+    reset_scene(fps)
+    frames, _ = port.simulate_spec(spec, trace=True, warmup=24, fps=fps, wind_scale=args.wind)
     if frames is None:
         print("the solver produced nothing")
         return 1
 
     if not args.model:
         raise SystemExit("--model is needed: an armature alone renders as nothing")
-    armature = import_model(args.model)
+    armature = import_model(args.model, args.import_scale)
+    heads = [armature.matrix_world @ bone.head_local for bone in armature.data.bones]
+    height = max(head.z for head in heads) - min(head.z for head in heads)
+    print(f"  model: {len(armature.data.bones)} bone(s), {height:.3f} Blender units tall, {fps:g} fps, "
+          f"import scale {args.import_scale}")
+    if args.body:
+        import_body(armature, args.body, args.import_scale)
     baked = bake(armature, spec, frames, args.prefix)
     verify_bake(armature, spec, frames, baked)
     frame_chain(armature, baked)
@@ -291,7 +327,7 @@ def main() -> int:
             if result is None:
                 raise RuntimeError("render produced no Render Result image")
             result.save_render(os.path.join(frames_dir, f"frame_{frame_index:04d}.png"))
-        assemble(frames_dir, os.path.abspath(args.mp4))
+        assemble(frames_dir, os.path.abspath(args.mp4), fps)
         if not args.keep_frames:
             shutil.rmtree(frames_dir, ignore_errors=True)
     return 0

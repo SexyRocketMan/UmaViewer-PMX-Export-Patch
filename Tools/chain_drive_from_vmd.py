@@ -99,6 +99,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--scale", type=float, default=12.5, help="MMD units per game unit")
     parser.add_argument("--rate", type=float, default=1.0, help="playback speed, 1 is the clip's own")
     parser.add_argument("--loops", type=int, default=2, help="passes over the clip")
+    parser.add_argument("--fps", type=float, default=0.0,
+                        help="the rate the clip was recorded at, stored in the spec; 0 keeps the spec's")
     parser.add_argument("--no-translation", action="store_true", help="rotation only, which is the stick case")
     args = parser.parse_args(argv)
 
@@ -126,6 +128,8 @@ def main(argv: list[str]) -> int:
 
     spec["motion"] = motion
     spec["frames"] = len(spec["motion"]) - 1
+    if args.fps > 0:
+        spec["fps"] = args.fps
     spec["source"] = dict(spec.get("source") or {}, drive=os.path.basename(args.motion),
                           bone=args.bone, translation=not args.no_translation, loops=args.loops)
 
