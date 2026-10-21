@@ -36,7 +36,7 @@ The first two lines are the old model info. `extra morphs:` and `object morphs:`
 | `morph` | the morph's name, e.g. `Manga_Ctrl`, `StaticTear_Ctrl`, `Tear0_Ctrl` |
 | `bind type` | one of `Select`, `EyeSelect`, `Enable`, `TearSide`, `TearWeight`, `TearSelect`, `TearSpeed` |
 | `locator part` | which component of the locator transform drives it: `PosX`/`PosY`/`PosZ` or `ScaX`/`ScaY`/`ScaZ` |
-| `objects` | the (comma separated) names of the objects the morph shows or hides; empty for the tear binds |
+| `objects` | the (comma separated) names of the objects the morph shows or hides, with the runtime's ` (Clone)` stripped and repeats removed. Omitted, colon and all, when a bind has no objects (the tears). |
 
 ## The material comment
 
@@ -68,11 +68,10 @@ M_Cheek   uma1 ... morph=Cheek_Ctrl:Texture:ScaX:_CheekRate,ScaY:_CheekRate,ScaZ
 M_Face    uma1 ... morph=Shade_Ctrl:Shader:ScaX:_faceShadowAlpha
 ```
 
-and in the model comment:
+and in the model comment, as a real export of character 1001 writes it:
 
 ```
-object morphs: Manga_Ctrl:EyeSelect:ScaY:Manga_L,Manga_R;Manga_Ctrl:Enable:ScaX:Manga_L,Manga_R;
-               StaticTear_Ctrl:Enable:PosX:StaticTear_L;StaticTear_Ctrl:Enable:PosY:StaticTear_R
+object morphs: Manga_Ctrl:EyeSelect:ScaY:pfb_eff_chr_emo_eye_000,pfb_eff_chr_emo_eye_001,pfb_eff_chr_emo_eye_002,pfb_eff_chr_emo_eye_003;Manga_Ctrl:Enable:ScaX:pfb_eff_chr_emo_eye_000,pfb_eff_chr_emo_eye_001,pfb_eff_chr_emo_eye_002,pfb_eff_chr_emo_eye_003;StaticTear_Ctrl:Enable:PosX:M_Tear_L;StaticTear_Ctrl:Enable:PosY:M_Tear_R;Tear0_Ctrl:TearWeight:ScaX;Tear0_Ctrl:TearSide:PosY;Tear0_Ctrl:TearSelect:ScaY;Tear0_Ctrl:TearSpeed:ScaZ;...
 ```
 
 and for the animated tears (`Tear{n}_Ctrl`), `TearWeight` on `ScaX`, `TearSide` on `PosY`, `TearSelect` on

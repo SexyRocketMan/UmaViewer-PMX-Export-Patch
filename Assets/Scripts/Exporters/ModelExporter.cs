@@ -832,11 +832,21 @@ public class ModelExporter
                 if (property == null) continue;
                 if (property.Type == BindProperty.BindType.Texture || property.Type == BindProperty.BindType.Shader)
                     continue;
-                string targets = property.BindPrefabs == null
-                    ? string.Empty
-                    : string.Join(",", property.BindPrefabs.Where(a => a != null).Select(a => a.name));
+                // the objects by name, without the runtime's " (Clone)" and without repeats: the eye manga are
+                // the same four prefabs twice, once for each eye, and nothing outside the game needs to know
+                var names = new List<string>();
+                if (property.BindPrefabs != null)
+                {
+                    foreach (GameObject prefab in property.BindPrefabs)
+                    {
+                        if (prefab == null) continue;
+                        string plain = prefab.name.Replace(" (Clone)", "").Replace("(Clone)", "");
+                        if (!names.Contains(plain)) names.Add(plain);
+                    }
+                }
                 objects.Append(objects.Length > 0 ? ";" : "").Append(morph.name).Append(':')
-                       .Append(property.Type).Append(':').Append(property.Part).Append(':').Append(targets);
+                       .Append(property.Type).Append(':').Append(property.Part);
+                if (names.Count > 0) objects.Append(':').Append(string.Join(",", names));
             }
         }
 
