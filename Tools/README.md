@@ -48,6 +48,10 @@ python Tools/uma_story_dump.py "story/data/04/1047/storytimeline_041047007"
 
 ### Spring (CySpring) probes
 
+**Shelved.** The port is exact and the bakes are faithful, but without a numeric reference for the game's
+tail there is no way to tell whether a chain looks right — see [`../docs/CYSPRING.md`](../docs/CYSPRING.md)
+for what was found, what was ruled out and what would unblock it.
+
 How the game's wiggle-bone solver works, and how to watch it move. The solver is ported to Python and held
 bit-exact against the game's own C# by `spring_probe/` (a small .NET project that compiles the repo's
 `CySpringNative.cs`); the chain spec and the Blender bake are what turned that into something visible.
