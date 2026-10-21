@@ -102,8 +102,9 @@ def series(spec: dict, frames: list, motion: list[dict]) -> dict:
     direction_axis = swing_axis(motion)
 
     tails = [[tuple(row[i * 7:i * 7 + 3]) for i in range(n)] for row in frames]
-    anchors = [port.v_add(pivot, port.q_rotate(rotation, port.v_sub(root_head, pivot)))
-               for rotation in rotations]
+    anchors = [port.v_add(port.v_add(pivot, port.q_rotate(rotations[f], port.v_sub(root_head, pivot))),
+                          port._offset_at({"motion": motion}, f))
+               for f in range(len(frames))]
     # A child's head is the parent's tail *from the previous frame*: `update()` seeds `old_position` before
     # stepping anything, so with the parent's tail from the same frame the link lengths come out short and
     # the lag vanishes. At frame 0 every head is the rest head.
@@ -241,7 +242,7 @@ def main(argv: list[str]) -> int:
     spec["frames"] = len(motion) - 1
     spec["motion"] = motion
 
-    frames, _ = port.simulate_spec(spec, trace=True)
+    frames, _ = port.simulate_spec(spec, trace=True, warmup=24)
     if frames is None:
         print("the solver produced nothing")
         return 1

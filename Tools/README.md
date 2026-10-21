@@ -59,6 +59,8 @@ bit-exact against the game's own C# by `spring_probe/` (a small .NET project tha
 | `cyspring_metrics.py` | The same run as numbers: per link the rest length against the prefab's, droop under gravity, how far a link hangs behind its parent, its lag in frames, overshoot, settle time, ringing, and frame-to-frame step - plus the tip's path against a rigid chain's. `--motion impulse` steps the parent once and holds it, which is the cleanest spring read. |
 | `spring_probe/` | The .NET harness that runs the game's own structs and solver and dumps a trace, so the Python port can be compared frame by frame (`dotnet run -- --trace out.txt`). |
 | `blender_cyspring_demo.py` | Imports a PMX with mmd_tools, bakes a spec's motion onto the model's own spring bones as world rotations, and can render an mp4. Needs `--model`; MMD's rigid-body physics is left out because the bake *is* the motion. |
+| `spring_plot.py` | Draws the chain in 2D - an HTML page with playback and a deviation strip, plus an optional animated GIF. The grey ghost is where a rigid chain would be, so the gap is the lag. This is the way to look at a chain without Blender in the way. |
+| `chain_drive_from_vmd.py` | Drives a chain with a real animation's hip instead of a scripted wag: rotation *and* travel, taken from a VMD the viewer recorded. A drive that only rotates the parent makes every chain a stick - the travel is what a tail trails behind. |
 
 ```powershell
 python Tools/uma_spring_dump.py 1001 00 --chain Sp_Hi_Tail0 --segments child > tail.json

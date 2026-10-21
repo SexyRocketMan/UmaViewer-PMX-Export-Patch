@@ -436,6 +436,42 @@ def build_from_spec(spec: dict):
     return bones, collisions, params, spec
 
 
+def add_bob(motion: list[dict], vertical: float = 0.0, sideways: float = 0.0,
+            period: float = 24.0) -> list[dict]:
+    """Give every key a translation, so the drive is a hip that bobs and sways rather than one that spins.
+
+    One bob per step and two steps per sway is what a run looks like from the hips: the vertical motion is at
+    twice the sideways frequency. Amplitude is in game units, and the numbers that matter for a tail are
+    `vertical` against the link lengths (0.066 and 0.116 for 1001's tail) - a bob of a tenth of a unit makes
+    the links trail by tens of degrees, where a rotation alone makes them trail by nothing.
+    """
+    result = []
+    for entry in motion:
+        phase = 2.0 * math.pi * entry["frame"] / period
+        result.append(dict(entry, offset=[sideways * math.sin(phase), vertical * math.sin(2.0 * phase), 0.0]))
+    return result
+
+
+def _offset_at(spec: dict, frame: int) -> tuple[float, float, float]:
+    """The parent's translation at a frame, in game units.
+
+    A hip that runs bobs up and down and side to side, and the chain's anchor travels with it. That motion is
+    most of what a tail does: the anchor moves by a hand's width while the links are a tenth of that, so the
+    chain trails behind its own root. A drive that only rotates the parent leaves the tail with nothing to
+    trail and it reads as a stick - which is what the first plots showed.
+    """
+    motion = spec.get("motion") or []
+    if not motion:
+        return (0.0, 0.0, 0.0)
+    nearest = motion[0]
+    for key in motion:
+        if key.get("frame", 0) <= frame:
+            nearest = key
+        else:
+            break
+    return tuple(nearest.get("offset") or (0.0, 0.0, 0.0))
+
+
 def _motion_at(spec: dict, frame: int):
     """The parent's rotation at a frame. A keyframe list is expected, identity when there is none."""
     motion = spec.get("motion") or []
@@ -450,7 +486,7 @@ def _motion_at(spec: dict, frame: int):
     return tuple(nearest["rotation"])
 
 
-def simulate_spec(spec: dict, trace: bool = False):
+def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0):
     """Run a real chain: the parent's animated rotation carries the whole chain, the solver lags behind it."""
     bones, collisions, params, spec = build_from_spec(spec)
     # The chain turns about its own attachment: the root bone's head. `pivot` in the spec is whatever point
@@ -464,26 +500,35 @@ def simulate_spec(spec: dict, trace: bool = False):
     diagnostics = []
     deltas = []
     previous_direction = None
-    for frame in range(spec["frames"] + 1):
-        rotation = _motion_at(spec, frame)
 
-        parent_positions = [v_add(pivot, q_rotate(rotation, v_sub(rest, pivot)))
+    def advance(frame: int, record: bool) -> None:
+        """One frame of the drive: place the chain's anchor, run the solver, and keep what happened."""
+        nonlocal previous_direction
+        rotation = _motion_at(spec, frame)
+        offset = _offset_at(spec, frame)
+        parent_positions = [v_add(v_add(pivot, q_rotate(rotation, v_sub(rest, pivot))), offset)
                             for rest in rest_parent_positions]
         parent_rotations = [rotation for _ in rest_parent_positions]
         # The root bone's transform comes from the thing that drives it, both its position (the animated
         # pivot) and its rotation - `CySpringRootBone.UpdateNativeOldTransform` is what does this in the
         # game. Without the rotation the chain hangs by its rest orientation and never follows the parent.
-        anchor = v_add(pivot, q_rotate(rotation, v_sub(root_head, pivot)))
+        anchor = v_add(v_add(pivot, q_rotate(rotation, v_sub(root_head, pivot))), offset)
         bones[0].old_position = anchor
         bones[0].old_rotation = q_mul(bones[0].init_local_rotation, rotation)
 
+        update(bones, collisions, params, parent_positions, parent_rotations)
+
+        if not record:
+            return
+
+        # Record the pose the step produced, not the one it started from. Recording first - which this did -
+        # hands the bake every bone one frame early, and a link then measures long whenever its anchor moved
+        # since the previous frame, which is every frame of a run.
         if trace:
             frames.append([v for bone in bones
                            for v in (bone.current_position[0], bone.current_position[1], bone.current_position[2],
                                      bone.final_rotation[0], bone.final_rotation[1], bone.final_rotation[2],
                                      bone.final_rotation[3])])
-
-        update(bones, collisions, params, parent_positions, parent_rotations)
 
         # A link runs from a bone's head - the `old_position` the step just used - to its own tail, so that
         # is what the solver has to keep at `init_bone_distance`. Comparing two tails measures nothing.
@@ -508,6 +553,15 @@ def simulate_spec(spec: dict, trace: bool = False):
             v_sub(bones[0].current_position, anchor))))))) if bones else 0.0
         diagnostics.append({"frame": frame, "lengthError": worst_length,
                             "clearance": clearance, "lagDegrees": lag})
+
+    # Let the chain settle on the drive's *first* frame before recording anything. A clip that opens with
+    # the hip already leaning, or already half a link away from where the prefab rests, otherwise starts
+    # with a transient that is not the animation - it is the solver catching up with an initial condition.
+    for _ in range(warmup):
+        advance(0, record=False)
+
+    for frame in range(spec["frames"] + 1):
+        advance(frame, record=True)
 
     if deltas:
         diagnostics[0]["stepMax"] = max(deltas)

@@ -262,7 +262,7 @@ def main() -> int:
         spec["bones"] = [dict(bone, colliders=[]) for bone in spec["bones"]]
 
     reset_scene()
-    frames, _ = port.simulate_spec(spec, trace=True)
+    frames, _ = port.simulate_spec(spec, trace=True, warmup=24)
     if frames is None:
         print("the solver produced nothing")
         return 1
