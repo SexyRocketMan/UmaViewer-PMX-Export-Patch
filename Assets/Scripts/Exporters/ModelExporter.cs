@@ -826,7 +826,7 @@ public class ModelExporter
                 type = property.Type.ToString();
             }
             if (bindings.Length == 0) continue;
-            morphs.Append(morphs.Length > 0 ? ";" : "").Append(morph.name).Append(':').Append(type)
+            morphs.Append(morphs.Length > 0 ? ";" : "").Append(LocatorName(morph)).Append(':').Append(type)
                   .Append(':').Append(bindings);
         }
         return morphs.Length == 0 ? string.Empty : " morph=" + morphs;
@@ -867,7 +867,7 @@ public class ModelExporter
                         if (!names.Contains(plain)) names.Add(plain);
                     }
                 }
-                objects.Append(objects.Length > 0 ? ";" : "").Append(morph.name).Append(':')
+                objects.Append(objects.Length > 0 ? ";" : "").Append(LocatorName(morph)).Append(':')
                        .Append(property.Type).Append(':').Append(property.Part);
                 if (names.Count > 0) objects.Append(':').Append(string.Join(",", names));
             }
@@ -890,6 +890,17 @@ public class ModelExporter
     /// export that only walks the body has no node for a driver to read and the <c>morph=</c> description in
     /// the comment points at nothing.
     /// </summary>
+    /// <summary>
+    /// The name a morph's driver reads: its locator transform, which is not always the morph's own name.
+    /// `StaticTear_Ctrl` is the one that differs - the game drives it from `Cheek_Ctrl`'s position, because a
+    /// tear morph has no locator of its own - so the token has to say `Cheek_Ctrl` or a reader would look for
+    /// a bone that does not exist.
+    /// </summary>
+    private static string LocatorName(FacialOtherMorph morph)
+    {
+        return morph.locator != null ? morph.locator.name : morph.name;
+    }
+
     private static List<Transform> MorphLocators(UmaContainerCharacter character)
     {
         var locators = new List<Transform>();
