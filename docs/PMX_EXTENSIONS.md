@@ -107,10 +107,21 @@ MMD material values, vertex morphs, bones and textures.
   tear objects are wherever they were exported visible or hidden.
 * The comments above are visible in the material panel and the model properties, which is the point of them.
 
+## The locator bones
+
+The transformers these morphs are bound to are not part of the body skeleton: the game instantiates them on a
+`DrivenKeyLocator` object at runtime, a sibling of the body root (`UmaContainerCharacter.cs`). With
+`PmxExtraMorphs` on, the exporter adds the ones the morphs actually bind to the exported skeleton - 
+`Cheek_Ctrl`, `Shade_Ctrl`, `Manga_Ctrl`, `Tear0_Ctrl` … `Tear3_Ctrl`, seven on character 1001 - as bones
+parented to the root `Position`, each with no vertices weighted to it. Their positions are where the game has
+them; their animation is whatever the `*_driven` clips write, exactly as the game drives them.
+
+An export with the flag off has none of them: 437 bones instead of 444 on 1001, no `morph=` token, and no
+`extra morphs:` / `object morphs:` line.
+
 ## Status of the driver side
 
-Not built yet. `Cheek_Ctrl`, `Shade_Ctrl`, `Manga_Ctrl` and the tear locators are transforms in the game's rig
-but **not** in the exported skeleton today (only `Tail_Ctrl` and `UpBody_Ctrl` survive among the `*_Ctrl`
-transforms), so the addon would have nothing to drive from. Exporting them as bones is the next piece of this
-work; when it lands, the `morph=` and `object morphs:` lines above are already enough for the addon to wire
-locator → property and locator → visibility.
+The export side is done: the tokens are written, the locators are bones, and both are verified on a real
+export. What is not built yet is the **addon side** - reading the tokens and wiring locator → property and
+locator → visibility. Until it exists these morphs simply do nothing, which is exactly what a user without
+the addon gets (see above).

@@ -188,7 +188,30 @@ public class ModelExporter
         }
 
         model.Parts = ReadPartMaterials(renderers, model, character);
+        // the locators the extra morphs are bound to, so a driver has a node to read. Added after the vertices
+        // are read: the skinning records bone indices, and appending at the end cannot move any of them.
+        var locators = Config.Instance == null || Config.Instance.PmxExtraMorphs
+            ? MorphLocators(character)
+            : new List<Transform>();
+        foreach (Transform locator in locators)
+        {
+            if (!bones.Contains(locator)) bones.Add(locator);
+        }
+
         model.Bones = ReadBones(bones);
+
+        // A locator's transform parent is the locator object, which is not a bone, so it comes back with no
+        // parent at all. Hang it off the root bone instead: the skeleton keeps one root and the locator travels
+        // with the character, which is where the game keeps it too - a sibling of the body root, not a child.
+        if (locators.Count > 0)
+        {
+            for (int i = 1; i < model.Bones.Length; i++)
+            {
+                if (model.Bones[i].ParentIndex >= 0) continue;
+                if (locators.Exists(locator => locator != null && locator.name == model.Bones[i].Name))
+                    model.Bones[i].ParentIndex = 0;
+            }
+        }
         model.Morphs = ReadMorph(renderers);
         model.Rigidbodies = new MMDRigidBody[0];
         model.Joints = new MMDJoint[0];
@@ -856,6 +879,29 @@ public class ModelExporter
                     + "see docs/PMX_EXTENSIONS.md");
         if (objects.Length > 0) note.Append("\nobject morphs: ").Append(objects);
         return note.ToString();
+    }
+
+    /// <summary>
+    /// The transforms the extra facial morphs are driven by - <c>Cheek_Ctrl</c>, <c>Shade_Ctrl</c>,
+    /// <c>Manga_Ctrl</c>, <c>Tear{n}_Ctrl</c>.
+    ///
+    /// The game builds these on a <c>DrivenKeyLocator</c> object at runtime instead of putting them in the body
+    /// skeleton (<c>UmaContainerCharacter.cs</c> instantiates the object as a sibling of the body root), so an
+    /// export that only walks the body has no node for a driver to read and the <c>morph=</c> description in
+    /// the comment points at nothing.
+    /// </summary>
+    private static List<Transform> MorphLocators(UmaContainerCharacter character)
+    {
+        var locators = new List<Transform>();
+        if (character == null) return locators;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null) return locators;
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null || morph.locator == null) continue;
+            if (!locators.Contains(morph.locator)) locators.Add(morph.locator);
+        }
+        return locators;
     }
 
     private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model,
