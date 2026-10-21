@@ -354,6 +354,145 @@ def trace() -> dict:
     }
 
 
+# --------------------------------------------------------------------------- a chain from the game's data
+
+def load_spec(path: str) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def build_from_spec(spec: dict):
+    """The chain `uma_spring_chain.py` wrote, as solver state: bones, colliders, parents, motion."""
+    parent_index = {parent["name"]: i for i, parent in enumerate(spec["parents"])}
+
+    bones = []
+    for index, entry in enumerate(spec["bones"]):
+        bones.append(Bone(
+            init_local_rotation=IDENTITY,
+            old_rotation=IDENTITY,
+            final_rotation=IDENTITY,
+            bone_axis=tuple(entry["axis"]),
+            current_position=tuple(entry["position"]),
+            prev_position=tuple(entry["position"]),
+            old_position=tuple(spec["pivot"]),     # replaced each frame by the animated anchor
+            spring_force=(0.0, 0.0, 0.0),
+            wind_power=(0.0, 0.0, 0.0),
+            init_bone_distance=entry["distance"],
+            stiffness=entry["stiffness"],
+            drag=entry["drag"],
+            radius=entry["radius"],
+            gravity=entry["gravity"],
+            capability=entry["capability"],
+            caps_group_index=entry["capabilityGroup"],
+            wind=0,
+            wind_group_index=0.0,
+            active_collision=0,
+            exist_collision=False,
+            is_skip=False,
+        ))
+
+    # the colliders this run can resolve: the ones whose parent bone was supplied, in spec order, so a
+    # bone''s `collision_indices` are indexes into this same list
+    collisions = []
+    for definition in spec["colliders"]:
+        index = parent_index.get(definition["parent"])
+        if index is None:
+            continue                      # hangs from a bone the run was not given
+        collisions.append({
+            "name": definition["name"],
+            "type": definition["type"],
+            "position": tuple(definition["position"]),
+            "position2": tuple(definition["position2"]),
+            "radius": definition["radius"],
+            "parent_index": index,
+            "purpose": definition.get("purpose", 0),
+        })
+
+    for bone, entry in zip(bones, spec["bones"]):
+        indices = [i for i, collision in enumerate(collisions) if collision["name"] in entry["colliders"]]
+        if indices:
+            bone.exist_collision = True
+            bone.collision_indices = indices
+            bone.active_collision = len(indices)
+
+    params = {
+        "stiffness_rate": 1.0,
+        "drag_rate": 1.0,
+        "gravity_rate": 1.0,
+        "collision_switch": True,
+        "force_scale": (1.0, 1.0, 1.0),
+    }
+    for group in range(5):
+        params[f"capability{group}"] = 0
+        params[f"gravity_direction{group}"] = (0.0, -1.0, 0.0)
+
+    return bones, collisions, params, spec
+
+
+def _motion_at(spec: dict, frame: int):
+    """The parent's rotation at a frame. A keyframe list is expected, identity when there is none."""
+    motion = spec.get("motion") or []
+    if not motion:
+        return IDENTITY
+    nearest = motion[0]
+    for key in motion:
+        if key["frame"] <= frame:
+            nearest = key
+        else:
+            break
+    return tuple(nearest["rotation"])
+
+
+def simulate_spec(spec: dict, trace: bool = False):
+    """Run a real chain: the parent's animated rotation carries the whole chain, the solver lags behind it."""
+    bones, collisions, params, spec = build_from_spec(spec)
+    pivot = tuple(spec["pivot"])
+    rest_parent_positions = [tuple(p["position"]) for p in spec["parents"]]
+    root_parent = None
+    # the anchor is the bone the chain hangs from: the parent of its root bone
+    for index, parent in enumerate(spec["parents"]):
+        root_parent = index if root_parent is None else root_parent
+
+    frames = []
+    diagnostics = []
+    for frame in range(spec["frames"] + 1):
+        rotation = _motion_at(spec, frame)
+
+        parent_positions = [v_add(pivot, q_rotate(rotation, v_sub(rest, pivot)))
+                            for rest in rest_parent_positions]
+        parent_rotations = [rotation for _ in rest_parent_positions]
+        anchor = parent_positions[root_parent] if parent_positions else pivot
+        bones[0].old_position = anchor
+
+        if trace:
+            frames.append([v for bone in bones
+                           for v in (bone.current_position[0], bone.current_position[1], bone.current_position[2],
+                                     bone.final_rotation[0], bone.final_rotation[1], bone.final_rotation[2],
+                                     bone.final_rotation[3])])
+
+        update(bones, collisions, params, parent_positions, parent_rotations)
+
+        worst_length = 0.0
+        for i in range(1, len(bones)):
+            worst_length = max(worst_length,
+                               abs(v_distance(bones[i].current_position, bones[i - 1].current_position)
+                                   - bones[i].init_bone_distance))
+        clearance = None
+        if collisions:
+            clearance = min(v_distance(bone.current_position, parent_positions[collision["parent_index"]]
+                                       if collision["purpose"] != 2 else collision["position"])
+                            - f32(bone.radius + collision["radius"])
+                            for bone in bones for collision in collisions)
+        # how far the chain's own direction has drifted from where an animated parent would put it
+        driven = v_normalized(q_rotate(rotation, tuple(spec["bones"][0]["axis"])))
+        lag = math.degrees(math.acos(max(-1.0, min(1.0, v_dot(driven, v_normalized(
+            v_sub(bones[0].current_position, anchor))))))) if bones else 0.0
+        diagnostics.append({"frame": frame, "lengthError": worst_length,
+                            "clearance": clearance, "lagDegrees": lag})
+
+    return (frames if trace else None), diagnostics
+
+
 # --------------------------------------------------------------------------- comparing
 
 def compare(reference: dict, mine: dict) -> int:
@@ -385,12 +524,44 @@ def compare(reference: dict, mine: dict) -> int:
     return failures
 
 
+def report(spec: dict, diagnostics: list) -> None:
+    """What the run did, in numbers: the links hold, nothing diverges, and the chain lags its driver."""
+    worst_length = max(d["lengthError"] for d in diagnostics)
+    clearances = [d["clearance"] for d in diagnostics if d["clearance"] is not None]
+    lengths_ok = worst_length < 1e-3
+    finite = all(abs(d["lagDegrees"]) <= 180.0 for d in diagnostics)
+
+    print(f"{spec['name']}: {len(spec['bones'])} bone(s), {len(spec['colliders'])} collider(s), "
+          f"{len(diagnostics)} frame(s) -> links {'hold' if lengths_ok else 'DRIFT'} "
+          f"(worst error {worst_length:.2e}), {'finite' if finite else 'DIVERGED'}")
+    if clearances:
+        print(f"  clearance to the colliders: min {min(clearances):+.3f} "
+              f"(negative means a bone ended up inside one)")
+    step = max(1, len(diagnostics) // 8)
+    print("   frame   lag(deg)   link error")
+    for d in diagnostics:
+        if d["frame"] % step == 0 or d["frame"] == len(diagnostics) - 1:
+            print(f"  {d['frame']:>6}   {d['lagDegrees']:8.2f}   {d['lengthError']:.2e}")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="The game's spring solver in Python, and the check that the "
                                                  "transcription matches the C# it came from.")
     parser.add_argument("--trace", default="", help="write this port's frames to a JSON file")
     parser.add_argument("--compare", default="", help="compare against a trace written by Tools/spring_probe")
+    parser.add_argument("--spec", default="", help="run a real chain written by Tools/uma_spring_chain.py")
+    parser.add_argument("--trace-out", default="", help="write that run's frames here")
     args = parser.parse_args(argv)
+
+    if args.spec:
+        spec = load_spec(args.spec)
+        frames, diagnostics = simulate_spec(spec, trace=True)
+        report(spec, diagnostics)
+        if args.trace_out:
+            with open(args.trace_out, "w", encoding="utf-8") as handle:
+                json.dump({"spec": spec["name"], "bones": len(spec["bones"]), "frames": frames}, handle,
+                          separators=(",", ":"))
+            print(f"{args.trace_out}: {len(frames)} frame(s)")
 
     if args.trace:
         data = trace()
@@ -406,7 +577,7 @@ def main(argv: list[str]) -> int:
         print(f"{len(reference['runs'])} run(s) compared, {failures} mismatched")
         return 0 if failures == 0 else 1
 
-    if not args.trace and not args.compare:
+    if not args.spec and not args.trace and not args.compare:
         parser.print_help()
         return 2
     return 0
