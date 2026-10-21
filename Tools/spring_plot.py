@@ -251,6 +251,98 @@ requestAnimationFrame(tick);
 """
 
 
+def write_sheet(spec: dict, data: dict, motion: list[dict], out: str) -> None:
+    """A page to judge by: stroboscopic chain, the lag of each link, and how fast the anchor is moving.
+
+    The anchor's speed panel is there because a tail that looks noisy is usually not the solver: it is the
+    drive stepping instead of travelling, and that shows as a spiky line long before it shows in the tail.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib import gridspec
+
+    frames = data["points"]
+    rigid = data["rigid"]
+    pivot = spec.get("pivot") or spec["bones"][0]["position"]
+    axes = [tuple(bone["axis"]) for bone in spec["bones"]]
+    n = len(spec["bones"])
+    count = len(frames)
+
+    deviation = [[0.0] * count for _ in range(n)]
+    for frame in range(count):
+        # a child's head is the parent's tail from the *previous* frame - the solver seeds it before stepping
+        heads = [frames[frame][0]] + (frames[frame - 1][1:] if frame else frames[0][1:])
+        for index in range(n):
+            tail = frames[frame][index + 1]
+            head = heads[index]
+            link = tuple(tail[axis] - head[axis] for axis in range(3))
+            link = tuple(value / (sum(v * v for v in link) ** 0.5 or 1.0) for value in link)
+            rotation = port._motion_at({"motion": motion}, frame)
+            driven = port.q_rotate(rotation, axes[index])
+            dot = max(-1.0, min(1.0, sum(a * b for a, b in zip(link, driven))))
+            deviation[index][frame] = math.degrees(math.acos(dot))
+
+    anchors = [frame[0] for frame in frames]
+    steps = [math.dist(anchors[f], anchors[f - 1]) for f in range(1, count)]
+    lengths = [bone["distance"] for bone in spec["bones"]]
+
+    figure = plt.figure(figsize=(15, 8.5), facecolor="#12141a")
+    grid = gridspec.GridSpec(2, 2, width_ratios=[1.05, 1.0], height_ratios=[1.0, 0.85],
+                             hspace=0.28, wspace=0.16)
+    figure.suptitle(f"{spec['name']}   {count} frames   {n} links", color="#d8dce6", fontsize=13, x=0.02,
+                    ha="left")
+
+    def isometric(point):
+        x, y, z = point
+        dx, dy, dz = x - pivot[0], y - pivot[1], z - pivot[2]
+        return dx * 0.82 - dz * 0.57, -dy * 0.94 - (dx * 0.57 + dz * 0.82) * 0.34
+
+    strobe = figure.add_subplot(grid[:, 0], facecolor="#0b0d12")
+    palette = plt.cm.plasma([i / max(1, count - 1) for i in range(count)])
+    for frame in range(0, count, max(1, count // 14)):
+        solved = [isometric(point) for point in frames[frame]]
+        ghost = [isometric(point) for point in rigid[frame]]
+        strobe.plot([p[0] for p in ghost], [p[1] for p in ghost], color="#3a4050", lw=1.0, ls="--")
+        strobe.plot([p[0] for p in solved], [p[1] for p in solved], color=palette[frame], lw=1.8)
+        strobe.plot([solved[-1][0]], [solved[-1][1]], "o", color=palette[frame], ms=3)
+    strobe.set_title("chain, every few frames (orange = solved, grey = rigid)", color="#9aa3b2", fontsize=10)
+    strobe.tick_params(colors="#5b6273", labelsize=8)
+    strobe.set_aspect("equal", adjustable="datalim")
+    for spine in strobe.spines.values():
+        spine.set_color("#232733")
+
+    strip = figure.add_subplot(grid[0, 1], facecolor="#0b0d12")
+    colors = ["#ff7a45", "#ffc53d", "#39d0a0", "#4a9eff", "#b37feb"]
+    for index in range(n):
+        strip.plot(range(count), deviation[index], color=colors[index % len(colors)], lw=1.6,
+                   label=spec["bones"][index]["name"].replace("Sp_Hi_Tail0_", ""))
+    strip.set_title("a link's angle against where the drive alone would point", color="#9aa3b2", fontsize=10)
+    strip.set_ylabel("degrees", color="#9aa3b2", fontsize=9)
+    strip.tick_params(colors="#5b6273", labelsize=8)
+    strip.legend(facecolor="#12141a", edgecolor="#232733", labelcolor="#d8dce6", fontsize=8, frameon=True)
+    strip.grid(color="#1b1f28")
+    for spine in strip.spines.values():
+        spine.set_color("#232733")
+
+    speed = figure.add_subplot(grid[1, 1], facecolor="#0b0d12")
+    speed.plot(range(1, count), steps, color="#4a9eff", lw=1.6)
+    speed.axhline(min(lengths), color="#ff7a45", lw=1.0, ls="--",
+                  label=f"shortest link ({min(lengths):.3f})")
+    speed.set_title("how far the anchor moves per frame - spikes here are a stepping drive, not the tail",
+                    color="#9aa3b2", fontsize=10)
+    speed.set_ylabel("game units / frame", color="#9aa3b2", fontsize=9)
+    speed.tick_params(colors="#5b6273", labelsize=8)
+    speed.legend(facecolor="#12141a", edgecolor="#232733", labelcolor="#d8dce6", fontsize=8, frameon=True)
+    speed.grid(color="#1b1f28")
+    for spine in speed.spines.values():
+        spine.set_color("#232733")
+
+    figure.savefig(out, dpi=110, facecolor=figure.get_facecolor(), bbox_inches="tight")
+    print(f"{out}: {count} frames, {n} links")
+    plt.close(figure)
+
+
 def write_gif(spec: dict, data: dict, out: str, scale_ratio: float = 1.0) -> None:
     """An animated side view, for when a browser is not in the way: the solved chain over the rigid ghost."""
     from PIL import Image, ImageDraw
@@ -305,6 +397,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--no-colliders", action="store_true")
     parser.add_argument("--out", default="", help="where to write the html (default next to the spec)")
     parser.add_argument("--gif", default="", help="also write an animated gif here")
+    parser.add_argument("--sheet", default="", help="also write a matplotlib page here (png)")
     args = parser.parse_args(argv)
 
     spec = port.load_spec(args.spec)
@@ -347,6 +440,8 @@ def main(argv: list[str]) -> int:
           f"{math.dist(data['points'][-1][-1], data['points'][0][-1]):.4f} game units end to end")
     if args.gif:
         write_gif(spec, data, args.gif)
+    if args.sheet:
+        write_sheet(spec, data, motion, args.sheet)
     return 0
 
 
