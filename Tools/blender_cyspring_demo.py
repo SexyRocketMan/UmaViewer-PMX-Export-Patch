@@ -61,6 +61,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=0.0,
                         help="scene frame rate; 0 takes the spec's, which is the rate the clip was recorded at")
     parser.add_argument("--wind", type=float, default=None, help="wind scale; None uses the spec's own")
+    parser.add_argument("--motion", choices=("spec", "idle"), default="spec",
+                        help="'idle' holds the body still and lets only the tail move, which is the clean "
+                             "reference: no body animation to judge the tail against")
     return parser.parse_args(argv)
 
 
@@ -288,6 +291,11 @@ def main() -> int:
         spec = dict(spec)
         spec["colliders"] = []
         spec["bones"] = [dict(bone, colliders=[]) for bone in spec["bones"]]
+    if args.motion == "idle":
+        # the body at rest: the drive is the identity every frame, so the only thing left moving is the tail
+        spec = dict(spec)
+        spec["motion"] = [{"frame": frame, "rotation": [0.0, 0.0, 0.0, 1.0], "offset": [0.0, 0.0, 0.0]}
+                          for frame in range(spec["frames"] + 1)]
 
     # the frame rate has to be the one the clip was recorded at, or the body animation and the tail drift apart
     fps = args.fps or float(spec.get("fps") or 24)
