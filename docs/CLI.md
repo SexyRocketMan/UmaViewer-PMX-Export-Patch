@@ -31,6 +31,8 @@ line, runs it, and prints the interesting lines of the log afterwards.
 | Screenshot the game's own render | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/face.png -ShotOnly` |
 | Export a prop or a scene | `./Tools/headless_export.ps1 -ListProps home10001` then `-Prop <path> -Out D:/out/home.pmx` |
 | Find out why a scene renders white | `./Tools/headless_export.ps1 -ScanProps "3d/env/home" -ScanCount 12` |
+| See what a sound clip says | `./Tools/headless_export.ps1 -Transcript snd_voi_home_100100` |
+| Export a voice clip to mp3 with its line in the tag | `./Tools/headless_export.ps1 -ExportAudio snd_voi_story_041047007 -ExportClip 3 -Out D:/out/line.mp3` |
 | Check what you exported | `uv run Tools/pmx_inspect.py summary <file.pmx>`, `uv run Tools/vmd_inspect.py loop <file.vmd>` |
 
 ---
@@ -221,7 +223,26 @@ colours them at runtime - so showing untextured there is expected, not a bug.
 | `-PlainMaterials` | Writes plain MMD materials: no uma shader settings in the material comment, plain diffuse/specular/outline values. Use it for a model meant to be used *without* the uma addon. |
 | `-DumpMaterials` | Before exporting, logs what every material resolved to - textureless slots, missing shaders, and every property of every shader the model uses. Use it when a model comes out white or oddly shaded. |
 
-### 8. Check what you got
+### 8. Voices, and what they say
+
+The Sound page in the GUI shows a clip's line and puts it in the tag of an exported mp3; the CLI can do the
+same, and can print the text without exporting anything:
+
+```powershell
+./Tools/headless_export.ps1 -Transcript snd_voi_home_100100     # a character's recorded lines
+./Tools/headless_export.ps1 -Transcript 041047007               # a story's dialogue (also accepts snd_voi_story_041047007)
+
+./Tools/headless_export.ps1 -ExportAudio snd_voi_story_041047007 -ExportClip 3 -Out D:/out/line.mp3
+./Tools/headless_export.ps1 -ExportAudio snd_voi_home_100100 -ExportClip 1 -Out D:/out/home.mp3
+```
+
+`-Transcript` prints what the sheet resolves to and then, clip by clip, what the viewer would label that
+clip with; `-ExportAudio` writes the mp3 and reads the ID3 tag back out of it, which is how the tag writer
+is checked. The text comes from the game's own data - the master database for recorded character voices,
+the story timeline assets for dialogue - and never from the network. [TRANSCRIPTS.md](TRANSCRIPTS.md) has
+the details, the coverage, and the one family of sheets where a clip answers for several lines.
+
+### 9. Check what you got
 
 Nothing here needs Unity, Blender or the game:
 
@@ -291,6 +312,9 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-ShotTransparent` | off | Screenshot without the background |
 | `-ScanProps <filter>` | - | Load every matching `3d/env` scene in turn and report its material health |
 | `-ScanCount <n>` | 10 | How many scenes `-ScanProps` covers |
+| `-Transcript <sheet>` | - | Print the dialogue a story voice sheet carries, and what the viewer would label each clip of that asset, then exit |
+| `-ExportAudio <sheet>` | - | Write a sound asset to an mp3 (with `-Out`) carrying its transcript in the ID3 tag |
+| `-ExportClip <n>` | 0 | Which clip of that asset; `-1` mixes the whole asset |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | - | Print and exit without loading |
 
 ### Listing and plumbing
@@ -317,6 +341,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | The model | `-Out`, else `<project>/HeadlessExports/<charid>_<costume>.pmx` |
 | Its textures | a `Texture2D/` folder next to the `.pmx` - move them together |
 | The motion | `-RecordVmd` (no default) |
+| The mp3 | `-Out`, else `<project>/HeadlessExports/<asset name>.mp3` |
 | Screenshots | `-Screenshot`, with `_yaw+45` / `_az+60_yaw0` inserted before the extension when there are several angles |
 | The run's log | `-LogPath`, else `<project>/Logs/headless_export_<timestamp>.log` |
 
@@ -397,6 +422,7 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-PlaySeconds` / `-ExtraFrames` / `-Timeout` | `-umaPlaySeconds` / `-umaExtraFrames` / `-umaTimeout` |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | `-umaListChars` / `-umaListCostumes` / `-umaListProps [filter]` |
 | `-DumpMaterials` / `-DumpFace` / `-ScanProps` / `-ScanCount` | `-umaDumpMaterials` / `-umaDumpFace` / `-umaScanProps` / `-umaScanCount` |
+| `-Transcript` / `-ExportAudio` / `-ExportClip` | `-umaTranscript` / `-umaExportAudio` / `-umaExportClip` |
 | `-ShotView` / `-ShotWidth` / `-ShotHeight` / `-ShotYaw` / `-ShotYaws` | `-umaShotView` / `-umaShotWidth` / `-umaShotHeight` / `-umaShotYaw` / `-umaShotYaws` |
 | `-ShotAzimuths` / `-ShotLightElevation` / `-ShotTransparent` / `-ShotOnly` | `-umaShotAzimuths` / `-umaShotLightElevation` / `-umaShotTransparent` / `-umaShotOnly` |
 | `-ShotTexture` / `-ShotGlobal` / `-ShotFloat` / `-ShotMaterial` / `-PinPose` | `-umaShotTexture` / `-umaShotGlobal` / `-umaShotFloat` / `-umaShotMaterial` / `-umaPinPose` |

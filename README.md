@@ -14,12 +14,26 @@ Latest tutorial video: https://www.youtube.com/watch?v=zbzfF3pubjQ
 Jump to: [What each release fixed](#what-each-release-fixed) - [Fork vs og UmaViewer](#fork-vs-og-umaviewer) -
 [Installation](#requirementsinstallation) - [Build it yourself](#for-developerscontributors) -
 [Command line export](docs/CLI.md) - [Exported bone structure](../UmaViewer-DevTools/docs/BONE_STRUCTURE.md) -
+[Audio transcripts](docs/TRANSCRIPTS.md) -
 [Blender addon steps](../UmaViewer-DevTools/docs/UMA_ADDON_STEPS.md) -
 [FBX export research](../UmaViewer-DevTools/docs/FBX_EXPORT.md) -
 [Rigify controller, arm poles](../UmaViewer-DevTools/docs/MMR_CONTROLLER.md) -
 [Rigify chains: start here](../UmaViewer-DevTools/docs/RIG_HANDOFF.md) -
 [The animator's own rig, described](../UmaViewer-DevTools/docs/COOLCHOU_RIG.md) -
 [How this workstream works](../UmaViewer-DevTools/docs/RIG_WORKFLOW.md)
+
+### *Audio transcripts*
+
+- **The sound page now says what you are hearing.** A character voice or a line of story dialogue shows its
+  text above the progress bar and next to every clip in the list, and an mp3 exported from there carries the
+  line in its ID3 tag - title = the line, artist = the speaker, album = the story, lyrics = the full text.
+  That makes a ripped voice clip self-describing once it leaves the viewer.
+- The text is the game's own: recorded character voices come from the master database
+  (`character_system_text`), story dialogue from the episode's own timeline asset. Nothing extra is
+  downloaded, and a clip the game has no line for is exported exactly as before, untagged.
+- Story dialogue covers the whole story tree; a clip that one recorded take serves several lines of lists
+  them all. [`docs/TRANSCRIPTS.md`](docs/TRANSCRIPTS.md) explains where the text lives, how a clip is joined
+  to it, and what is not covered.
 
 ### *The Ultimate Agemasen Edition* (v3)
 

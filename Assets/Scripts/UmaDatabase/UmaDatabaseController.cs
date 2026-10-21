@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Mono.Data.Sqlite;
 using System.Data;
@@ -746,6 +746,94 @@ public class UmaDatabaseController
     static List<DataRow> ReadAllDressData(SqliteConnection conn)
     {
         return ReadMaster(conn, $"SELECT * FROM dress_data C,(SELECT D.'index' dressid,D.'text' dressname FROM text_data D WHERE id like 14) T WHERE C.id like T.dressid");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The text of the recorded character voices
+    //
+    // `character_system_text` holds one row per recorded voice line - the home, training, outgame,
+    // minigame, victory and event lines - with the line itself and the cue the audio is played from. It is
+    // the only place this text exists: the sound assets carry no text at all, only cue names. Story
+    // dialogue is not here; it lives in the story timeline assets (see AudioTranscripts).
+    //
+    // The table is read on first use rather than at startup: 33k rows are not worth the boot time until
+    // something actually asks for a transcript.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>Cue name -> the line it voices, with the speaker's name. Null until first use.</summary>
+    private static Dictionary<string, KeyValuePair<string, string>> systemVoiceText;
+
+    /// <summary>How many cue names the character voice table resolved to, for diagnostics.</summary>
+    public static int SystemVoiceTextCount => SystemVoiceText().Count;
+
+    /// <summary>
+    /// The line a recorded character voice plays, by the cue name the sound asset's acb gives it
+    /// (e.g. `snd_voi_home_100100_0021`). False when the clip is not a recorded character voice.
+    /// </summary>
+    public static bool TryGetSystemVoiceText(string cueName, out string speaker, out string text)
+    {
+        speaker = "";
+        text = "";
+        if (string.IsNullOrEmpty(cueName)) return false;
+
+        var table = SystemVoiceText();
+        if (!table.TryGetValue(cueName, out KeyValuePair<string, string> line)) return false;
+        speaker = line.Key;
+        text = line.Value;
+        return !string.IsNullOrEmpty(text);
+    }
+
+    private static Dictionary<string, KeyValuePair<string, string>> SystemVoiceText()
+    {
+        if (systemVoiceText != null) return systemVoiceText;
+        systemVoiceText = new Dictionary<string, KeyValuePair<string, string>>(StringComparer.Ordinal);
+        if (instance?.masterDb == null)
+        {
+            Debug.LogWarning($"[Transcript] no master database connection "
+                             + $"(controller {(instance == null ? "missing" : "present")})");
+            return systemVoiceText;
+        }
+
+        try
+        {
+            // character names, the same rows the character list is built from (text_data category 6)
+            var names = new Dictionary<int, string>();
+            List<DataRow> nameRows = ReadMaster(instance.masterDb, "SELECT \"index\", text FROM text_data WHERE id = 6");
+            foreach (DataRow row in nameRows)
+            {
+                int id = Convert.ToInt32(row[0]);
+                if (!names.ContainsKey(id)) names[id] = Convert.ToString(row[1]);
+            }
+
+            List<DataRow> rows = ReadMaster(instance.masterDb,
+                "SELECT character_id, cue_sheet, cue_id, lip_sync_data, text FROM character_system_text");
+            Debug.Log($"[Transcript] character voices: {rows.Count} row(s), {names.Count} character name(s)");
+            foreach (DataRow row in rows)
+            {
+                int characterId = Convert.ToInt32(row[0]);
+                string sheet = Convert.ToString(row[1]);
+                int cueId = Convert.ToInt32(row[2]);
+                string lipSync = Convert.ToString(row[3]);
+                string line = Convert.ToString(row[4]);
+                if (string.IsNullOrEmpty(line)) continue;
+
+                string speaker = names.TryGetValue(characterId, out string name) ? name : "";
+                var value = new KeyValuePair<string, string>(speaker, line);
+
+                // Two keys, because the table is not consistent about how it names a cue: `lip_sync_data` is
+                // the cue name most of the time, but a few hundred rows carry `..._00` where the sheet and
+                // cue id spell `..._0000`. Indexing both shapes is enough to catch those.
+                if (!string.IsNullOrEmpty(lipSync)) systemVoiceText[lipSync] = value;
+                string fromParts = $"{sheet}_{cueId:0000}";
+                if (!systemVoiceText.ContainsKey(fromParts)) systemVoiceText[fromParts] = value;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Transcript] character_system_text unavailable: {e.Message}");
+        }
+
+        return systemVoiceText;
     }
 
     public static DataRow ReadCharaData(CharaEntry chara)

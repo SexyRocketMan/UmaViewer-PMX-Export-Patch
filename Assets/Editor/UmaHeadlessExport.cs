@@ -1,9 +1,11 @@
 #if UNITY_EDITOR
+using Gallop;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using UmaMusumeAudio;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -41,6 +43,12 @@ using UnityEngine.Rendering;
 ///   -umaScanProps &lt;f&gt;    load every prop/scene matching &lt;f&gt; in turn and report its material health
 ///                        (textureless slots, missing shaders, resolved texture set), then exit
 ///   -umaScanCount &lt;n&gt;    how many props to scan, default 10
+///   -umaExportAudio &lt;sheet&gt;  write a sound asset to an mp3 (with -umaOut) carrying its transcript in
+///                          the tag: -umaExportAudio snd_voi_story_041047007 -umaExportClip 3 -umaOut x.mp3
+///   -umaExportClip &lt;n&gt;     which clip of that asset, default 0; -1 mixes the whole asset
+///   -umaTranscript &lt;sheet&gt;  print the lines a story voice sheet is used for (e.g. 041047007, or
+///                          snd_voi_story_041047007), together with what the viewer would put on each
+///                          clip of that sound asset, then exit
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short, 2 both, 3 unified)
@@ -92,7 +100,8 @@ public static class UmaHeadlessExport
         RecordVmd,
         Export,
         Done,
-        Screenshot
+        Screenshot,
+        ExportAudio
     }
 
     [Serializable]
@@ -119,6 +128,11 @@ public static class UmaHeadlessExport
         public string ScanProps = "";
         public int ScanCount = 10;
         public bool DumpMaterials;
+        // a sound asset to write to an mp3, with the transcript in its tag
+        public string ExportAudio = "";
+        public int ExportClip = 0;
+        // a story voice sheet to print the transcript of, without loading or exporting anything
+        public string Transcript = "";
         public bool DumpFace;
         public string Variant = "";
         public int MorphNameMode = -1;
@@ -196,6 +210,9 @@ public static class UmaHeadlessExport
                         break;
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
+                    case "-umaTranscript": options.Transcript = Next(); break;
+                    case "-umaExportAudio": options.ExportAudio = Next(); break;
+                    case "-umaExportClip": options.ExportClip = int.Parse(Next()); break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaDumpFace": options.DumpFace = true; break;
                     case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
@@ -263,11 +280,12 @@ public static class UmaHeadlessExport
         }
 
         if (!options.ListChars && !options.ListCostumes && !options.ListProps
-            && string.IsNullOrEmpty(options.ScanProps)
+            && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
+            && string.IsNullOrEmpty(options.ExportAudio)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
-                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaScanProps");
+                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaScanProps / -umaTranscript");
             EditorApplication.Exit(2);
             return;
         }
@@ -350,6 +368,12 @@ public static class UmaHeadlessExport
                     }
                     return;
 
+                case Stage.ExportAudio:
+                    if (!_audioExported) return;
+                    ReportTag(SessionState.GetString(KeyOutPath, ""));
+                    Succeed();
+                    return;
+
                 case Stage.WaitStartup:
                 {
                     var main = UmaViewerMain.Instance;
@@ -407,6 +431,20 @@ public static class UmaHeadlessExport
                                   + (Config.Instance.FbxEmbedTextures
                                       ? "embedded (the file stays textured when moved on its own)"
                                       : "referenced only (keep the Texture2D folder next to the file)"));
+                    }
+
+                    if (!string.IsNullOrEmpty(options.ExportAudio))
+                    {
+                        if (!StartAudioExport(options)) return;
+                        CurrentStage = Stage.ExportAudio;
+                        return;
+                    }
+
+                    if (!string.IsNullOrEmpty(options.Transcript))
+                    {
+                        PrintTranscript(options.Transcript);
+                        Succeed();
+                        return;
                     }
 
                     if (options.ListChars)
@@ -1880,6 +1918,170 @@ public static class UmaHeadlessExport
             Debug.Log($"{Tag}   {chara.Id}\t{chara.Name}\t[{costumes}]");
         }
     }
+
+    /// <summary>
+    /// Explains one sound asset's transcript - the text half of the audio export, so the join against the
+    /// game data can be checked without exporting (or playing) anything. Accepts a story sheet
+    /// (041047007), an asset name (snd_voi_story_041047007, snd_voi_home_100100) or a full asset path.
+    /// </summary>
+    private static void PrintTranscript(string query)
+    {
+        // a story sheet is also its timeline's name; print what the sheet resolves to first
+        const string storyPrefix = "snd_voi_story_";
+        string sheet = query;
+        int at = sheet.IndexOf(storyPrefix, StringComparison.OrdinalIgnoreCase);
+        if (at >= 0) sheet = sheet.Substring(at + storyPrefix.Length);
+        sheet = Path.GetFileNameWithoutExtension(sheet);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        Dictionary<int, List<TranscriptLine>> byCue = AudioTranscripts.ForSheet(sheet);
+        if (byCue.Count > 0)
+        {
+            int lines = 0;
+            foreach (KeyValuePair<int, List<TranscriptLine>> pair in byCue.OrderBy(p => p.Key))
+            {
+                foreach (TranscriptLine line in pair.Value)
+                {
+                    Debug.Log($"{Tag} cue {pair.Key,4} {line.Speaker}: {OneLine(line.Text)}"
+                              + $"  [story {line.StoryId} {line.StoryTitle}]");
+                    lines++;
+                }
+            }
+            Debug.Log($"{Tag} sheet {sheet}: {byCue.Count} cue(s) carry text, {lines} line(s), "
+                      + $"resolved in {stopwatch.ElapsedMilliseconds} ms");
+        }
+        else
+        {
+            Debug.Log($"{Tag} sheet {sheet}: no story timeline carries lines for it "
+                      + $"(resolved in {stopwatch.ElapsedMilliseconds} ms)");
+        }
+
+        UmaDatabaseEntry awb = FindSoundAsset(query);
+        if (awb == null)
+        {
+            Fail($"no sound asset matches '{query}'");
+            return;
+        }
+
+        List<SoundCues.Cue> cues = SoundCues.Of(awb);
+        Debug.Log($"{Tag} {awb.Name}: {cues?.Count ?? 0} clip(s)"
+                  + (cues == null ? ", no acb next to it so the cue names are unknown" : ""));
+        Debug.Log($"{Tag} character voice table: {UmaDatabaseController.SystemVoiceTextCount} cue name(s)");
+        if (cues == null) return;
+
+        for (int i = 0; i < cues.Count; i++)
+        {
+            string text = AudioTranscripts.Summarize(AudioTranscripts.ForClip(awb, i));
+            Debug.Log($"{Tag} clip {i,4} {cues[i].Name ?? "-"}: {(string.IsNullOrEmpty(text) ? "-" : OneLine(text))}");
+        }
+    }
+
+    /// <summary>A sound asset by full path, asset name, or the bare name its file carries.</summary>
+    private static UmaDatabaseEntry FindSoundAsset(string query)
+    {
+        var main = UmaViewerMain.Instance;
+        if (main?.AbList == null) return null;
+
+        string file = Path.GetFileNameWithoutExtension(query);
+        foreach (string candidate in new[] { query, $"sound/c/{query}.awb", $"sound/v/{query}.awb", $"sound/c/{file}.awb", $"sound/v/{file}.awb" })
+        {
+            if (main.AbList.TryGetValue(candidate, out UmaDatabaseEntry entry)) return entry;
+        }
+        return null;
+    }
+
+
+    private static bool _audioExported;
+
+    /// <summary>
+    /// Writes one clip of a sound asset to an mp3, with its transcript in the tag. Accepts a story sheet
+    /// (041047007), the asset name (snd_voi_story_041047007) or a full asset path.
+    /// </summary>
+    private static bool StartAudioExport(Options options)
+    {
+        string query = options.ExportAudio;
+        var main = UmaViewerMain.Instance;
+        if (main?.AbList == null) { Fail("no asset list"); return false; }
+
+        UmaDatabaseEntry entry = null;
+        foreach (string candidate in new[]
+                 {
+                     query,
+                     $"sound/c/{query}.awb",
+                     $"sound/c/snd_voi_story_{query}.awb",
+                     $"sound/v/{query}.awb",
+                 })
+        {
+            if (main.AbList.TryGetValue(candidate, out entry)) break;
+            entry = null;
+        }
+        if (entry == null) { Fail($"no sound asset matches '{query}'"); return false; }
+
+        var streams = UmaViewerBuilder.Instance.LoadAudioStreams(entry);
+        if (streams.Count == 0) { Fail($"{entry.Name}: no clips (file missing?)"); return false; }
+        if (options.ExportClip >= streams.Count)
+        {
+            Fail($"{entry.Name} has {streams.Count} clip(s), so -umaExportClip {options.ExportClip} is out of range");
+            return false;
+        }
+
+        string path = string.IsNullOrEmpty(options.OutPath)
+            ? Path.Combine("HeadlessExports", Path.GetFileNameWithoutExtension(entry.Name) + ".mp3")
+            : options.OutPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
+
+        AudioTranscriptTag? tag = AudioTranscripts.Tag(entry, options.ExportClip);
+        SessionState.SetString(KeyOutPath, path);
+        _audioExported = false;
+        Debug.Log($"{Tag} exporting {entry.Name} clip {options.ExportClip} of {streams.Count} to {path}"
+                  + (tag.HasValue ? " with a transcript tag" : " (no transcript for this clip)"));
+        UmaViewerBuilder.Instance.StartCoroutine(RunAudioExport(streams, path, options.ExportClip, tag));
+        return true;
+    }
+
+    private static System.Collections.IEnumerator RunAudioExport(List<UmaWaveStream> streams, string path,
+                                                                 int clip, AudioTranscriptTag? tag)
+    {
+        yield return AudioExporter.ExportAudio(streams, path, clip, tag);
+        _audioExported = true;
+    }
+
+    /// <summary>Reads the tag back out of the written file, so a broken writer is visible here.</summary>
+    private static void ReportTag(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) { Fail($"no mp3 at {path}"); return; }
+        byte[] head = File.ReadAllBytes(path);
+        Debug.Log($"{Tag} wrote {head.Length} bytes to {path}");
+        if (head.Length < 10 || head[0] != (byte)'I' || head[1] != (byte)'D' || head[2] != (byte)'3')
+        {
+            Debug.Log($"{Tag} the file carries no ID3 tag - the clip has no transcript");
+            return;
+        }
+
+        int size = ((head[6] & 0x7F) << 21) | ((head[7] & 0x7F) << 14) | ((head[8] & 0x7F) << 7) | (head[9] & 0x7F);
+        Debug.Log($"{Tag} ID3v2.{head[3]} tag, {size} bytes of frames");
+        int at = 10;
+        while (at + 10 <= 10 + size)
+        {
+            string id = System.Text.Encoding.ASCII.GetString(head, at, 4);
+            if (id.Trim((char)0).Length == 0) break;
+            int frameSize = (head[at + 4] << 24) | (head[at + 5] << 16) | (head[at + 6] << 8) | head[at + 7];
+            if (frameSize <= 0 || at + 10 + frameSize > head.Length) break;
+            byte encoding = head[at + 10];
+            int textAt = at + 10 + 1;
+            if (id == "USLT" || id == "COMM") textAt += 7;   // language (3) + empty utf-16 descriptor (4)
+            int length = at + 10 + frameSize - textAt;
+            string text = encoding == 1
+                ? System.Text.Encoding.Unicode.GetString(head, textAt, Math.Max(0, length)).TrimStart('\uFEFF')
+                : System.Text.Encoding.UTF8.GetString(head, textAt, Math.Max(0, length));
+            Debug.Log($"{Tag}   {id} ({frameSize} bytes): {text.Replace("\r\n", " / ").Replace("\n", " / ").Trim((char)0)}");
+            at += 10 + frameSize;
+        }
+    }
+
+    /// <summary>One log line for a multi-line dialogue line.</summary>
+    private static string OneLine(string text) =>
+        string.IsNullOrEmpty(text) ? "" : text.Replace("\r\n", " / ").Replace("\r", " ").Replace("\n", " / ");
 
     private static void PrintCostumes(CharaEntry chara)
     {

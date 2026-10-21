@@ -8,15 +8,42 @@ argument, and what the errors mean. This file is only the map.
 
 | File | What it does |
 |---|---|
-| `headless_export.ps1` | The CLI. Runs Unity in batch mode, boots the viewer scene, loads a character, costume or prop, and then writes a `.pmx` or an `.fbx`, records one loop of a motion into a `.vmd`, and/or renders the game's own view to a PNG - the same code paths the in-app buttons use. The model's extension picks the writer. |
+| `headless_export.ps1` | The CLI. Runs Unity in batch mode, boots the viewer scene, loads a character, costume or prop, and then writes a `.pmx` or an `.fbx`, records one loop of a motion into a `.vmd`, and/or renders the game's own view to a PNG - the same code paths the in-app buttons use. The model's extension picks the writer. It also prints a sound sheet's transcript (`-Transcript`) and writes a voiced clip to a tagged mp3 (`-ExportAudio`). |
 | `pmx_inspect.py` | Blender-free PMX inspector and differ: `summary`, `bones`, `tails`, `weights`, `morphs`, `names`, `integrity`, `check`, `diff`. |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator: `summary`, `loop`, `motion`. |
+| `mp3_transcript.py` | Reads the transcript an exported mp3 carries in its ID3 tag - title, speaker, story, full text - and exits non-zero when a file has none. Standard library only, so it doubles as the check that an export was tagged. |
 
 Both Python tools are PEP-723 scripts with no dependencies, so `uv run` needs nothing installed:
 
 ```powershell
 uv run Tools/pmx_inspect.py summary D:/out/1001_00.pmx
 uv run Tools/vmd_inspect.py loop     D:/out/1001_00.vmd
+```
+
+`mp3_transcript.py` needs nothing either:
+
+```powershell
+python Tools/mp3_transcript.py D:/out/line.mp3            # what the exported clip says
+python Tools/mp3_transcript.py "D:/rips/*.mp3" --quiet     # "12/12 file(s) carry a transcript"
+```
+
+### Game data probes
+
+These read the installed game's files directly, and they are how [`../docs/TRANSCRIPTS.md`](../docs/TRANSCRIPTS.md)
+was measured. They are research tools, not part of any export; all of them are read-only.
+
+| File | What it does |
+|---|---|
+| `uma_master_probe.py` | Runs one SQL query against `master/master.mdb` (a plain SQLite file) or lists its tables. `python Tools/uma_master_probe.py "select * from character_system_text limit 5"`. |
+| `uma_meta_probe.py` | The same for `meta_plain.sqlite`, the decrypted asset index: where an asset's file is, what it is called, whether it is encrypted. |
+| `uma_transcript_survey.py` | Walks every sound asset, resolves each clip's cue name through the sibling `.acb`, and reports how many clips the master data can put a line of text on. Also holds the acb cue walk (`Acb`) the survey and the story probe share. |
+| `uma_story_dump.py` | Opens one story timeline bundle and prints the lines it carries. Needs `UnityPy` (`pip install UnityPy`); the viewer itself needs nothing extra, it reads these with the game's own classes. |
+| `cri_utf.py` | Minimal CRI `@UTF` table reader, used by the two CRI probes above. |
+
+```powershell
+python Tools/uma_transcript_survey.py           # coverage per sound family
+python Tools/uma_master_probe.py                # list the master data's tables
+python Tools/uma_story_dump.py "story/data/04/1047/storytimeline_041047007"
 ```
 
 ## Quick start

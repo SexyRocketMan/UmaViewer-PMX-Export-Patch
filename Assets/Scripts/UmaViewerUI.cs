@@ -868,17 +868,67 @@ public class UmaViewerUI : MonoBehaviour
         }
 
         var subSounds = UmaViewerBuilder.LoadAudio(awb);
+        var rows = new List<UmaUIContainer>();
 
-        foreach (var sound in subSounds)
+        for (int i = 0; i < subSounds.Count; i++)
         {
+            int index = i;
             var container = Instantiate(UmaContainerPrefab, NormalSubSoundList.content).GetComponent<UmaUIContainer>();
-            container.Name = $"Clip_{subSounds.IndexOf(sound)}";
+            container.Name = $"Clip_{index}";
             container.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(NormalSubSoundList.content, container);
-                Builder.SetLastAudio(awb, subSounds.IndexOf(sound));
-                Builder.PlaySound(awb, subSounds.IndexOf(sound));
+                Builder.SetLastAudio(awb, index);
+                Builder.PlaySound(awb, index);
             });
+            rows.Add(container);
+        }
+
+        // The line each clip voices is looked up after the list is on screen: resolving a story voice sheet
+        // can mean reading every timeline of a character's arc the first time it is asked for.
+        StartCoroutine(LabelClipTranscripts(awb, rows));
+    }
+
+    /// <summary>
+    /// Renames the clip rows after the line they voice. Clips with no text keep their Clip_N label - music
+    /// and sound effects have nothing to say - and the text also goes in as a keyword, so the search box
+    /// finds a row by what is said in it.
+    /// </summary>
+    private IEnumerator LabelClipTranscripts(UmaDatabaseEntry awb, List<UmaUIContainer> rows)
+    {
+        yield return null;
+
+        // Only the voice banks are slow: reading one means walking every episode of a character's arc the
+        // first time, which takes a moment and happens in a single frame, so say so before it starts. A
+        // story's own sheet or a home scene is one bundle and needs no announcement.
+        if (rows.Count > 0 && AudioTranscripts.NeedsFolderScan(awb))
+        {
+            UmaViewerUI.Instance.ShowMessage("Reading the transcript of these clips…", UIMessageType.Default);
+        }
+
+        Dictionary<int, List<TranscriptLine>> transcripts = AudioTranscripts.ForAsset(awb);
+        if (transcripts.Count == 0)
+        {
+            // a voice asset with no line for any clip is the case worth a log line; music and effects are
+            // expected to have none
+            if (AudioTranscripts.IsVoiceAssetName(awb.Name))
+            {
+                Debug.Log($"[Transcript] {awb.Name}: no line found for any of its {rows.Count} clip(s)");
+            }
+            yield break;
+        }
+
+        for (int index = 0; index < rows.Count; index++)
+        {
+            if (!rows[index]) continue;   // the list was rebuilt while the lookup was running
+            if (!transcripts.TryGetValue(index, out var lines)) continue;
+            string summary = AudioTranscripts.Summarize(lines);
+            if (string.IsNullOrEmpty(summary)) continue;
+            // one clip can be used by several lines (the same take covering a scene's variant, or a long
+            // voice running over several text boxes), so say how many more there are
+            if (lines.Count > 1) summary += $"  (+{lines.Count - 1})";
+            rows[index].Name = $"{index}  {summary}";
+            rows[index].Keywords = AudioTranscripts.Format(lines);
         }
     }
 
