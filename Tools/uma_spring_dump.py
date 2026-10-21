@@ -32,7 +32,8 @@ MDB = os.path.join(GAME, "master", "master.mdb")
 FORMAT = "UMA-SPRING"
 VERSION = 1
 
-COLLISION_TYPES = {0: "capsule", 1: "sphere", 2: "plane", 3: "none"}
+# CySpringCollisionData.CollisionType: Sphere, None, Capsule, Plane - in that order, so the numbers are 0..3
+COLLISION_TYPES = {0: "sphere", 1: "none", 2: "capsule", 3: "plane"}
 CAPABILITY_GRAVITY = 1          # CySpring.eCapability.GravityControl
 
 
