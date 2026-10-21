@@ -61,6 +61,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=0.0,
                         help="scene frame rate; 0 takes the spec's, which is the rate the clip was recorded at")
     parser.add_argument("--wind", type=float, default=None, help="wind scale; None uses the spec's own")
+    parser.add_argument("--wind-fast", type=float, default=None,
+                        help="how much of the wind's fast cycle to keep: 1 adds it to the slow one, 0 leaves a "
+                             "lazy sway with no beat")
     parser.add_argument("--motion", choices=("spec", "idle"), default="spec",
                         help="'idle' holds the body still and lets only the tail move, which is the clean "
                              "reference: no body animation to judge the tail against")
@@ -300,7 +303,8 @@ def main() -> int:
     # the frame rate has to be the one the clip was recorded at, or the body animation and the tail drift apart
     fps = args.fps or float(spec.get("fps") or 24)
     reset_scene(fps)
-    frames, _ = port.simulate_spec(spec, trace=True, warmup=24, fps=fps, wind_scale=args.wind)
+    frames, _ = port.simulate_spec(spec, trace=True, warmup=24, fps=fps, wind_scale=args.wind,
+                                   wind_fast=args.wind_fast)
     if frames is None:
         print("the solver produced nothing")
         return 1

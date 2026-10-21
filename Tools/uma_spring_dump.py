@@ -113,11 +113,16 @@ def candidate_assets(chara_id: int, costume: str, head_costume: str = None) -> l
     ]
     exclusive = f"tail{chara_id}_{costume}"
     candidates.append(f"3d/chara/tail/{exclusive}/clothes/pfb_{exclusive}_cloth00")
+    # the tail's own prefab, not just its cloth: the cloth prefab carries the spring parameters and a couple
+    # of colliders, while the bones themselves - all five links of the chain - are transforms in this one.
+    # Without it a chain loses its last two links and the tail's visible tip is left un-simulated.
+    candidates.append(f"3d/chara/tail/{exclusive}/pfb_{exclusive}")
 
     tail_id = _tail_model_id(chara_id)
     if tail_id > 0:
         tail = f"tail{tail_id:04d}_00"
         candidates.append(f"3d/chara/tail/{tail}/clothes/pfb_{tail}_cloth00")
+        candidates.append(f"3d/chara/tail/{tail}/pfb_{tail}")
     return candidates
 
 
@@ -484,28 +489,86 @@ def wag_motion(frames: int, swing: float, swing_axis: str = "y", rise: int = 3, 
     return motion
 
 
+def fit_model_frame(model_bones: dict, merged: dict):
+    """The similarity transform from the model's frame into the prefab's: scale, rotation, translation.
+
+    The model is a PMX, so it is in MMD units and turned 180 degrees about the vertical from the prefab, and
+    its origin sits somewhere else again. Fitting it on the bones both sides have gives the transform exactly
+    (residuals are around 2e-5 game units), which is what lets a bone the prefab forgot be placed.
+    """
+    import numpy as np
+
+    pairs = [(np.array(model_bones[name].pos), np.array(position))
+             for name, position in merged.items() if name in model_bones]
+    if len(pairs) < 3:
+        return None
+    source = np.array([pair[0] for pair in pairs])
+    target = np.array([pair[1] for pair in pairs])
+    source_mean, target_mean = source.mean(0), target.mean(0)
+    covariance = (source - source_mean).T @ (target - target_mean)
+    left, singular, right = np.linalg.svd(covariance)
+    flip = np.sign(np.linalg.det(right.T @ left.T))
+    rotation = right.T @ np.diag([1.0, 1.0, flip]) @ left.T
+    scale = float((singular * np.array([1.0, 1.0, flip])).sum() / ((source - source_mean) ** 2).sum())
+    offset = target_mean - scale * (rotation @ source_mean)
+    residual = max(float(np.linalg.norm(scale * (rotation @ source_point) + offset - target_point))
+                   for source_point, target_point in pairs)
+    return scale, rotation, offset, residual
+
+
 def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
-               swing_axis: str = "y") -> dict:
+               swing_axis: str = "y", pmx: str = "", links: int = 0) -> dict:
     container, chain, merged, parent_of, referenced, reference, absent = chain_geometry(UnityPy, con, dump, root)
 
+    # Bones the prefabs do not carry are taken from the model itself when one is given: the game's tail
+    # prefab has B_00, B_01, B_02 and B_04 and no B_03, while the model has all five, and the mesh bends at
+    # B_03 whether or not the spring data for it is reachable.
+    if links > 0:
+        chain = dict(chain, bones=chain["bones"][:links])
+    positions = dict(merged)
+    if pmx and absent:
+        import pmx_inspect
+        model = pmx_inspect.read_model(pmx)
+        by_name = {bone.name: bone for bone in model.bones}
+        # fit on this chain's own bones only: `merged` carries every transform of every prefab loaded, and a
+        # fit over all of them lands somewhere that is not this chain's frame at all
+        chain_names = [entry["name"] for entry in chain["bones"]]
+        fitted = fit_model_frame(by_name, {name: merged[name] for name in chain_names if name in merged})
+        if fitted is None:
+            print(f"note: the model has none of this chain's bones; {pmx} cannot fill the gaps", file=sys.stderr)
+        else:
+            scale, rotation, offset, residual = fitted
+            import numpy as np
+            for name in absent:
+                if name in by_name:
+                    position = scale * (rotation @ np.array(by_name[name].pos)) + offset
+                    positions[name] = [float(value) for value in position]
+                    print(f"note: {name} is not in the prefabs; placed from the model "
+                          f"(frame fit residual {residual:.5f})", file=sys.stderr)
+
     bones = []
-    dropped = list(absent)
+    dropped = []
     for index, entry in enumerate(chain["bones"]):
-        if entry["name"] in absent:
-            continue
-        position = merged[entry["name"]]
-        parent_name = chain["bones"][index - 1]["name"] if index > 0 else None
-        if parent_name in absent:
-            skip = True
+        position = positions.get(entry["name"], merged.get(entry["name"]))
+        if position is None:
             dropped.append(entry["name"])
             continue
+        # do not drop everything below a bone that is missing: the game's tail prefab carries B_00, B_01,
+        # B_02 and B_04 but no B_03, and dropping the rest of the chain with it left the visible half of the
+        # tail un-simulated. The next bone *present* is the one this link is measured to.
+        previous_name = None
+        for earlier in range(index - 1, -1, -1):
+            name = chain["bones"][earlier]["name"]
+            if name in positions or name in merged:
+                previous_name = name
+                break
         if index == 0:
             # the chain hangs from whatever its first bone's parent is in the prefab hierarchy - `Tail_Ctrl`,
             # usually, which sits on top of the root bone. A zero-length segment is what the game drops
             # (`Exist = false`), so that case stays a drop rather than being papered over.
             parent_position = merged.get(parent_of.get(entry["name"]), merged.get(reference, position))
         else:
-            parent_position = merged[parent_name]
+            parent_position = positions.get(previous_name) or merged[previous_name]
 
         # What this bone's `distance` and `axis` describe. `CySpringBoneBase.Initialize` measures the link
         # between a bone and its *child* (`_parentBone.InitBoneDistance = Distance(child, parent)`, axis from
@@ -514,10 +577,15 @@ def chain_spec(UnityPy, con, dump: dict, root: str, frames: int, swing: float,
         #     down the chain;
         #   - a leaf: the same link, measured from the bone above it - pointing down the chain as well.
         # Both point down the chain, and reading the first case upwards is what folded the baked tail in half.
-        next_name = chain["bones"][index + 1]["name"] if index + 1 < len(chain["bones"]) else None
-        if next_name is not None and next_name in merged:
-            neighbour = merged[next_name]
-            offset = (neighbour[0] - position[0], neighbour[1] - position[1], neighbour[2] - position[2])
+        neighbour = None
+        for later in range(index + 1, len(chain["bones"])):
+            name = chain["bones"][later]["name"]
+            if name in positions or name in merged:
+                neighbour = name
+                break
+        if neighbour is not None:
+            other = positions.get(neighbour) or merged[neighbour]
+            offset = (other[0] - position[0], other[1] - position[1], other[2] - position[2])
         else:
             # a leaf has no child to measure against: the game copies its parent's link, which runs from
             # the parent's head down to this bone's head
@@ -599,12 +667,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--swing", type=float, default=0.0, help="swing the chain's parent by this many degrees")
     parser.add_argument("--axis", choices=("x", "y", "z"), default="y",
                         help="axis the scripted parent swing turns about: y wags a hanging tail sideways")
+    parser.add_argument("--pmx", default="", help="a model to take chain bones from when the prefabs lack them")
+    parser.add_argument("--links", type=int, default=0,
+                        help="keep only the first N links; the chain's last bone inherits its length from the "
+                             "one above it, which our port handles badly, so a short chain is often better")
     args = parser.parse_args(argv)
 
     if args.chain:
         UnityPy = _unitypy()
         data = dump(args.chara, args.costume, args.head)
-        spec = chain_spec(UnityPy, _asset_index(), data, args.chain, args.frames, args.swing, args.axis)
+        spec = chain_spec(UnityPy, _asset_index(), data, args.chain, args.frames, args.swing, args.axis,
+                          args.pmx, args.links)
         text = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as handle:

@@ -453,7 +453,7 @@ def add_bob(motion: list[dict], vertical: float = 0.0, sideways: float = 0.0,
 
 
 def wind_force(spec: dict, bone: dict, frame: int, fps: float = 30.0,
-               scale: float = 0.35) -> tuple[float, float, float]:
+               scale: float = 0.35, fast: float = 1.0) -> tuple[float, float, float]:
     """The wind a bone feels at a frame, from the container's authored wind parameters.
 
     The game computes this in code that is not in the decompiled subset, so this is the one piece that is a
@@ -474,14 +474,14 @@ def wind_force(spec: dict, bone: dict, frame: int, fps: float = 30.0,
     if wind.get("verticalCycleSlow"):
         vertical += rates.get("verticalSlow", 0.0) * math.sin(
             2.0 * math.pi * wind["verticalCycleSlow"] * seconds) * wind.get("verticalAngleWidthSlow", 0.0)
-    if wind.get("verticalCycleFast"):
-        vertical += rates.get("verticalFast", 0.0) * math.sin(
+    if wind.get("verticalCycleFast") and fast:
+        vertical += fast * rates.get("verticalFast", 0.0) * math.sin(
             2.0 * math.pi * wind["verticalCycleFast"] * seconds + 1.7) * wind.get("verticalAngleWidthFast", 0.0)
     if wind.get("horizontalCycleSlow"):
         horizontal += rates.get("horizontalSlow", 0.0) * math.sin(
             2.0 * math.pi * wind["horizontalCycleSlow"] * seconds + 0.6) * wind.get("horizontalAngleWidthSlow", 0.0)
-    if wind.get("horizontalCycleFast"):
-        horizontal += rates.get("horizontalFast", 0.0) * math.sin(
+    if wind.get("horizontalCycleFast") and fast:
+        horizontal += fast * rates.get("horizontalFast", 0.0) * math.sin(
             2.0 * math.pi * wind["horizontalCycleFast"] * seconds + 2.3) * wind.get("horizontalAngleWidthFast", 0.0)
 
     power = f32(scale * bone["stiffness"])
@@ -525,7 +525,7 @@ def _motion_at(spec: dict, frame: int):
 
 
 def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0, fps: float = 30.0,
-                  wind_scale: float = None):
+                  wind_scale: float = None, wind_fast: float = None):
     """Run a real chain: the parent's animated rotation carries the whole chain, the solver lags behind it."""
     bones, collisions, params, spec = build_from_spec(spec)
     # The chain turns about its own attachment: the root bone's head. `pivot` in the spec is whatever point
@@ -534,6 +534,7 @@ def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0, fps: float =
     root_head = tuple(spec["bones"][0]["position"])
     pivot = tuple(spec.get("pivot") or root_head)
     wind_scale = spec.get("windScale", 0.35) if wind_scale is None else wind_scale
+    wind_fast = spec.get("windFast", 1.0) if wind_fast is None else wind_fast
     wind_on = bool(spec.get("wind")) and wind_scale > 0.0
     rest_parent_positions = [tuple(p["position"]) for p in spec["parents"]]
 
@@ -558,7 +559,7 @@ def simulate_spec(spec: dict, trace: bool = False, warmup: int = 0, fps: float =
         bones[0].old_rotation = q_mul(bones[0].init_local_rotation, rotation)
         if wind_on:
             for entry, bone in zip(spec["bones"], bones):
-                bone.wind_power = wind_force(spec, entry, frame, fps, wind_scale)
+                bone.wind_power = wind_force(spec, entry, frame, fps, wind_scale, wind_fast)
                 bone.wind = 1 if any((entry.get("wind") or {}).values()) else 0
 
         update(bones, collisions, params, parent_positions, parent_rotations)
