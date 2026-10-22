@@ -911,9 +911,12 @@ public class ModelExporter
         {
             if (morph == null) continue;
 
-            // the object the material lives on (the cheek decal) and the objects a bind shows and hides
-            var parts = new List<(string name, GameObject obj)>();
-            if (morph.BindGameObject != null) parts.Add((DeployName(morph.BindGameObject.name), morph.BindGameObject));
+            // the object the material lives on (the cheek decal) and the objects a bind shows and hides. By
+            // *instance*, not by name: the four eye-manga prefabs are the same four names once for each eye,
+            // so keying on the name folded the right eye into the left one and five parts came out where
+            // eight belong.
+            var parts = new List<GameObject>();
+            if (morph.BindGameObject != null) parts.Add(morph.BindGameObject);
             if (morph.BindProperties != null)
             {
                 foreach (BindProperty property in morph.BindProperties)
@@ -921,17 +924,16 @@ public class ModelExporter
                     if (property == null || property.BindPrefabs == null) continue;
                     foreach (GameObject prefab in property.BindPrefabs)
                     {
-                        if (prefab == null) continue;
-                        string name = DeployName(prefab.name);
-                        if (!parts.Exists(part => part.name == name)) parts.Add((name, prefab));
+                        if (prefab == null || parts.Contains(prefab)) continue;
+                        parts.Add(prefab);
                     }
                 }
             }
 
-            foreach (var part in parts)
+            foreach (GameObject part in parts)
             {
                 var data = new List<Morph.MorphData>();
-                foreach (Renderer renderer in part.obj.GetComponentsInChildren<Renderer>(true))
+                foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
                 {
                     if (renderer == null || !restInvisible.Contains(renderer)) continue;
                     if (!rangeOf.TryGetValue(renderer, out var range)) continue;
@@ -946,10 +948,24 @@ public class ModelExporter
                     }
                 }
                 if (data.Count == 0) continue;
+                // where the part actually sits, from the vertices a deploy morph puts back - a mirrored
+                // right-eye instance keeps the left one's position (the mirror is a negative scale), so the
+                // renderer's own bounds cannot say which eye it is, while its deployed vertices can
+                var sum = Vector3.zero;
+                int placed = 0;
+                foreach (var item in data)
+                {
+                    var vertex = (Morph.VertexMorphData)item;
+                    if (!deployed.TryGetValue(vertex.VertexIndex, out Vector3 where)) continue;
+                    sum += where;
+                    placed++;
+                }
+                Vector3 centre = placed > 0 ? sum / placed : part.transform.position;
+                string name = DeployName(character, part, centre);
                 morphs.Add(new Morph
                 {
-                    Name = part.name,
-                    NameEn = part.name,
+                    Name = name,
+                    NameEn = name,
                     Category = Morph.MorphCategory.MorphCatOther,
                     Type = Morph.MorphType.MorphTypeVertex,
                     MorphDatas = data.ToArray()
@@ -959,20 +975,66 @@ public class ModelExporter
         return morphs;
     }
 
-    /// <summary>The morph name a decal part is shown under: `Manga_000`, `Tear_L`, `Cheek_Show`.</summary>
-    private static string DeployName(string objectName)
+    /// <summary>
+    /// The expressions the four eye manga draw, in the order the game selects them. The names are the faces
+    /// themselves - a `@_@` eye, a sparkle, a squint, a wide-open one - so a morph list reads like the emoticon
+    /// it produces instead of like an index.
+    /// </summary>
+    private static readonly string[] MangaFaces = { "@_@", "✦_✦", ">_<", "o_o" };
+
+    /// <summary>The morph name a decal part is shown under: `@_@_L`, `Tear_L`, `Cheek_Show`.</summary>
+    private static string DeployName(UmaContainerCharacter character, GameObject part, Vector3 centre)
     {
-        string name = objectName.Replace(" (Clone)", "").Replace("(Clone)", "");
+        string name = (part != null ? part.name : string.Empty)
+            .Replace(" (Clone)", "").Replace("(Clone)", "");
         int eye = name.IndexOf("emo_eye_", System.StringComparison.OrdinalIgnoreCase);
         if (eye >= 0)
         {
             string suffix = name.Substring(eye + "emo_eye_".Length);
-            return suffix.Length >= 3 ? "Manga_" + suffix.Substring(suffix.Length - 3) : "Manga";
+            string face = "Manga";
+            if (suffix.Length >= 3 && int.TryParse(suffix.Substring(suffix.Length - 3), out int index)
+                && index >= 0 && index < MangaFaces.Length)
+            {
+                face = MangaFaces[index];
+            }
+            return face + "_" + SideOf(character, centre);
         }
         if (name.IndexOf("tear", System.StringComparison.OrdinalIgnoreCase) >= 0)
             return name.EndsWith("_L", System.StringComparison.OrdinalIgnoreCase) ? "Tear_L" : "Tear_R";
         if (name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0) return "Cheek_Show";
         return name;
+    }
+
+    /// <summary>
+    /// Which eye a manga part belongs to: `L` or `R`.
+    ///
+    /// The four manga prefabs are the same four names twice, once for each eye - nothing in the name says which,
+    /// so the side has to be read from where the part sits. In the game's rig `Eye_L` and `Eye_R` are the
+    /// anchors: the midpoint between them splits the head, and a part on the eye-bone side of it is that eye.
+    /// Mirrored instances sit at a negative scale, which the center position ignores, so a part is placed
+    /// before this is asked.
+    /// </summary>
+    private static string SideOf(UmaContainerCharacter character, Vector3 centre)
+    {
+        if (character != null)
+        {
+            Transform eyeL = null, eyeR = null;
+            foreach (Transform bone in character.GetComponentsInChildren<Transform>(true))
+            {
+                if (bone == null) continue;
+                if (bone.name == "Eye_L") eyeL = bone;
+                else if (bone.name == "Eye_R") eyeR = bone;
+            }
+            if (eyeL != null && eyeR != null)
+            {
+                // which side of the head x *is* left is a property of the rig, not of the exporter: compare the
+                // part against the bones rather than against an assumed sign
+                bool leftIsPositive = eyeL.position.x > eyeR.position.x;
+                bool positive = centre.x > (eyeL.position.x + eyeR.position.x) * 0.5f;
+                return positive == leftIsPositive ? "L" : "R";
+            }
+        }
+        return centre.x >= 0f ? "L" : "R";
     }
 
     /// <summary>

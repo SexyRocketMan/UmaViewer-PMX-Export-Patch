@@ -12,30 +12,45 @@ public class TextureExporter
     ///
     /// The game's cheek map is white where the face shows through and only drops the green and blue channels
     /// where the blush is - it is *multiplied* into the face. An MMD material can only alpha blend, so drawn
-    /// as it is the decal paints a white shell over the cheeks. Alpha blending `s(1-a) + c*a` reproduces the
-    /// multiply `s*t` when `a = 1 - min(g, b)` and `c = (t - 1 + a) / a`: the map's channel drop becomes the
-    /// alpha, and the colour comes out as the saturated pink that drop implies, fully transparent wherever the
-    /// map is white. The whole blush is subtle by nature - the reference cheek map drops fewer than 6% on its
-    /// strongest texel - so the result reads as a soft tint, which is what the multiply does.
+    /// as it is the decal paints a white shell over the cheeks.
+    ///
+    /// The map's channel drop is the blush's *shape*, and it is a very small number: the strongest texel of the
+    /// reference cheek map drops under 6%, which as an alpha is invisible. Solving `s(1-a) + c*a = s*t` per texel
+    /// reproduces the game exactly but gives every texel that has any drop at all its own fully saturated colour
+    /// (`c = (t - 1 + a) / a` divides by that small alpha), and the result is a garish red where the blush is
+    /// faint. So the solve is used only for the colour's *hue*, and the texture is rebuilt as one soft rose at a
+    /// strength a viewer actually sees: the drop normalised to the map's own maximum, raised to a curve so the
+    /// middle of the blush does not collapse, and an alpha ceiling the blush never exceeds.
+    ///
+    /// All three numbers are conversion choices, not game data, so they are named here.
     /// </summary>
+    //: the blush colour the overlay fades to - a muted rose, dark enough to read as blush over skin
+    static readonly Color BlushTint = new Color(0.86f, 0.44f, 0.46f, 1f);
+    //: the strongest alpha the blush reaches, at the map's own strongest texel
+    const float BlushMaxAlpha = 0.55f;
+    //: how the drop maps onto alpha; below 1 the faint outer edge of the blush reaches further
+    const float BlushCurve = 0.7f;
+
     static public Texture2D BakeBlush(Texture2D source)
     {
         if (source == null) return null;
         Texture2D readable = duplicateTexture(source);
         Color[] pixels = readable.GetPixels();
+
+        float strongest = 0f;
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            strongest = Mathf.Max(strongest, 1f - Mathf.Min(pixels[i].g, pixels[i].b));
+        }
+        // a map with no drop at all is not a blush; leave it alone rather than write a fully transparent copy
+        if (strongest <= 0.004f) return null;
+
         for (int i = 0; i < pixels.Length; i++)
         {
             Color p = pixels[i];
-            float drop = 1f - Mathf.Min(p.g, p.b);
-            if (drop <= 0.002f)
-            {
-                pixels[i] = new Color(p.r, p.g, p.b, 0f);
-                continue;
-            }
-            float r = (p.r - 1f + drop) / drop;
-            float g = (p.g - 1f + drop) / drop;
-            float b = (p.b - 1f + drop) / drop;
-            pixels[i] = new Color(Mathf.Clamp01(r), Mathf.Clamp01(g), Mathf.Clamp01(b), Mathf.Clamp01(drop));
+            float strength = (1f - Mathf.Min(p.g, p.b)) / strongest;
+            float alpha = Mathf.Pow(Mathf.Clamp01(strength), BlushCurve) * BlushMaxAlpha;
+            pixels[i] = new Color(BlushTint.r, BlushTint.g, BlushTint.b, alpha);
         }
         Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
         baked.name = BlushName(source.name);
@@ -152,7 +167,9 @@ public class TextureExporter
                                     string blushPath = savePath + blush.name + ".png";
                                     string blushDep = "Texture2D/" + blush.name + ".png";
                                     if (!textureNames.Contains(blushDep)) textureNames.Add(blushDep);
-                                    if (!File.Exists(blushPath)) File.WriteAllBytes(blushPath, blush.EncodeToPNG());
+                                    // always rewritten: it is derived, and a batch of blushes written by an older bake would
+                                    // otherwise stay on disk and be what the export ships
+                                    File.WriteAllBytes(blushPath, blush.EncodeToPNG());
                                 }
                             }
                         }
@@ -197,7 +214,8 @@ public class TextureExporter
                         string blushPath = savePath + blush.name + ".png";
                         string blushDep = "Texture2D/" + blush.name + ".png";
                         if (!textureNames.Contains(blushDep)) textureNames.Add(blushDep);
-                        if (!File.Exists(blushPath)) File.WriteAllBytes(blushPath, blush.EncodeToPNG());
+                        // always rewritten: it is derived (see above)
+                        File.WriteAllBytes(blushPath, blush.EncodeToPNG());
                     }
                 }
             }

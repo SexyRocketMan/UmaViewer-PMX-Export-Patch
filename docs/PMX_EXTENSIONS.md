@@ -95,7 +95,7 @@ exactly what a vertex morph can do.
 | morph | part it deploys | vertices |
 |---|---|---|
 | `Cheek_Show` | the cheek blush decal (`mtl_chr1001_00_cheek`) | 54 |
-| `Manga_000` … `Manga_003` | the four eye manga (`mtl_eff_chr_emo_eye_000` … `_003`) | 4 each |
+| `@_@_L`, `@_@_R`, `✦_✦_L`, `✦_✦_R`, `>_<_L`, `>_<_R`, `o_o_L`, `o_o_R` | the four eye manga (`mtl_eff_chr_emo_eye_000` … `_003`), one morph per eye and expression | 4 each |
 | `Tear_L`, `Tear_R` | the static tears (`mtl_chr1001_00_tear`) | 15 each |
 
 A pmx is read with every morph at 0, so the state the model must *rest* in is the collapsed one: every vertex
@@ -136,7 +136,7 @@ MMD material values, vertex morphs, bones and textures.
 
 * The model loads, poses and renders normally.
 * Every vertex morph the PMX can hold is there - eyes, brows, mouth, ears - and the five deploy morphs as
-  well: `Cheek_Show`, `Manga_000` … `Manga_003`, `Tear_L`, `Tear_R`.
+  well: `Cheek_Show`, the eight eye manga (`@_@_L` … `o_o_R`), `Tear_L`, `Tear_R`.
 * The cheek blush is a pale wash rather than the game's multiply (see `blend=multiply` above), which is the
   one part plain MMD cannot draw as the game does.
 * The comments above are visible in the material panel and the model properties, which is the point of them.
