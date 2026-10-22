@@ -61,6 +61,13 @@ morph=<morph>:<bind type>:<part>:<property>[,<part>:<property>...][;<morph>:...]
 Only `Texture` and `Shader` binds appear here, because they are the two that end up on a material. Everything
 that shows or hides an object is in the model comment instead, since no material comment can hold it.
 
+One more token can appear on a material: `blend=multiply`, on a part the game draws by *multiplying* rather
+than by blending. The cheek decal is the one that has it - its texture is white where the face shows through
+and tinted where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD
+material has no multiply blend, so the decal is written at **zero diffuse alpha** (invisible at rest, which is
+the state the game keeps it in until a driven key raises `_CheekRate`) and the token says why. A consumer that
+can multiply - the uma addon - should; everything else leaves it invisible, which is the correct rest state.
+
 Worked example, the head of a normal character:
 
 ```
@@ -118,6 +125,11 @@ them; their animation is whatever the `*_driven` clips write, exactly as the gam
 
 An export with the flag off has none of them: 437 bones instead of 444 on 1001, no `morph=` token, and no
 `extra morphs:` / `object morphs:` line.
+
+They have no rest position of their own: the face clips write their transforms, and until one plays they sit at
+the `DrivenKeyLocator` object's origin - the character's feet. They are therefore placed in front of the head
+and 2 cm apart, one above the next, purely so a rigger can find and pick them. Where a locator's rest position
+is does not affect a driver: it reads the pose's local channels, which are offsets from rest.
 
 ## Status of the driver side
 

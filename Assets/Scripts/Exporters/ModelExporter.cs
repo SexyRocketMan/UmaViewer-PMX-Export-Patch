@@ -38,6 +38,15 @@ public class ModelExporter
         var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject,
                                                        MorphPartRenderers(container));
         RawMMDModel model;
+        // The face locators that drive the extra morphs are animated, not posed: their transforms sit at the
+        // locator object's origin until a face clip writes them, which is why an export put them all at the
+        // character's feet. `ResetLocator` is the game's own way back to the baseline - rebind the face animator,
+        // process the locators, re-apply the morphs - and it is the same moment `FacialResetAll` above happens.
+        if (Config.Instance == null || Config.Instance.PmxExtraMorphs)
+        {
+            container.FaceDrivenKeyTarget?.ResetLocator();
+        }
+
         // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
         // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
         using (UmaAPose.Enter(container))
@@ -223,6 +232,31 @@ public class ModelExporter
                 if (model.Bones[i].ParentIndex >= 0) continue;
                 if (locators.Exists(locator => locator != null && locator.name == model.Bones[i].Name))
                     model.Bones[i].ParentIndex = 0;
+            }
+
+            // The locators are animated, not posed: until a face clip writes them their transforms sit at the
+            // locator object's origin, so they were exported in a heap at the character's feet. Where the rest of
+            // a bone is does not matter to a driver - it reads the pose's local channels, which are offsets from
+            // rest - so they are moved where a rigger looks for them: in front of and above the head, one above
+            // the next so each can be picked in the viewport.
+            Transform head = null;
+            foreach (Transform bone in bones)
+            {
+                if (bone != null && bone.name == "Head") { head = bone; break; }
+            }
+            if (head != null)
+            {
+                Vector3 origin = head.position + head.forward * 0.04f;
+                for (int i = 0; i < locators.Count; i++)
+                {
+                    string name = locators[i] != null ? locators[i].name : string.Empty;
+                    for (int b = 0; b < model.Bones.Length; b++)
+                    {
+                        if (model.Bones[b].Name != name) continue;
+                        model.Bones[b].Position = origin + Vector3.up * (0.02f * i);
+                        break;
+                    }
+                }
             }
         }
         model.Morphs = ReadMorph(renderers);
@@ -846,6 +880,23 @@ public class ModelExporter
     }
 
     /// <summary>
+    /// How the part is meant to be drawn, when MMD's plain alpha blend is not it.
+    ///
+    /// The cheek decal is a *multiply* overlay: its texture is white where the face shows through and tinted
+    /// where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD material
+    /// has no multiply blend, so exported as it is the decal paints a white shell over the cheeks. It is written
+    /// at zero alpha (invisible at rest, which is the state the game has it in) and this token says why, and
+    /// what a consumer that understands it - the uma addon - should do instead.
+    /// </summary>
+    private static string ExtraMorphBlend(Material material)
+    {
+        if (material == null || material.shader == null) return string.Empty;
+        string shader = material.shader.name ?? string.Empty;
+        if (shader.IndexOf("Multiply", System.StringComparison.OrdinalIgnoreCase) >= 0) return " blend=multiply";
+        return string.Empty;
+    }
+
+    /// <summary>
     /// The model-level note: what the extra morphs are, where the material-bound ones went, and the object-bound
     /// ones (visibility, eye-manga selection, tears) that no material comment could hold.
     ///
@@ -1063,7 +1114,8 @@ public class ModelExporter
                 if (Config.Instance == null || Config.Instance.PmxUmaMaterialFields)
                 {
                     mat.MetaInfo = UmaMaterialComment(material, model)
-                                 + ExtraMorphComment(character, material);
+                                 + ExtraMorphComment(character, material)
+                                 + ExtraMorphBlend(material);
 
                     // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
                     //
