@@ -12,7 +12,7 @@ inventory of those, read from the code (`Assets/Scripts/umamusume/Gallop/FacialM
 | `Shade_Ctrl` | locator scale X | `Shader` bind `_faceShadowAlpha` on the face material | nothing yet - an MMD material has no such field; the addon would have to drive the uma shader's face region |
 | `Manga_Ctrl` | locator scale Y (select), scale X (enable) | `EyeSelect` + `Enable` over four manga prefabs, once per eye | **eight deploy morphs**, one per eye and expression (below) |
 | `StaticTear_Ctrl` | locator position X (L), Y (R) | `Enable` on `tearmesh_l` / `tearmesh_r`, drawn with `tex_chr_tear00` | **deploy morphs `Tear_L`, `Tear_R`** |
-| `Tear0_Ctrl` … `Tear3_Ctrl` | scale X (`TearWeight`), position Y (`TearSide`), scale Y (`TearSelect`), scale Z (`TearSpeed`) | the animated tears - see below | not exported; the tokens are in the model comment, the parts are not in the file |
+| `Tear0_Ctrl` … `Tear3_Ctrl` | scale X (`TearWeight`), position Y (`TearSide`), scale Y (`TearSelect`), scale Z (`TearSpeed`) | the animated tears - see below | **deploy morphs `TearDrop1_L` … `TearDrop4b_L`** plus the sprite-sheet `_scrN` UV morphs of each (left side: the viewer never places the right one); the control tokens stay in the model comment |
 
 ## The eye manga
 
@@ -29,7 +29,7 @@ faces, in the order the game selects them:
 Each is a quad over one eye, collapsed at rest and deployed by its morph, so `@_@_L` at weight 1 puts the `@_@`
 eye on the left eye and nothing else moves.
 
-## The animated tears (not exported)
+## The animated tears
 
 `TearController.cs` keeps two tear prefabs per controller - `pfb_chr_tear000`, `pfb_chr_tear001` - each a
 skinned mesh with an `Animator` whose clip is the asset's `default_animation` (the `anm_tear000_00` state is
@@ -45,10 +45,14 @@ the handle that gets overridden). What makes them no ordinary decal:
   `Eye_tear_attach_02_L/R` and sets `localScale = (-1, 1, 1)` for the right eye
 * **the four controls** pick which of the two objects, the side, the weight and the animation speed
 
-MMD can hold the mesh and the attach bones but not the scroll or the stencil. A faithful port would animate the
-scroll as a stack of **UV morphs** - one per sprite-sheet step, each shifting every UV by the same delta, with
-the weight animated over time - which is a real experiment and not a guess; the stencil would have to become
-geometry (the tear drawn slightly in front of the eye, which is what the static tears are already).
+MMD can hold the mesh but not the scroll or the stencil, so the export turns the scroll into a stack of **UV
+morphs**: one per sprite-sheet frame, each shifting every UV by that frame's step, capped at 8 steps so a large
+sheet does not fill the morph list (a 66-vertex tear gets `TearDrop1_L` and `TearDrop1_L_scr0` … `_scr6`). Frame
+0 is the rest state, so a running tear is the deploy morph at 1 with the scroll morphs cycled through - the rate
+is how fast the weights fade. The stencil has no counterpart and is not needed: the tear is its own decal
+geometry, drawn in front of the eye by the same deploy lift every decal gets. Only the **left** side is in the
+export - the viewer places the tears on the left and mirrors the right one with a negative scale at runtime, so
+there is no right-side instance to read.
 
 The sprite sheets themselves are inside the tear prefabs' asset tables, not in `Persistent/textures`, which is
 why the viewer has never listed them.
@@ -66,7 +70,9 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
 
 ## What the export carries today
 
-* `Blush`, `Tear_L`, `Tear_R` - one deploy morph per decal part.
+* `Blush`, `Tear_L`, `Tear_R` - one deploy morph per static decal part.
+* `TearDrop1_L` … `TearDrop4b_L` - one deploy morph per animated tear object, each with its `_scr0` … `_scr6`
+  sprite-sheet scroll steps.
 * `@_@_L_spin1` … `@_@_R_spin7` - the dizzy face's turn, seven UV morphs per eye at 45° steps (203 vertex
   morphs and 14 UV morphs on character 1001). You spin it by cross-fading neighbours: `spin1` → `spin2` → … →
   `spin7` → back to none, which is the 8th step and lands on the rest orientation.
