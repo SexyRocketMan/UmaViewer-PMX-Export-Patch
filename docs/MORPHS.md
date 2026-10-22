@@ -28,6 +28,12 @@ driven-key clips animate them (`anm_*_face_driven`, `anm_*_ear_driven`, `anm_chr
 `3d/motion/.../facial/`). So a recorded motion already carries the *input* to these morphs; what an export
 does not carry is the *response*.
 
+What the export does carry now is in `PMX_EXTENSIONS.md`: the parts these morphs show and hide (the cheek
+blush, the four eye manga, the two static tears) are collapsed onto a point inside the head at rest and one
+vertex morph per part deploys it - `Cheek_Show`, `Manga_000`..`Manga_003`, `Tear_L`, `Tear_R` - so a plain MMD
+viewer can show them without any addon. What a vertex morph still cannot hold is the cheek's *texture pair and
+rate* and the face shadow's `_faceShadowAlpha`, which stay as `morph=` tokens in the material comments.
+
 ## The bind types and exactly what they do
 
 `FacialMorph.cs:65` lists nine; `FaceDrivenKeyTarget.ProcessExtraMorph` (`FaceDrivenKeyTarget.cs:504`)

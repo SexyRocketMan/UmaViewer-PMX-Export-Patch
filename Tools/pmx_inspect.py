@@ -157,6 +157,8 @@ class Model:
     bones: list[Bone] = field(default_factory=list)
     morph_names: list[str] = field(default_factory=list)
     morph_cats: list[int] = field(default_factory=list)
+    #: the morph bodies: `name`, `cat` (panel), `type` and `items` - vertex morphs hold (index, (x, y, z))
+    morph_data: list[dict] = field(default_factory=list)
     end_offset: int = 0
     file_size: int = 0
 
@@ -263,37 +265,41 @@ def read_model(path: str) -> Model:
         model.bones.append(b)
 
     for _ in range(r.i32()):
-        model.morph_names.append(text())
+        morph_name = text()
+        model.morph_names.append(morph_name)
         text()
-        model.morph_cats.append(r.u8())
+        morph_cat = r.u8()
+        model.morph_cats.append(morph_cat)
         mtype = r.u8()
         off = r.i32()
+        items = []
         if mtype == 0:
             for _ in range(off):
-                r.index(sizes["morph"]); r.f32()
+                items.append((r.index(sizes["morph"]), r.f32()))
         elif mtype == 1:
             for _ in range(off):
-                r.index(sizes["vertex"]); r.vec(3)
+                items.append((r.index(sizes["vertex"]), tuple(r.vec(3))))
         elif mtype == 2:
             for _ in range(off):
-                r.index(sizes["bone"]); r.vec(3); r.vec(4)
+                items.append((r.index(sizes["bone"]), tuple(r.vec(3)), tuple(r.vec(4))))
         elif mtype == 3:
             for _ in range(off):
-                r.index(sizes["vertex"]); r.vec(4)
+                items.append((r.index(sizes["vertex"]), tuple(r.vec(4))))
         elif mtype in (4, 5, 6, 7):
             for _ in range(off):
-                r.index(sizes["material"]); r.u8(); r.vec(4)
+                items.append((r.index(sizes["material"]), r.u8(), tuple(r.vec(4))))
         elif mtype == 8:
             for _ in range(off):
-                r.index(sizes["bone"]); r.i32(); r.f32()
+                items.append((r.index(sizes["bone"]), r.i32(), r.f32()))
         elif mtype == 9:
             for _ in range(off):
-                r.index(sizes["material"]); r.u8(); r.vec(4)
+                items.append((r.index(sizes["material"]), r.u8(), tuple(r.vec(4))))
         elif mtype == 10:
             for _ in range(off):
-                r.index(sizes["morph"]); r.f32()
+                items.append((r.index(sizes["morph"]), r.f32()))
         else:
             raise ValueError(f"unknown morph type {mtype}")
+        model.morph_data.append({"name": morph_name, "cat": morph_cat, "type": mtype, "items": items})
 
     # Display frames, then rigid bodies and joints. The exporter always writes at least one frame (a
     # "Root" frame holding morph index 0), so a reader that stops after the morphs leaves those bytes
