@@ -264,14 +264,12 @@ public class ModelExporter
         }
 
         model.Parts = ReadPartMaterials(renderers, model, character, restInvisible);
-        var highlightMorphs = AddHighlightGeometry(model);
         model.Bones = ReadBones(bones);
 
         model.Morphs = ReadMorph(renderers);
         if (deployed.Count > 0)
         {
             var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
-            deploy.AddRange(highlightMorphs);
             var spin = SpinMorphs(character, model, vertexRanges, restInvisible, deployed);
             var tears = TearMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
             deploy.AddRange(tears);
@@ -1060,159 +1058,6 @@ public class ModelExporter
 
     /// <summary>How many UV steps one full spin is divided into. Seven morphs plus the rest state make eight,
     /// so each step is 45 degrees and a cross-fade between two neighbours lands any rotation in between.</summary>
-    /// <summary>How far the highlight layer sits in front of the eye, in file units. Small: it is a copy of the
-    /// eye surface, not a part of its own.</summary>
-    private const float HighlightLift = 0.002f;
-
-    /// <summary>
-    /// The teary-eye highlights, as geometry: a copy of the eye faces per `eyehi` map, drawn over the eye.
-    ///
-    /// An MMD material holds one texture, so the game's three highlight maps cannot ride on the eye material -
-    /// the game composites them in its eye shader at `uv * (4, 2)`. The copy carries that scale in its *vertex
-    /// UVs* instead, so the highlight material samples its own map one to one, and the layer needs nothing an
-    /// MMD viewer does not already do. The copy keeps each source vertex's skinning operator, so it follows the
-    /// eye bones exactly like the eye does.
-    /// </summary>
-    private static List<Morph> AddHighlightGeometry(RawMMDModel model)
-    {
-        var morphs = new List<Morph>();
-        if (model == null || model.Parts == null || model.Vertices == null) return morphs;
-        // every part the eye material draws, not just the first one: the two eyes are two submeshes with the
-        // same material name, and taking only the first highlighted one eye
-        var eyeParts = new List<Part>();
-        foreach (Part part in model.Parts)
-        {
-            string name = part.Material != null ? part.Material.Name : string.Empty;
-            if (name.IndexOf("_eye", System.StringComparison.OrdinalIgnoreCase) >= 0
-                && name.IndexOf("emo", System.StringComparison.OrdinalIgnoreCase) < 0)
-            {
-                eyeParts.Add(part);
-            }
-        }
-        if (eyeParts.Count == 0) return morphs;
-        var eyeTriangles = new List<int>();
-        foreach (Part part in eyeParts)
-        {
-            for (int t = part.BaseShift; t < part.BaseShift + part.TriangleIndexNum; t++) eyeTriangles.Add(t);
-        }
-        Part eyePart = eyeParts[0];
-
-        // the masked copies carry the highlight as alpha (see TextureExporter.BakeHighlight); the original maps
-        // are black where there is no highlight, so they are only the fallback
-        var highlights = new List<MMDTexture>();
-        var masked = new List<MMDTexture>();
-        foreach (MMDTexture texture in model.TextureList)
-        {
-            if (texture == null || texture.TexturePath == null) continue;
-            if (texture.TexturePath.IndexOf("eyehi", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
-            if (texture.TexturePath.IndexOf("_mask", System.StringComparison.OrdinalIgnoreCase) >= 0) masked.Add(texture);
-            else highlights.Add(texture);
-        }
-        if (masked.Count > 0) highlights = masked;
-        if (highlights.Count == 0) return morphs;
-
-        var triangles = new List<int>(model.TriangleIndexes);
-        var vertices = new List<Vertex>(model.Vertices);
-        var parts = new List<Part>(model.Parts);
-        var layerUvs = new List<Vector2>();
-        int sourceStart = eyePart.BaseShift;
-        int sourceCount = eyePart.TriangleIndexNum;
-
-        foreach (MMDTexture highlight in highlights)
-        {
-            var remap = new Dictionary<int, int>();
-            var added = new List<int>();
-            foreach (int t in eyeTriangles)
-            {
-                int index = triangles[t];
-                if (remap.TryGetValue(index, out int mapped))
-                {
-                    added.Add(mapped);
-                    continue;
-                }
-                Vertex source = model.Vertices[index];
-                var copy = new Vertex
-                {
-                    Coordinate = source.Coordinate + source.Normal * HighlightLift,
-                    Normal = source.Normal,
-                    // the highlight maps are sampled at a multiple of the eye UV (the game's `altUv`), and an
-                    // MMD material cannot scale UVs, so the scale is baked here instead
-                    UvCoordinate = new Vector2(source.UvCoordinate.x, source.UvCoordinate.y * 2f),
-                    ExtraUvCoordinate = source.ExtraUvCoordinate,
-                    SkinningOperator = source.SkinningOperator,
-                    EdgeScale = 0f
-                };
-                mapped = vertices.Count;
-                vertices.Add(copy);
-                layerUvs.Add(copy.UvCoordinate);
-                remap[index] = mapped;
-                added.Add(mapped);
-            }
-            if (added.Count == 0) continue;
-            int shift = triangles.Count;
-            triangles.AddRange(added);
-            var material = new MMDMaterial
-            {
-                Name = eyePart.Material.Name + "_hi",
-                NameEn = eyePart.Material.Name + "_hi",
-                DiffuseColor = Color.white,
-                SpecularColor = Color.clear,
-                AmbientColor = Color.white * 0.5f,
-                Shiness = 0f,
-                DrawDoubleFace = true,
-                DrawGroundShadow = false,
-                CastSelfShadow = false,
-                DrawSelfShadow = false,
-                DrawEdge = false,
-                EdgeColor = Color.black,
-                EdgeSize = 0f,
-                Toon = null,
-                Texture = highlight,
-                SubTexture = null,
-                SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexOff,
-                MetaInfo = string.Empty
-            };
-            parts.Add(new Part { Material = material, BaseShift = shift, TriangleIndexNum = added.Count });
-        }
-
-        model.Vertices = vertices.ToArray();
-        model.TriangleIndexes = triangles.ToArray();
-        model.Parts = parts.ToArray();
-
-        // The tremor: a highlight that sits still does not read as a wet eye, and MMD has no texture offset, so
-        // the shake is a stack of UV morphs - small translations round a circle, cycled. The turn is not here on
-        // purpose: it has to rotate about each eye's own UV cell, and the cell is not something the exporter
-        // knows, so it stays a hand animation on the addon side for now.
-        const int JitterSteps = 4;
-        const float JitterAmplitude = 0.004f;
-        int layerStart = model.Vertices.Length - layerUvs.Count;
-        for (int step = 0; step < JitterSteps; step++)
-        {
-            float angle = Mathf.PI * 2f * step / JitterSteps;
-            float dx = Mathf.Cos(angle) * JitterAmplitude;
-            float dy = Mathf.Sin(angle) * JitterAmplitude;
-            var data = new List<Morph.MorphData>();
-            for (int i = 0; i < layerUvs.Count; i++)
-            {
-                data.Add(new Morph.UvMorphData
-                {
-                    VertexIndex = layerStart + i,
-                    Offset = new Vector4(dx, dy, 0f, 0f)
-                });
-            }
-            string name = "Hi_Jit" + step;
-            morphs.Add(new Morph
-            {
-                Name = name,
-                NameEn = name,
-                Category = Morph.MorphCategory.MorphCatOther,
-                Type = Morph.MorphType.MorphTypeUv,
-                MorphDatas = data.ToArray()
-            });
-        }
-        return morphs;
-    }
-
     private const int SpinSteps = 8;
 
     /// <summary>
