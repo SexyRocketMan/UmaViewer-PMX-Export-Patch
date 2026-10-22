@@ -908,6 +908,40 @@ public class ModelExporter
     }
 
     /// <summary>
+    /// The sprite-sheet grid of an animated tear material, as `scroll=<cols>x<rows>`.
+    ///
+    /// The scroll itself is the `_scrN` UV morphs; this token says what grid those morphs step through, so a
+    /// consumer that cannot play UV morphs (the Blender addon) can move the texture itself by the same grid.
+    /// The grid is the prefab's, not the material's: `texture_width`/`_height` and the part size come from the
+    /// tear object's own asset table.
+    /// </summary>
+    private static string ExtraMorphGrid(UmaContainerCharacter character, Renderer renderer)
+    {
+        if (character == null || renderer == null || character.TearControllers == null) return string.Empty;
+        foreach (TearController tear in character.TearControllers)
+        {
+            if (tear == null) continue;
+            foreach (GameObject tearObject in new GameObject[] { tear.TearObject_0, tear.TearObject_1 })
+            {
+                if (tearObject == null) continue;
+                if (!renderer.transform.IsChildOf(tearObject.transform)) continue;
+                AssetHolder holder = tearObject.GetComponent<AssetHolder>();
+                if (holder == null || holder._assetTableValue == null) continue;
+                float width = holder._assetTableValue["texture_width"];
+                float height = holder._assetTableValue["texture_height"];
+                float partWidth = holder._assetTableValue["texture_part_width"];
+                float partHeight = holder._assetTableValue["texture_part_height"];
+                if (width <= 0f || height <= 0f || partWidth <= 0f || partHeight <= 0f) continue;
+                int columns = Mathf.Max(1, Mathf.RoundToInt(width / partWidth));
+                int rows = Mathf.Max(1, Mathf.RoundToInt(height / partHeight));
+                if (columns * rows <= 1) continue;
+                return " scroll=" + columns + "x" + rows;
+            }
+        }
+        return string.Empty;
+    }
+
+    /// <summary>
     /// How the part is meant to be drawn, when MMD's plain alpha blend is not it.
     ///
     /// The cheek decal is a *multiply* overlay: its texture is white where the face shows through and tinted
@@ -1589,7 +1623,8 @@ public class ModelExporter
                 {
                     mat.MetaInfo = UmaMaterialComment(material, model)
                                  + ExtraMorphComment(character, material)
-                                 + ExtraMorphBlend(material);
+                                 + ExtraMorphBlend(material)
+                                 + ExtraMorphGrid(character, renderer);
 
                     // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
                     //
