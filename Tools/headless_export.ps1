@@ -44,6 +44,7 @@ param(
     [int]$ExportClip = 0,
     [switch]$DumpMaterials,
 [switch]$DumpFace,
+    [switch]$ProbeMorphs,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
     [int]$RecordReduction = 0,
@@ -172,6 +173,7 @@ if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
 if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
 if ($DumpFace) { $arguments += "-umaDumpFace" }
+    if ($ProbeMorphs) { $arguments += "-umaProbeMorphs" }
 if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
 if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
 if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordReduction) }

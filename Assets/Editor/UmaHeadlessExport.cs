@@ -134,6 +134,9 @@ public static class UmaHeadlessExport
         // a story voice sheet to print the transcript of, without loading or exporting anything
         public string Transcript = "";
         public bool DumpFace;
+        // what the facial morph system actually holds at runtime: the extra morphs, their locators and
+        // their binds, and whether the cheek/texture plumbing behind them got filled in
+        public bool ProbeMorphs;
         public string Variant = "";
         public int MorphNameMode = -1;
         public bool APoseRestPose;
@@ -215,6 +218,7 @@ public static class UmaHeadlessExport
                     case "-umaExportClip": options.ExportClip = int.Parse(Next()); break;
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaDumpFace": options.DumpFace = true; break;
+            case "-umaProbeMorphs": options.ProbeMorphs = true; break;
                     case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
                     case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
                     case "-umaShotFloat": options.ShotFloats.Add(Next()); break;
@@ -788,6 +792,10 @@ public static class UmaHeadlessExport
                             DumpMaterials(container.gameObject, stem);
                             DumpShaderProperties(container.gameObject, stem);
                         }
+                    }
+                    if (options.ProbeMorphs && container is UmaContainerCharacter probed)
+                    {
+                        DumpMorphState(probed);
                     }
 
                     Debug.Log($"{Tag} exporting to {exportPath}");
@@ -1466,6 +1474,59 @@ public static class UmaHeadlessExport
     /// _NormalizeNormal is 0, so the length of its vertex normals matters.
     /// </summary>
     private static bool _faceDumped;
+
+    /// <summary>
+    /// What the facial morph system holds at runtime, for a character that was set up but not exported.
+    ///
+    /// The extra morphs are built in code from the character's own parts (FaceDrivenKeyTarget.InitializeExtra),
+    /// so a morph being absent means one of those parts was missing when the target initialised. This prints the
+    /// parts themselves as well, so the report says *why* rather than only what.
+    /// </summary>
+    private static void DumpMorphState(UmaContainerCharacter character)
+    {
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        Debug.Log($"{Tag} [morphs] character {character.name}, FaceDrivenKeyTarget "
+                  + (facial == null ? "NULL" : $"'{facial.name}'"));
+        Debug.Log($"{Tag} [morphs] CheekTex_0={(character.CheekTex_0 ? character.CheekTex_0.name : "NULL")} "
+                  + $"CheekTex_1={(character.CheekTex_1 ? character.CheekTex_1.name : "NULL")} "
+                  + $"CheekTex_2={(character.CheekTex_2 ? character.CheekTex_2.name : "NULL")}");
+        Debug.Log($"{Tag} [morphs] StaticTear_L={(character.StaticTear_L ? character.StaticTear_L.name : "NULL")} "
+                  + $"StaticTear_R={(character.StaticTear_R ? character.StaticTear_R.name : "NULL")} "
+                  + $"manga L/R={character.LeftMangaObject.Count}/{character.RightMangaObject.Count} "
+                  + $"tearControllers={character.TearControllers.Count}");
+
+        foreach (var renderer in character.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            string lower = renderer.name.ToLowerInvariant();
+            if (!lower.Contains("cheek") && !lower.Contains("face") && !lower.Contains("eyebrow") && !lower.Contains("manga"))
+                continue;
+            var material = renderer.sharedMaterial;
+            Debug.Log($"{Tag} [morphs] renderer '{renderer.name}' active={renderer.gameObject.activeSelf} "
+                      + $"material '{(material ? material.name : "none")}' "
+                      + $"mainTex '{(material && material.mainTexture ? material.mainTexture.name : "none")}' "
+                      + $"shader '{(material && material.shader ? material.shader.name : "none")}'");
+        }
+
+        if (facial == null) return;
+        Debug.Log($"{Tag} [morphs] OtherMorphs: {facial.OtherMorphs.Count}");
+        foreach (var morph in facial.OtherMorphs)
+        {
+            if (morph == null) continue;
+            Debug.Log($"{Tag} [morphs]   '{morph.name}' locator={(morph.locator ? morph.locator.name : "none")} "
+                      + $"binds={morph.BindProperties.Count}");
+            foreach (var property in morph.BindProperties)
+            {
+                if (property == null) continue;
+                var prefabs = new List<string>();
+                foreach (var prefab in property.BindPrefabs) if (prefab) prefabs.Add(prefab.name);
+                Debug.Log($"{Tag} [morphs]     {property.Type} {property.Part} "
+                          + $"property='{property.PropertyName}' "
+                          + $"material='{(property.BindMaterial ? property.BindMaterial.name : "none")}' "
+                          + $"texture='{(property.BindTexture ? property.BindTexture.name : "none")}' "
+                          + $"prefabs=[{string.Join(",", prefabs)}]");
+            }
+        }
+    }
 
     private static void DumpFacePipeline(GameObject root, string stem)
     {
