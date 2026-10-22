@@ -1075,18 +1075,25 @@ public class ModelExporter
     private static void AddHighlightGeometry(RawMMDModel model)
     {
         if (model == null || model.Parts == null || model.Vertices == null) return;
-        Part eyePart = null;
+        // every part the eye material draws, not just the first one: the two eyes are two submeshes with the
+        // same material name, and taking only the first highlighted one eye
+        var eyeParts = new List<Part>();
         foreach (Part part in model.Parts)
         {
             string name = part.Material != null ? part.Material.Name : string.Empty;
             if (name.IndexOf("_eye", System.StringComparison.OrdinalIgnoreCase) >= 0
                 && name.IndexOf("emo", System.StringComparison.OrdinalIgnoreCase) < 0)
             {
-                eyePart = part;
-                break;
+                eyeParts.Add(part);
             }
         }
-        if (eyePart == null) return;
+        if (eyeParts.Count == 0) return;
+        var eyeTriangles = new List<int>();
+        foreach (Part part in eyeParts)
+        {
+            for (int t = part.BaseShift; t < part.BaseShift + part.TriangleIndexNum; t++) eyeTriangles.Add(t);
+        }
+        Part eyePart = eyeParts[0];
 
         // the masked copies carry the highlight as alpha (see TextureExporter.BakeHighlight); the original maps
         // are black where there is no highlight, so they are only the fallback
@@ -1112,7 +1119,7 @@ public class ModelExporter
         {
             var remap = new Dictionary<int, int>();
             var added = new List<int>();
-            for (int t = sourceStart; t < sourceStart + sourceCount; t++)
+            foreach (int t in eyeTriangles)
             {
                 int index = triangles[t];
                 if (remap.TryGetValue(index, out int mapped))
@@ -1127,7 +1134,7 @@ public class ModelExporter
                     Normal = source.Normal,
                     // the highlight maps are sampled at a multiple of the eye UV (the game's `altUv`), and an
                     // MMD material cannot scale UVs, so the scale is baked here instead
-                    UvCoordinate = new Vector2(source.UvCoordinate.x * 4f, source.UvCoordinate.y * 2f),
+                    UvCoordinate = new Vector2(source.UvCoordinate.x, source.UvCoordinate.y * 2f),
                     ExtraUvCoordinate = source.ExtraUvCoordinate,
                     SkinningOperator = source.SkinningOperator,
                     EdgeScale = 0f
