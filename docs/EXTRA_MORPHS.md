@@ -124,5 +124,20 @@ existing code:
 4. the vmd writer's morph-section assembly needs to know about the extra names - that is the one piece not yet
    read, and the first thing to look at before writing code.
 
-The UV morphs for the animated tears and the eye highlights are a later step: they need the same driver shape
-plus a per-frame UV offset, which is a different section of the vmd.
+### The animated decals themselves
+
+Three of the parts move *on their own*, independent of any morph weight, and none of that is a vertex morph:
+
+* **the `@_@` eye manga spins.** The decal is a texture on its own quad; the spin is a rotation of the sampled
+  UV, so a port is a **stack of UV morphs**: `K` morphs each rotating the quad's UVs about their own centre by
+  `360/K`, and a continuous spin is an animation that cross-fades consecutive pairs (`w_k` down while `w_{k+1}`
+  goes up) - linear weights over a linear UV delta add up to a linear rotation, so the cross-fade is exact.
+  LibMMD already reads and writes UV morphs (`Morph.cs:54`, `PMXWriter.cs:188`), so the exporter side is a
+  function that emits them for a part whose face is `@_@`, and the vmd side is a UV morph section.
+* **some tear variants scroll a sprite sheet** (`TearController.UpdateOffset`) - same UV morph stack, stepped
+  through the sheet's rows and columns instead of rotated.
+* **the eye highlights swirl and jitter** (see above) - the same stack again, on highlight quads.
+
+They all reduce to one mechanism: *UV morphs with animated weights*. A vmd carries UV morph keys by morph
+**name** in its own section, next to the vertex-morph section, which is why the extra morph names have to exist
+in the pmx first - which they now do for the deploy parts, and would need to for the spin/scroll morphs.
