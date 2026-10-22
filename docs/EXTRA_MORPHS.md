@@ -50,9 +50,10 @@ morphs**: one per sprite-sheet frame, each shifting every UV by that frame's ste
 sheet does not fill the morph list (a 66-vertex tear gets `TearDrop1_L` and `TearDrop1_L_scr0` … `_scr6`). Frame
 0 is the rest state, so a running tear is the deploy morph at 1 with the scroll morphs cycled through - the rate
 is how fast the weights fade. The stencil has no counterpart and is not needed: the tear is its own decal
-geometry, drawn in front of the eye by the same deploy lift every decal gets. Only the **left** side is in the
-export - the viewer places the tears on the left and mirrors the right one with a negative scale at runtime, so
-there is no right-side instance to read.
+geometry, drawn in front of the eye by the same deploy lift every decal gets. Both sides are in the export: the four controllers are not all on
+the same eye - `TearDrop1_*` and `TearDrop3_*` come out `_L`, `TearDrop2_*` and `TearDrop4_*` come out
+`_R` - because the viewer places each controller on the side its own `SetDir` chose. A controller that is
+mirrored at runtime rather than placed would need its right-side instance created at export time.
 
 The sprite sheets themselves are inside the tear prefabs' asset tables, not in `Persistent/textures`, which is
 why the viewer has never listed them.
