@@ -7,6 +7,56 @@ using System;
 
 public class TextureExporter
 {
+    /// <summary>
+    /// A multiply overlay turned into one an MMD material can draw: the same blush, as a colour and an alpha.
+    ///
+    /// The game's cheek map is white where the face shows through and only drops the green and blue channels
+    /// where the blush is - it is *multiplied* into the face. An MMD material can only alpha blend, so drawn
+    /// as it is the decal paints a white shell over the cheeks. Alpha blending `s(1-a) + c*a` reproduces the
+    /// multiply `s*t` when `a = 1 - min(g, b)` and `c = (t - 1 + a) / a`: the map's channel drop becomes the
+    /// alpha, and the colour comes out as the saturated pink that drop implies, fully transparent wherever the
+    /// map is white. The whole blush is subtle by nature - the reference cheek map drops fewer than 6% on its
+    /// strongest texel - so the result reads as a soft tint, which is what the multiply does.
+    /// </summary>
+    static public Texture2D BakeBlush(Texture2D source)
+    {
+        if (source == null) return null;
+        Texture2D readable = duplicateTexture(source);
+        Color[] pixels = readable.GetPixels();
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            Color p = pixels[i];
+            float drop = 1f - Mathf.Min(p.g, p.b);
+            if (drop <= 0.002f)
+            {
+                pixels[i] = new Color(p.r, p.g, p.b, 0f);
+                continue;
+            }
+            float r = (p.r - 1f + drop) / drop;
+            float g = (p.g - 1f + drop) / drop;
+            float b = (p.b - 1f + drop) / drop;
+            pixels[i] = new Color(Mathf.Clamp01(r), Mathf.Clamp01(g), Mathf.Clamp01(b), Mathf.Clamp01(drop));
+        }
+        Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
+        baked.name = BlushName(source.name);
+        baked.SetPixels(pixels);
+        baked.Apply();
+        return baked;
+    }
+
+    /// <summary>The name the baked copy is written under; the exporter looks it up by this.</summary>
+    static public string BlushName(string sourceName)
+    {
+        return sourceName + "_blush";
+    }
+
+    /// <summary>Whether a material is one the game draws by multiplying - the blush decal is.</summary>
+    static public bool IsMultiply(Material material)
+    {
+        return material != null && material.shader != null
+               && (material.shader.name ?? string.Empty).IndexOf("Multiply", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     static public Texture2D duplicateTexture(Texture2D source)
     {
         RenderTexture renderTex = RenderTexture.GetTemporary(
@@ -91,6 +141,20 @@ public class TextureExporter
                                 byte[] bytes = mat_texture.EncodeToPNG();
                                 File.WriteAllBytes(tex_path, bytes);
                             }
+                            // a multiply decal also gets the bake that lets an MMD material draw it (see
+                            // BakeBlush); written beside the original, which stays for anyone who wants the
+                            // game's own map
+                            if (IsMultiply(mat))
+                            {
+                                Texture2D blush = BakeBlush(mat_texture);
+                                if (blush != null)
+                                {
+                                    string blushPath = savePath + blush.name + ".png";
+                                    string blushDep = "Texture2D/" + blush.name + ".png";
+                                    if (!textureNames.Contains(blushDep)) textureNames.Add(blushDep);
+                                    if (!File.Exists(blushPath)) File.WriteAllBytes(blushPath, blush.EncodeToPNG());
+                                }
+                            }
                         }
                     }
                 }
@@ -119,9 +183,23 @@ public class TextureExporter
                 string tex_path = savePath + tex_name + ".png";
                 var dpath = "Texture2D/" + tex_name + ".png";
                 if (!textureNames.Contains(dpath)) textureNames.Add(dpath);
-                if (File.Exists(tex_path)) continue;
-                var copy = duplicateTexture(texture);
-                File.WriteAllBytes(tex_path, copy.EncodeToPNG());
+                if (!File.Exists(tex_path))
+                {
+                    var copy = duplicateTexture(texture);
+                    File.WriteAllBytes(tex_path, copy.EncodeToPNG());
+                }
+                // the cheek pair is a multiply map either way, so both get the MMD bake
+                if (tex_name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    Texture2D blush = BakeBlush(texture);
+                    if (blush != null)
+                    {
+                        string blushPath = savePath + blush.name + ".png";
+                        string blushDep = "Texture2D/" + blush.name + ".png";
+                        if (!textureNames.Contains(blushDep)) textureNames.Add(blushDep);
+                        if (!File.Exists(blushPath)) File.WriteAllBytes(blushPath, blush.EncodeToPNG());
+                    }
+                }
             }
         }
         Debug.Log($"Exported textures: {textureNames.ToArray()}");

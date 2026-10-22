@@ -1200,7 +1200,15 @@ public class ModelExporter
                 {
                     try
                     {
-                        var tex = model.TextureList.Find(t => t.TexturePath.Contains($"/{material.mainTexture.name}.png"));
+                        // a multiply decal is drawn with the baked copy instead: it carries the blush as an
+                        // alpha mask, which an MMD material can draw, while the game's own map would paint a
+                        // white shell over the cheeks (see TextureExporter.BakeBlush)
+                        string textureName = material.mainTexture.name;
+                        if (decal && TextureExporter.IsMultiply(material))
+                        {
+                            textureName = TextureExporter.BlushName(textureName);
+                        }
+                        var tex = model.TextureList.Find(t => t.TexturePath.Contains($"/{textureName}.png"));
                         if (tex == null)
                         {
                             Debug.LogWarning($"{Tag} {material.name}: texture '{material.mainTexture.name}' is not in the exported "

@@ -62,11 +62,14 @@ that shows or hides an object is in the model comment instead, since no material
 
 One more token can appear on a material: `blend=multiply`, on a part the game draws by *multiplying* rather
 than by blending. The cheek decal is the one that has it - its texture is white where the face shows through
-and tinted where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD
-material has no multiply blend, so a consumer that can multiply - the uma addon - should; plain MMD draws the
-texture alpha blended, and because that texture is opaque white outside the blush the blush reads as a pale
-wash over the cheeks rather than as the game's multiply. The morph that shows it is a vertex morph like the
-others (see below), so the part is at least *reachable* without an addon.
+and only drops the green and blue channels where the blush is, and the game's `MultiplyCheek` shader multiplies
+it into the face. An MMD material can only alpha blend, so the material is drawn with a **baked copy of that
+map** instead, `<map>_blush.png`, written beside the original: `alpha = 1 - min(g, b)` and the colour that alpha
+implies (`(t - 1 + alpha) / alpha`, a saturated pink at the deepest blush, fully transparent where the map is
+white). Alpha blending that reproduces the multiply, so plain MMD draws the blush correctly - subtle by nature,
+the reference map drops under 6% on its strongest texel - and a consumer that can multiply (the uma addon)
+still has the original map beside it. The morph that shows it is a vertex morph like the others (see below),
+so the part needs no addon at all.
 
 Worked example, the head of a normal character:
 
