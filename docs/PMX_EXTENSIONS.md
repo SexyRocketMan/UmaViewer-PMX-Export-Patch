@@ -52,10 +52,9 @@ morph=<morph>:<bind type>:<part>:<property>[,<part>:<property>...][;<morph>:...]
 ```
 
 | field | meaning |
-|---|---|
 | `morph` | the morph's name |
 | `bind type` | `Texture` (swap a texture and set a float) or `Shader` (set a float) |
-| `part` | the locator component that drives it: `ScaX`, `ScaY`, `ScaZ`, `PosX`, … |
+| `part` | the axis of the morph's own driver the game reads: `ScaX`, `ScaY`, `ScaZ`, `PosX`, … |
 | `property` | the material property the game writes, e.g. `_CheekRate`, `_faceShadowAlpha` |
 
 Only `Texture` and `Shader` binds appear here, because they are the two that end up on a material. Everything
@@ -64,9 +63,10 @@ that shows or hides an object is in the model comment instead, since no material
 One more token can appear on a material: `blend=multiply`, on a part the game draws by *multiplying* rather
 than by blending. The cheek decal is the one that has it - its texture is white where the face shows through
 and tinted where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD
-material has no multiply blend, so the decal is written at **zero diffuse alpha** (invisible at rest, which is
-the state the game keeps it in until a driven key raises `_CheekRate`) and the token says why. A consumer that
-can multiply - the uma addon - should; everything else leaves it invisible, which is the correct rest state.
+material has no multiply blend, so a consumer that can multiply - the uma addon - should; plain MMD draws the
+texture alpha blended, and because that texture is opaque white outside the blush the blush reads as a pale
+wash over the cheeks rather than as the game's multiply. The morph that shows it is a vertex morph like the
+others (see below), so the part is at least *reachable* without an addon.
 
 Worked example, the head of a normal character:
 
@@ -84,23 +84,47 @@ object morphs: Manga_Ctrl:EyeSelect:ScaY:pfb_eff_chr_emo_eye_000,pfb_eff_chr_emo
 and for the animated tears (`Tear{n}_Ctrl`), `TearWeight` on `ScaX`, `TearSide` on `PosY`, `TearSelect` on
 `ScaY` and `TearSpeed` on `ScaZ`, with no objects — the game applies those to its own particle system.
 
-## What the locator parts mean
+## The deploy morphs
 
-Every one of these morphs is bound to a *locator transform* in the game's rig — `Cheek_Ctrl`, `Shade_Ctrl`,
-`Manga_Ctrl`, `Tear0_Ctrl`, … — and the game's compiled animation moves the locator rather than the morph. The
-`part` field says which component of that transform is the morph's value: `ScaX` is `locator.localScale.x`,
-`PosY` is `localPosition.y`, and so on (`FacialMorph.cs`, `FacialOtherMorph.GetLocatorValue`).
+Five of these morphs are *not* just described, they are MMD morphs: they show and hide a decal part, which is
+exactly what a vertex morph can do.
 
-So a consumer that wants these morphs live needs three things: the *locator transform* present under that name,
-the *object* named for the visibility ones, and a driver from one to the other. The uma addon is that
-consumer.
+| morph | part it deploys | vertices |
+|---|---|---|
+| `Cheek_Show` | the cheek blush decal (`mtl_chr1001_00_cheek`) | 54 |
+| `Manga_000` … `Manga_003` | the four eye manga (`mtl_eff_chr_emo_eye_000` … `_003`) | 4 each |
+| `Tear_L`, `Tear_R` | the static tears (`mtl_chr1001_00_tear`) | 15 each |
+
+A pmx is read with every morph at 0, so the state the model must *rest* in is the collapsed one: every vertex
+of a decal part is written on a single point inside the head, which makes it a handful of zero-area triangles -
+invisible, and drawn nowhere - wherever that point is. Each deploy morph carries the offsets that put its part
+back where the game draws it. At weight 1 the part is exactly the decal the game shows; at 0 it is gone.
+
+This is the idiom MMD models use for a hidden accessory: the reference model `Appearance Miku_BDEF_mod-v03`
+hides two eye highlights with `HL消1` and `HL消2`, which move 58 and 116 vertices onto a single point each.
+It needs nothing but MMD itself - no addon, no drivers, no bones.
+
+The parts stay drawn by their own materials (alpha 1, double sided because the eye manga arrive through
+mirrored instances whose reversed winding would cull one eye, no outline, no self shadow, no ground shadow),
+so what hides them at rest is the geometry, not the material. A collapsed decal is behind the face surface at
+rest anyway, so even a viewer that drew degenerate triangles would show nothing.
+
+## How a consumer drives them
+
+Two paths, both from the same tokens:
+
+* **MMD itself** - the deploy morphs above are ordinary vertex morphs, so the five decals can be shown and
+  hidden with nothing but MMD's morph panel.
+* **the uma addon** - reads `object morphs:` and the material `morph=` tokens and wires them to custom
+  properties on the model (the cheek texture pair and `_CheekRate`, the face shadow alpha) for the parts a
+  morph cannot hold. The token names the morph, which is the name of the custom property the addon makes.
 
 ## The flags
 
 | flag | default | what it does |
 |---|---|---|
 | `PmxUmaMaterialFields` | `true` | writes the uma shader keys into the material comments, and the specular/outline values an MMD material can hold. `false` gives plain MMD materials. |
-| `PmxExtraMorphs` | `true` | writes the `morph=` and `object morphs:` descriptions above. `false` leaves them out entirely, for an export that is meant to be a plain MMD model with nothing extra in it. |
+| `PmxExtraMorphs` | `true` | carries the morph parts in the mesh, writes the deploy morphs, and writes the `morph=` and `object morphs:` descriptions above. `false` leaves the parts out; the decals then stay wherever the game draws them (visible). |
 
 Both are printed as tooltips in the viewer's settings. With both off the export is an ordinary PMX: the plain
 MMD material values, vertex morphs, bones and textures.
@@ -108,37 +132,14 @@ MMD material values, vertex morphs, bones and textures.
 ## What a user without the addon sees
 
 * The model loads, poses and renders normally.
-* Every vertex morph the PMX can hold is there — eyes, brows, mouth, ears.
-* `Cheek_Ctrl`, `Shade_Ctrl`, `Manga_Ctrl`, `StaticTear_Ctrl` and the tears do nothing: the cheek is whatever
-  texture and `_CheekRate` the material was exported with, the face shadow is its rest value, and the manga and
-  tear objects are wherever they were exported visible or hidden.
+* Every vertex morph the PMX can hold is there - eyes, brows, mouth, ears - and the five deploy morphs as
+  well: `Cheek_Show`, `Manga_000` … `Manga_003`, `Tear_L`, `Tear_R`.
+* The cheek blush is a pale wash rather than the game's multiply (see `blend=multiply` above), which is the
+  one part plain MMD cannot draw as the game does.
 * The comments above are visible in the material panel and the model properties, which is the point of them.
 
-## The locator bones
+## Status
 
-The transformers these morphs are bound to are not part of the body skeleton: the game instantiates them on a
-`DrivenKeyLocator` object at runtime, a sibling of the body root (`UmaContainerCharacter.cs`). With
-`PmxExtraMorphs` on, the exporter adds the ones the morphs actually bind to the exported skeleton - 
-`Cheek_Ctrl`, `Shade_Ctrl`, `Manga_Ctrl`, `Tear0_Ctrl` … `Tear3_Ctrl`, seven on character 1001 - as bones
-parented to the root `Position`, each with no vertices weighted to it. Their positions are where the game has
-them; their animation is whatever the `*_driven` clips write, exactly as the game drives them.
-
-An export with the flag off has none of them: 437 bones instead of 444 on 1001, no `morph=` token, and no
-`extra morphs:` / `object morphs:` line.
-
-They have no rest position of their own, anywhere in the game's data: the `drivenkeylocator` prefab is all
-zeros and the face clips write their transforms. So they are placed, by name, on the bones the face rig already
-has - `Cheek_Ctrl` at the midpoint of `Cheek_L`/`Cheek_R`, `Shade_Ctrl` at `Head_shade_start`, `Manga_Ctrl` at
-the midpoint of `Eye_L`/`Eye_R`, `Tear0`..`Tear3_Ctrl` at the `Eye_tear_attach_0n_L/R` pairs where the rig has
-them and at the eye midpoint otherwise - each nudged 1 cm along the head's forward so it sits outside the face
-mesh. Anything with a name none of those rules match falls back to the head.
-
-Where a locator's rest position is does not affect a driver: it reads the pose's local channels, which are
-offsets from rest. The placement is for the person in Blender.
-
-## Status of the driver side
-
-The export side is done: the tokens are written, the locators are bones, and both are verified on a real
-export. What is not built yet is the **addon side** - reading the tokens and wiring locator → property and
-locator → visibility. Until it exists these morphs simply do nothing, which is exactly what a user without
-the addon gets (see above).
+The export side is done and verified on a real export: the parts are in the mesh, the deploy morphs move
+exactly their own vertices, and at rest the decal polygon area is 0.000000. The addon side is the material
+half - the cheek texture pair and `_CheekRate`, the face shadow alpha - which a vertex morph cannot hold.
