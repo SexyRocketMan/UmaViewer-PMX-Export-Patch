@@ -1155,6 +1155,10 @@ public class ModelExporter
                 if (restInvisible != null && restInvisible.Contains(renderer))
                 {
                     mat.DiffuseColor = new Color(1f, 1f, 1f, 0f);
+                    // double sided, because a decal is and because these parts arrive through instances the
+                    // game mirrors: a mirrored transform reverses the triangle winding, so with backface
+                    // culling on the copy for the right eye disappears no matter what its alpha says.
+                    mat.DrawDoubleFace = true;
                 }
                 mat.SpecularColor = Color.clear;
                 mat.AmbientColor = Color.white * 0.5f;
