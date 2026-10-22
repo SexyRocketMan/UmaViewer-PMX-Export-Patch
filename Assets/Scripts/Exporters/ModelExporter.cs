@@ -39,15 +39,6 @@ public class ModelExporter
                                                        MorphPartRenderers(container),
                                                        MorphPartTextures(container));
         RawMMDModel model;
-        // The face locators that drive the extra morphs are animated, not posed: their transforms sit at the
-        // locator object's origin until a face clip writes them, which is why an export put them all at the
-        // character's feet. `ResetLocator` is the game's own way back to the baseline - rebind the face animator,
-        // process the locators, re-apply the morphs - and it is the same moment `FacialResetAll` above happens.
-        if (Config.Instance == null || Config.Instance.PmxExtraMorphs)
-        {
-            container.FaceDrivenKeyTarget?.ResetLocator();
-        }
-
         // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
         // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
         using (UmaAPose.Enter(container))
@@ -189,9 +180,9 @@ public class ModelExporter
 
         //Read vertices And triangles
         List<Renderer> renderers = new List<Renderer>(container.GetComponentsInChildren<Renderer>());
-        // the parts a material-bound extra morph drives are inactive, so the walk above misses them. Added
-        // here, before the vertices, so their triangles are in the mesh; they are drawn at zero alpha until a
-        // driver raises them, which is the state the game has them in at rest.
+        // the parts an extra morph drives are inactive, so the walk above misses them. Added here, before the
+        // vertices, so their triangles are in the mesh; they are collapsed onto a point inside the head and a
+        // deploy morph puts each one back, which is the state the game has them in at rest.
         var morphParts = MorphPartRenderers(character);
         var restInvisible = new HashSet<Renderer>();
         foreach (Renderer renderer in morphParts)
@@ -201,8 +192,35 @@ public class ModelExporter
             restInvisible.Add(renderer);
         }
         List<int> triangles = new List<int>();
-        model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform);
+        var vertexRanges = new List<(Renderer renderer, int start, int count)>();
+        model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform, vertexRanges);
         model.TriangleIndexes = triangles.ToArray();
+
+        // The decal parts are collapsed onto one point inside the head, and a deploy morph per part puts each
+        // one back. A pmx is read with every morph at 0, so the collapsed state is the one the model must
+        // *rest* in - and a collapsed decal is a handful of zero-area triangles, invisible, wherever the point
+        // is. This is the idiom MMD models use for a hidden accessory: Appearance Miku hides two eye highlights
+        // with `HL消1`/`HL消2`, which move 58 and 116 vertices onto a single point each.
+        var deployed = new Dictionary<int, Vector3>();
+        Vector3 collapsePoint = Vector3.zero;
+        if (morphParts.Count > 0)
+        {
+            Transform headBone = null;
+            foreach (Transform bone in bones)
+            {
+                if (bone != null && bone.name == "Head") { headBone = bone; break; }
+            }
+            collapsePoint = headBone != null ? headBone.position : Vector3.zero;
+            foreach (var range in vertexRanges)
+            {
+                if (!restInvisible.Contains(range.renderer)) continue;
+                for (int i = range.start; i < range.start + range.count && i < model.Vertices.Length; i++)
+                {
+                    deployed[i] = model.Vertices[i].Coordinate;
+                    model.Vertices[i].Coordinate = collapsePoint;
+                }
+            }
+        }
 
         //Read Texture reference
         foreach (var texture in textures)
@@ -211,95 +229,19 @@ public class ModelExporter
         }
 
         model.Parts = ReadPartMaterials(renderers, model, character, restInvisible);
-        // the locators the extra morphs are bound to, so a driver has a node to read. Added after the vertices
-        // are read: the skinning records bone indices, and appending at the end cannot move any of them.
-        var locators = Config.Instance == null || Config.Instance.PmxExtraMorphs
-            ? MorphLocators(character)
-            : new List<Transform>();
-        foreach (Transform locator in locators)
-        {
-            if (!bones.Contains(locator)) bones.Add(locator);
-        }
-
         model.Bones = ReadBones(bones);
 
-        // A locator's transform parent is the locator object, which is not a bone, so it comes back with no
-        // parent at all. Hang it off the root bone instead: the skeleton keeps one root and the locator travels
-        // with the character, which is where the game keeps it too - a sibling of the body root, not a child.
-        if (locators.Count > 0)
+        model.Morphs = ReadMorph(renderers);
+        if (deployed.Count > 0)
         {
-            for (int i = 1; i < model.Bones.Length; i++)
+            var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
+            if (deploy.Count > 0)
             {
-                if (model.Bones[i].ParentIndex >= 0) continue;
-                if (locators.Exists(locator => locator != null && locator.name == model.Bones[i].Name))
-                    model.Bones[i].ParentIndex = 0;
-            }
-
-            // The locators are animated, not posed: the game has no static position for them at all - the
-            // `drivenkeylocator` prefab is all zeros and the face clips write their transforms - so they were
-            // exported in a heap at the character's feet. Where a bone's rest is does not matter to a driver,
-            // which reads the pose's local channels, so they are placed on the bones the face rig already has,
-            // where a rigger would look for them: the cheeks for Cheek_Ctrl, the shade start for Shade_Ctrl,
-            // the eyes for the manga and the tear controls.
-            Transform head = null;
-            foreach (Transform bone in bones)
-            {
-                if (bone != null && bone.name == "Head") { head = bone; break; }
-            }
-            if (head != null)
-            {
-                var socket = new Dictionary<string, Vector3>();
-                for (int b = 0; b < model.Bones.Length; b++) socket[model.Bones[b].Name] = model.Bones[b].Position;
-                Vector3 Mid(string first, string second)
-                {
-                    if (socket.TryGetValue(first, out Vector3 a) && socket.TryGetValue(second, out Vector3 b))
-                        return (a + b) * 0.5f;
-                    return Vector3.zero;
-                }
-                var placed = new Dictionary<string, Vector3>();
-                int tear = 0;
-                for (int i = 0; i < locators.Count; i++)
-                {
-                    string name = locators[i] != null ? locators[i].name : string.Empty;
-                    string lower = name.ToLowerInvariant();
-                    Vector3 target;
-                    if (lower.Contains("cheek"))
-                    {
-                        target = Mid("Cheek_L", "Cheek_R");
-                        if (target == Vector3.zero) target = Mid("Cheek_offset_L", "Cheek_offset_R");
-                    }
-                    else if (lower.Contains("shade"))
-                    {
-                        target = socket.TryGetValue("Head_shade_start", out Vector3 shade) ? shade : Vector3.zero;
-                    }
-                    else if (lower.Contains("manga"))
-                    {
-                        target = Mid("Eye_L", "Eye_R");
-                    }
-                    else if (lower.Contains("tear"))
-                    {
-                        // one per eye-attachment pair where the rig has them, the eye centre otherwise
-                        string index = (tear + 1).ToString("00");
-                        target = Mid("Eye_tear_attach_" + index + "_L", "Eye_tear_attach_" + index + "_R");
-                        if (target == Vector3.zero) target = Mid("Eye_L", "Eye_R");
-                        tear++;
-                    }
-                    else
-                    {
-                        target = Vector3.zero;
-                    }
-                    if (target == Vector3.zero) target = head.position;
-                    // slightly in front of the face, so the control is outside the head mesh and easy to grab
-                    placed[name] = target + head.forward * 0.01f;
-                }
-                for (int i = 0; i < model.Bones.Length; i++)
-                {
-                    if (placed.TryGetValue(model.Bones[i].Name, out Vector3 position))
-                        model.Bones[i].Position = position;
-                }
+                var all = new List<Morph>(model.Morphs);
+                all.AddRange(deploy);
+                model.Morphs = all.ToArray();
             }
         }
-        model.Morphs = ReadMorph(renderers);
         model.Rigidbodies = new MMDRigidBody[0];
         model.Joints = new MMDJoint[0];
 
@@ -931,9 +873,10 @@ public class ModelExporter
     ///
     /// The cheek decal is a *multiply* overlay: its texture is white where the face shows through and tinted
     /// where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD material
-    /// has no multiply blend, so exported as it is the decal paints a white shell over the cheeks. It is written
-    /// at zero alpha (invisible at rest, which is the state the game has it in) and this token says why, and
-    /// what a consumer that understands it - the uma addon - should do instead.
+    /// has no multiply blend, so exported as it is the decal paints a white shell over the cheeks. The token
+    /// says what the part is, so a consumer that understands it - the uma addon - can multiply it instead;
+    /// plain MMD still draws the texture with its own alpha, which is why the part is hidden by geometry at
+    /// rest rather than by zeroing the material.
     /// </summary>
     private static string ExtraMorphBlend(Material material)
     {
@@ -941,6 +884,95 @@ public class ModelExporter
         string shader = material.shader.name ?? string.Empty;
         if (shader.IndexOf("Multiply", System.StringComparison.OrdinalIgnoreCase) >= 0) return " blend=multiply";
         return string.Empty;
+    }
+
+    /// <summary>
+    /// One vertex morph per decal part, carrying the offsets that put the part back where the game has it.
+    ///
+    /// Named for what a user looks for: `Manga_000`..`Manga_003` for the eye manga, `Tear_L`/`Tear_R` for the
+    /// static tears, `Cheek_Show` for the blush decal. At weight 0 the part is collapsed away (the model's rest
+    /// state, as in the game); at 1 it is deployed.
+    /// </summary>
+    private static List<Morph> DeployMorphs(UmaContainerCharacter character,
+                                            List<(Renderer renderer, int start, int count)> ranges,
+                                            HashSet<Renderer> restInvisible,
+                                            Dictionary<int, Vector3> deployed,
+                                            Vector3 collapsePoint)
+    {
+        var morphs = new List<Morph>();
+        if (character == null) return morphs;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null) return morphs;
+
+        var rangeOf = new Dictionary<Renderer, (int start, int count)>();
+        foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
+
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null) continue;
+
+            // the object the material lives on (the cheek decal) and the objects a bind shows and hides
+            var parts = new List<(string name, GameObject obj)>();
+            if (morph.BindGameObject != null) parts.Add((DeployName(morph.BindGameObject.name), morph.BindGameObject));
+            if (morph.BindProperties != null)
+            {
+                foreach (BindProperty property in morph.BindProperties)
+                {
+                    if (property == null || property.BindPrefabs == null) continue;
+                    foreach (GameObject prefab in property.BindPrefabs)
+                    {
+                        if (prefab == null) continue;
+                        string name = DeployName(prefab.name);
+                        if (!parts.Exists(part => part.name == name)) parts.Add((name, prefab));
+                    }
+                }
+            }
+
+            foreach (var part in parts)
+            {
+                var data = new List<Morph.MorphData>();
+                foreach (Renderer renderer in part.obj.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (renderer == null || !restInvisible.Contains(renderer)) continue;
+                    if (!rangeOf.TryGetValue(renderer, out var range)) continue;
+                    for (int i = range.start; i < range.start + range.count; i++)
+                    {
+                        if (!deployed.TryGetValue(i, out Vector3 where)) continue;
+                        data.Add(new Morph.VertexMorphData
+                        {
+                            VertexIndex = i,
+                            Offset = where - collapsePoint
+                        });
+                    }
+                }
+                if (data.Count == 0) continue;
+                morphs.Add(new Morph
+                {
+                    Name = part.name,
+                    NameEn = part.name,
+                    Category = Morph.MorphCategory.MorphCatOther,
+                    Type = Morph.MorphType.MorphTypeVertex,
+                    MorphDatas = data.ToArray()
+                });
+            }
+        }
+        return morphs;
+    }
+
+    /// <summary>The morph name a decal part is shown under: `Manga_000`, `Tear_L`, `Cheek_Show`.</summary>
+    private static string DeployName(string objectName)
+    {
+        string name = objectName.Replace(" (Clone)", "").Replace("(Clone)", "");
+        int eye = name.IndexOf("emo_eye_", System.StringComparison.OrdinalIgnoreCase);
+        if (eye >= 0)
+        {
+            string suffix = name.Substring(eye + "emo_eye_".Length);
+            return suffix.Length >= 3 ? "Manga_" + suffix.Substring(suffix.Length - 3) : "Manga";
+        }
+        if (name.IndexOf("tear", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            return name.EndsWith("_L", System.StringComparison.OrdinalIgnoreCase) ? "Tear_L" : "Tear_R";
+        if (name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0) return "Cheek_Show";
+        return name;
     }
 
     /// <summary>
@@ -1011,19 +1043,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The transforms the extra facial morphs are driven by - <c>Cheek_Ctrl</c>, <c>Shade_Ctrl</c>,
-    /// <c>Manga_Ctrl</c>, <c>Tear{n}_Ctrl</c>.
-    ///
-    /// The game builds these on a <c>DrivenKeyLocator</c> object at runtime instead of putting them in the body
-    /// skeleton (<c>UmaContainerCharacter.cs</c> instantiates the object as a sibling of the body root), so an
-    /// export that only walks the body has no node for a driver to read and the <c>morph=</c> description in
-    /// the comment points at nothing.
-    /// </summary>
-    /// <summary>
     /// The name a morph's driver reads: its locator transform, which is not always the morph's own name.
-    /// `StaticTear_Ctrl` is the one that differs - the game drives it from `Cheek_Ctrl`'s position, because a
-    /// tear morph has no locator of its own - so the token has to say `Cheek_Ctrl` or a reader would look for
-    /// a bone that does not exist.
+    /// `StaticTear_Ctrl` is the one that differs - the game drives it from `Cheek_Ctrl`'s position - so the
+    /// token has to say `Cheek_Ctrl` or a reader would look for a bone that does not exist.
     /// </summary>
     private static string LocatorName(FacialOtherMorph morph)
     {
@@ -1054,31 +1076,6 @@ public class ModelExporter
         return found;
     }
 
-    private static List<Transform> MorphLocators(UmaContainerCharacter character)
-    {
-        var locators = new List<Transform>();
-        if (character == null) return locators;
-        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
-        if (facial == null || facial.OtherMorphs == null) return locators;
-        foreach (FacialOtherMorph morph in facial.OtherMorphs)
-        {
-            if (morph == null || morph.locator == null) continue;
-            if (!locators.Contains(morph.locator)) locators.Add(morph.locator);
-        }
-        return locators;
-    }
-
-    /// <summary>
-    /// The renderers a material-bound extra morph drives - the cheek decal, on a normal character.
-    ///
-    /// It is switched off in the viewer (`UmaContainerCharacter.cs:912-914`, `SetActive(false)`) because the
-    /// game only draws it once a driven key raises `_CheekRate`, and an inactive renderer is not in
-    /// `GetComponentsInChildren<Renderer>()`. So the walk over the character misses it, its material never
-    /// reaches the pmx, and a `morph=` token for it would have no material to sit on.
-    ///
-    /// Only the parts these morphs bind are added, not every inactive renderer: the rest of the inactive set
-    /// is hidden variants and effect clones that an export should not start carrying.
-    /// </summary>
     public static List<Renderer> MorphPartRenderers(UmaContainerCharacter character)
     {
         var found = new List<Renderer>();
@@ -1174,25 +1171,27 @@ public class ModelExporter
                 part.Material = mat;
                 mat.Name = mat.NameEn = material.name.Replace(" (Instance)","");
                 mat.DiffuseColor = Color.white;
-                // a morph-driven part is invisible at rest: the game's `_CheekRate` is 0 until a driven key
-                // raises it, so the decal multiplies nothing. Exporting it at full alpha would paint the
-                // blush onto every model whether or not anything drives it.
-                if (restInvisible != null && restInvisible.Contains(renderer))
+                bool decal = restInvisible != null && restInvisible.Contains(renderer);
+                mat.SpecularColor = Color.clear;
+                mat.AmbientColor = Color.white * 0.5f;
+                mat.Shiness = 5;
+                mat.CastSelfShadow = !decal;
+                mat.DrawGroundShadow = !decal;
+                mat.DrawSelfShadow = !decal;
+                mat.EdgeColor = Color.black;
+                mat.EdgeSize = decal ? 0f : 0.4f;
+                mat.DrawEdge = !decal;
+                // a decal part is hidden by its own geometry, not by its alpha: every vertex of it sits on one
+                // point inside the head, so at rest it is a handful of zero-area triangles and draws nothing,
+                // and a deploy morph puts it back. The material therefore stays at full alpha - zeroing it
+                // would make the *deployed* state invisible as well, which is the whole point of the morph.
+                if (decal)
                 {
-                    mat.DiffuseColor = new Color(1f, 1f, 1f, 0f);
                     // double sided, because a decal is and because these parts arrive through instances the
                     // game mirrors: a mirrored transform reverses the triangle winding, so with backface
                     // culling on the copy for the right eye disappears no matter what its alpha says.
                     mat.DrawDoubleFace = true;
                 }
-                mat.SpecularColor = Color.clear;
-                mat.AmbientColor = Color.white * 0.5f;
-                mat.Shiness = 5;
-                mat.CastSelfShadow = true;
-                mat.DrawGroundShadow = true;
-                mat.DrawSelfShadow = true;
-                mat.EdgeColor = Color.black;
-                mat.EdgeSize = 0.4f;
                 // The writer writes the comment with no null guard, and MMD treats an empty comment as "none",
                 // so every material starts out with an empty one
                 mat.MetaInfo = string.Empty;
@@ -1253,8 +1252,13 @@ public class ModelExporter
                     mat.SpecularColor = new Color(specular.r * specularPower, specular.g * specularPower,
                                                   specular.b * specularPower, 1f);
                     mat.EdgeColor = PropertyColour(material, "_OutlineColor", mat.EdgeColor);
-                    mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
-                    mat.DrawEdge = mat.EdgeSize > 0f;
+                    // a decal keeps the no-outline values set above: the uma shader's own outline width would
+                    // wrap the blush and the manga eyes in the character's outline colour
+                    if (!decal)
+                    {
+                        mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
+                        mat.DrawEdge = mat.EdgeSize > 0f;
+                    }
                 }
                 part.BaseShift = baseShift + mesh.GetSubMesh(i).indexStart;
                 part.TriangleIndexNum = mesh.GetSubMesh(i).indexCount;
@@ -1265,7 +1269,9 @@ public class ModelExporter
         return parts.ToArray();
     }
 
-    private static Vertex[] ReadVerticesAndTriangles(List<Renderer> renderers, List<Transform> bones, ref List<int> triangleList, Transform root)
+    private static Vertex[] ReadVerticesAndTriangles(List<Renderer> renderers, List<Transform> bones,
+                                                     ref List<int> triangleList, Transform root,
+                                                     List<(Renderer renderer, int start, int count)> ranges)
     {
         List<Vertex> verticesList = new List<Vertex>();
         int vertexOffset = 0;
@@ -1327,6 +1333,7 @@ public class ModelExporter
                 }
 
 
+                if (ranges != null) ranges.Add((renderer, vertexOffset, vertices.Length));
                 foreach (var triangle in mesh.triangles)
                 {
                     triangleList.Add(triangle + vertexOffset);
@@ -1446,6 +1453,7 @@ public class ModelExporter
                     if (VertexDumpPath != null) RecordVertex(vertex, renderer.name);
                 }
 
+                if (ranges != null) ranges.Add((renderer, vertexOffset, vertices.Length));
                 foreach (var triangle in mesh.triangles)
                 {
                     triangleList.Add(triangle + vertexOffset);
