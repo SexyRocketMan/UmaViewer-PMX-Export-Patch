@@ -1061,7 +1061,7 @@ public class ModelExporter
     /// so each step is 45 degrees and a cross-fade between two neighbours lands any rotation in between.</summary>
     /// <summary>How far the highlight layer sits in front of the eye, in file units. Small: it is a copy of the
     /// eye surface, not a part of its own.</summary>
-    private const float HighlightLift = 0.03f;
+    private const float HighlightLift = 0.002f;
 
     /// <summary>
     /// The teary-eye highlights, as geometry: a copy of the eye faces per `eyehi` map, drawn over the eye.
@@ -1088,13 +1088,18 @@ public class ModelExporter
         }
         if (eyePart == null) return;
 
+        // the masked copies carry the highlight as alpha (see TextureExporter.BakeHighlight); the original maps
+        // are black where there is no highlight, so they are only the fallback
         var highlights = new List<MMDTexture>();
+        var masked = new List<MMDTexture>();
         foreach (MMDTexture texture in model.TextureList)
         {
             if (texture == null || texture.TexturePath == null) continue;
             if (texture.TexturePath.IndexOf("eyehi", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
-            highlights.Add(texture);
+            if (texture.TexturePath.IndexOf("_mask", System.StringComparison.OrdinalIgnoreCase) >= 0) masked.Add(texture);
+            else highlights.Add(texture);
         }
+        if (masked.Count > 0) highlights = masked;
         if (highlights.Count == 0) return;
 
         var triangles = new List<int>(model.TriangleIndexes);

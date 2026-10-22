@@ -93,6 +93,40 @@ public class TextureExporter
         return baked;
     }
 
+    /// <summary>
+    /// A highlight map turned into one an MMD material can draw: white where the highlight is, transparent
+    /// everywhere else.
+    ///
+    /// The eye shader does not carry the highlight in the map's alpha - it carries it in the *colour* and masks
+    /// it with `step(_Show, texture)`, so drawn as it is the layer paints black over the eye wherever there is no
+    /// highlight. The mask is that step, softened a little at the edge so the shape is not aliased: alpha from
+    /// the luminance, thresholded, and the colour forced to white because a highlight is light.
+    /// </summary>
+    static public Texture2D BakeHighlight(Texture2D source)
+    {
+        if (source == null) return null;
+        Texture2D readable = duplicateTexture(source);
+        Color[] pixels = readable.GetPixels();
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            Color p = pixels[i];
+            float lum = Mathf.Max(p.r, Mathf.Max(p.g, p.b));
+            float alpha = Mathf.Clamp01((lum - 0.18f) / (0.45f - 0.18f));
+            pixels[i] = new Color(1f, 1f, 1f, alpha);
+        }
+        Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
+        baked.name = HighlightName(source.name);
+        baked.SetPixels(pixels);
+        baked.Apply();
+        return baked;
+    }
+
+    /// <summary>The name the baked highlight is written under.</summary>
+    static public string HighlightName(string sourceName)
+    {
+        return sourceName + "_mask";
+    }
+
     /// <summary>The name the baked copy is written under; the exporter looks it up by this.</summary>
     static public string BlushName(string sourceName)
     {
@@ -193,6 +227,19 @@ public class TextureExporter
                             // a multiply decal also gets the bake that lets an MMD material draw it (see
                             // BakeBlush); written beside the original, which stays for anyone who wants the
                             // game's own map
+                            // the eye highlight maps are colour-masked in the game's shader, not alpha-masked:
+                            // they need the baked copy that carries the mask as alpha, or the layer paints black
+                            if (tex_name.IndexOf("eyehi", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                Texture2D highlight = BakeHighlight(mat_texture);
+                                if (highlight != null)
+                                {
+                                    string highlightPath = savePath + highlight.name + ".png";
+                                    string highlightDep = "Texture2D/" + highlight.name + ".png";
+                                    if (!textureNames.Contains(highlightDep)) textureNames.Add(highlightDep);
+                                    File.WriteAllBytes(highlightPath, highlight.EncodeToPNG());
+                                }
+                            }
                             if (IsMultiply(mat))
                             {
                                 Texture2D blush = BakeBlush(mat_texture);
