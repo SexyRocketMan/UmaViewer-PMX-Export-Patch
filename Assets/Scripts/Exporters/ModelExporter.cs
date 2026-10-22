@@ -35,7 +35,8 @@ public class ModelExporter
         AddBlendShape(container);
         BuildBillboard(container);
 
-        var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject);
+        var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject,
+                                                       MorphPartRenderers(container));
         RawMMDModel model;
         // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
         // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
@@ -68,7 +69,8 @@ public class ModelExporter
     public static void ExportModel(UmaContainer container, string path)
     {
 
-        var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject);
+        var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject,
+                                                       MorphPartRenderers(container as UmaContainerCharacter));
         var model = ReadPMXModel(container, textures);
 
         if (FbxExporter.IsFbxPath(path))
@@ -177,6 +179,17 @@ public class ModelExporter
 
         //Read vertices And triangles
         List<Renderer> renderers = new List<Renderer>(container.GetComponentsInChildren<Renderer>());
+        // the parts a material-bound extra morph drives are inactive, so the walk above misses them. Added
+        // here, before the vertices, so their triangles are in the mesh; they are drawn at zero alpha until a
+        // driver raises them, which is the state the game has them in at rest.
+        var morphParts = MorphPartRenderers(character);
+        var restInvisible = new HashSet<Renderer>();
+        foreach (Renderer renderer in morphParts)
+        {
+            if (renderer == null) continue;
+            if (!renderers.Contains(renderer)) renderers.Add(renderer);
+            restInvisible.Add(renderer);
+        }
         List<int> triangles = new List<int>();
         model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform);
         model.TriangleIndexes = triangles.ToArray();
@@ -187,7 +200,7 @@ public class ModelExporter
             model.TextureList.Add(new MMDTexture(texture));
         }
 
-        model.Parts = ReadPartMaterials(renderers, model, character);
+        model.Parts = ReadPartMaterials(renderers, model, character, restInvisible);
         // the locators the extra morphs are bound to, so a driver has a node to read. Added after the vertices
         // are read: the skinning records bone indices, and appending at the end cannot move any of them.
         var locators = Config.Instance == null || Config.Instance.PmxExtraMorphs
@@ -915,8 +928,45 @@ public class ModelExporter
         return locators;
     }
 
+    /// <summary>
+    /// The renderers a material-bound extra morph drives - the cheek decal, on a normal character.
+    ///
+    /// It is switched off in the viewer (`UmaContainerCharacter.cs:912-914`, `SetActive(false)`) because the
+    /// game only draws it once a driven key raises `_CheekRate`, and an inactive renderer is not in
+    /// `GetComponentsInChildren<Renderer>()`. So the walk over the character misses it, its material never
+    /// reaches the pmx, and a `morph=` token for it would have no material to sit on.
+    ///
+    /// Only the parts these morphs bind are added, not every inactive renderer: the rest of the inactive set
+    /// is hidden variants and effect clones that an export should not start carrying.
+    /// </summary>
+    public static List<Renderer> MorphPartRenderers(UmaContainerCharacter character)
+    {
+        var found = new List<Renderer>();
+        if (character == null) return found;
+        if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return found;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null) return found;
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null || morph.BindGameObject == null || morph.BindProperties == null) continue;
+            bool materialBound = false;
+            foreach (BindProperty property in morph.BindProperties)
+            {
+                if (property == null) continue;
+                if (property.Type == BindProperty.BindType.Texture || property.Type == BindProperty.BindType.Shader)
+                    materialBound = true;
+            }
+            if (!materialBound) continue;
+            foreach (Renderer renderer in morph.BindGameObject.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer != null && !found.Contains(renderer)) found.Add(renderer);
+            }
+        }
+        return found;
+    }
+
     private static Part[] ReadPartMaterials(List<Renderer> renderers, RawMMDModel model,
-                                            UmaContainerCharacter character)
+                                            UmaContainerCharacter character, HashSet<Renderer> restInvisible)
     {
         List<Part> parts = new List<Part>();
         int baseShift = 0;
@@ -963,6 +1013,13 @@ public class ModelExporter
                 part.Material = mat;
                 mat.Name = mat.NameEn = material.name.Replace(" (Instance)","");
                 mat.DiffuseColor = Color.white;
+                // a morph-driven part is invisible at rest: the game's `_CheekRate` is 0 until a driven key
+                // raises it, so the decal multiplies nothing. Exporting it at full alpha would paint the
+                // blush onto every model whether or not anything drives it.
+                if (restInvisible != null && restInvisible.Contains(renderer))
+                {
+                    mat.DiffuseColor = new Color(1f, 1f, 1f, 0f);
+                }
                 mat.SpecularColor = Color.clear;
                 mat.AmbientColor = Color.white * 0.5f;
                 mat.Shiness = 5;

@@ -27,7 +27,15 @@ public class TextureExporter
         return readableText;
     }
 
-    static public string[] ExportAllTexture(string path, GameObject gameobj)
+    /// <summary>
+    /// Every texture the model's materials use, written to `Texture2D/` next to the export.
+    ///
+    /// `extra` is for renderers that are not part of the usual walk - the facial parts a morph drives are
+    /// switched off in the viewer until a driven key raises their rate, and an inactive renderer is not in
+    /// <see cref="GameObject.GetComponentsInChildren{T}()"/>, so the cheek texture would never be written even
+    /// though the material that uses it is exported.
+    /// </summary>
+    static public string[] ExportAllTexture(string path, GameObject gameobj, IEnumerable<Renderer> extra = null)
     {
         string savePath = path + "/Texture2D/";
         List<string> textureNames = new List<string>();
@@ -36,10 +44,12 @@ public class TextureExporter
             Directory.CreateDirectory(savePath);
         }
 
-        foreach (Renderer renderer in gameobj.transform.GetComponentsInChildren<Renderer>())
+        void AddRenderer(Renderer renderer)
         {
+            if (renderer == null) return;
             foreach (Material mat in renderer.sharedMaterials)
             {
+                if (mat == null) continue;
                 //»ñµÃ²ÄÖÊµÄËùÓÐÊôÐÔÃû£¬Èç¹û¸ÄÊôÐÔÃû¶ÔÓ¦µÄÊÇÌùÍ¼£¬ÌáÈ¡¸ÃÌùÍ¼
                 Shader mat_shader = mat.shader;
                 int p_num = mat_shader.GetPropertyCount();
@@ -60,7 +70,7 @@ public class TextureExporter
                                 textureNames.Add(dpath);
                             }
                             if (!File.Exists(tex_path))
-                            {   
+                            {
 
                                 mat_texture = duplicateTexture(mat_texture);
 
@@ -83,6 +93,18 @@ public class TextureExporter
                         }
                     }
                 }
+            }
+        }
+
+        foreach (Renderer renderer in gameobj.transform.GetComponentsInChildren<Renderer>())
+        {
+            AddRenderer(renderer);
+        }
+        if (extra != null)
+        {
+            foreach (Renderer renderer in extra)
+            {
+                AddRenderer(renderer);
             }
         }
         Debug.Log($"Exported textures: {textureNames.ToArray()}");
