@@ -73,3 +73,35 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
   beside the game's own maps.
 
 The deploy-morph mechanism is described in `PMX_EXTENSIONS.md`; the game-side inventory is `MORPHS.md`.
+
+## The teary eye highlights
+
+The effect that makes a character look like they are about to cry is not one of the five morphs: it is the
+**eye highlights**, and it has no code in this viewer at all, which is why nothing in the UI reaches it.
+
+What the evidence is:
+
+* `Assets/Resources/Materials/UmaShaderEye.shader` draws three separate highlight maps over the eye -
+  `_Highlight00`, `_Highlight01`, `_Highlight02` (`tex_chr*_eyehi00/01/02`) - sampled at a *different* UV from the
+  eye itself (`altUv = (uv.x * 4, uv.y * 2)`) and gated by two thresholds, `_Show00` and `_Show01`, through
+  `step()`. Their texture transforms are material properties (`_Highlight00_ST` …), i.e. animatable per material
+  instance.
+* The viewer never writes any of those: `Director.cs` only drives rim and chara colours. So the animation is the
+  game's own: an intro where the highlight texture transform (and/or `_Show`) swings around the eye - the
+  "swirl" - and then a small oscillation at a few hertz, the jitter that sells the wet look.
+* The umamusume eye shader in the game is the same three-input shape as the one rebuilt here, so the effect is a
+  *texture-transform animation on the highlight layers*, not new geometry.
+
+Two ways this could come to MMD, both of them the same tool as the animated tears:
+
+1. **Split the highlights into their own quads** (as the eye manga already are) and give each one a **stack of UV
+   morphs** - a swirl is a rotation of the highlight quad's UVs, a jitter is a tiny oscillation - with the weights
+   animated over time. This is the faithful route: MMD morphs then carry the whole effect and nothing needs the
+   addon.
+2. **Material morphs** on the eye material can change a *texture index* but not a texture transform, so an MMD
+   material morph can switch which highlight map is shown but cannot scroll it. Not enough on its own.
+
+Animations on the deploy morphs (and on such UV morphs) are the other half of this: a pmx carries keys only in a
+**vmd**, and the exporter's motion side (`UnityHumanoidVMDRecorder`) writes bone and the standard morph channels
+but has no export for these extra morph names yet. That is what "animations on the morphs" means here - the
+morphs exist and can be posed by hand, but nothing samples a game animation onto them yet.

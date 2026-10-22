@@ -201,6 +201,12 @@ public class ModelExporter
         // *rest* in - and a collapsed decal is a handful of zero-area triangles, invisible, wherever the point
         // is. This is the idiom MMD models use for a hidden accessory: Appearance Miku hides two eye highlights
         // with `HL消1`/`HL消2`, which move 58 and 116 vertices onto a single point each.
+        //
+        // The deployed position is nudged outward from the head along its own radius: the parts were drawn at
+        // the surface they sit on, so at the old position a deployed decal is coplanar with the face - the eye
+        // manga disappear behind the eye the moment an eye-hide morph moves it, and the blush z-fights the
+        // cheek it is painted on, which a renderer shows as shadow acne across the face. Offsetting the deploy
+        // target rather than the rest position keeps the rest state exactly as hidden as before.
         var deployed = new Dictionary<int, Vector3>();
         Vector3 collapsePoint = Vector3.zero;
         if (morphParts.Count > 0)
@@ -216,7 +222,13 @@ public class ModelExporter
                 if (!restInvisible.Contains(range.renderer)) continue;
                 for (int i = range.start; i < range.start + range.count && i < model.Vertices.Length; i++)
                 {
-                    deployed[i] = model.Vertices[i].Coordinate;
+                    Vector3 where = model.Vertices[i].Coordinate;
+                    Vector3 outward = where - collapsePoint;
+                    if (outward.sqrMagnitude > 1e-8f)
+                    {
+                        where += outward * DecalLift;
+                    }
+                    deployed[i] = where;
                     model.Vertices[i].Coordinate = collapsePoint;
                 }
             }
@@ -974,6 +986,14 @@ public class ModelExporter
         }
         return morphs;
     }
+
+    /// <summary>
+    /// How far a deployed decal is lifted off the surface it was painted on, as a fraction of its distance from
+    /// the head bone - 2% of the radius, a couple of millimetres on a real head. A fraction rather than an
+    /// absolute length because the export is not in one unit system: the same decal is a few units from the head
+    /// bone in file space and a few centimetres in the viewer's, and only the ratio means the same thing in both.
+    /// </summary>
+    private const float DecalLift = 0.02f;
 
     /// <summary>
     /// The expressions the four eye manga draw, in the order the game selects them. The names are the faces

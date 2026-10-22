@@ -45,11 +45,45 @@ public class TextureExporter
         // a map with no drop at all is not a blush; leave it alone rather than write a fully transparent copy
         if (strongest <= 0.004f) return null;
 
+        // the map is small and its gradient is quantised: the raw channel drop comes in a few dozen steps, which an
+        // alpha of 0.55 turns into a few dozen visible rings. Ring the field with a light 3x3 average first - the
+        // blush has no detail worth keeping at that scale, only its shape.
+        int width = readable.width, height = readable.height;
+        float[] drop = new float[pixels.Length];
+        for (int i = 0; i < pixels.Length; i++) drop[i] = 1f - Mathf.Min(pixels[i].g, pixels[i].b);
+        float[] smoothed = new float[pixels.Length];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float sum = 0f;
+                int count = 0;
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int yy = y + dy;
+                    if (yy < 0 || yy >= height) continue;
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int xx = x + dx;
+                        if (xx < 0 || xx >= width) continue;
+                        sum += drop[yy * width + xx];
+                        count++;
+                    }
+                }
+                smoothed[y * width + x] = sum / count;
+            }
+        }
         for (int i = 0; i < pixels.Length; i++)
         {
             Color p = pixels[i];
-            float strength = (1f - Mathf.Min(p.g, p.b)) / strongest;
+            float strength = smoothed[i] / strongest;
             float alpha = Mathf.Pow(Mathf.Clamp01(strength), BlushCurve) * BlushMaxAlpha;
+            // an 8 bit alpha has 256 steps, and a blush that spans a few centimetres of face across 0.55 of them
+            // shows every step as a ring. A fixed per texel offset of a fraction of a step, hashed so it does not
+            // line up with the texture's own grid, turns the rings into grain.
+            uint hash = (uint)(i * 2654435761u);
+            float dither = ((hash >> 8) % 256u) / 255f - 0.5f;
+            alpha = Mathf.Clamp01(alpha + dither / 255f * 1.5f);
             pixels[i] = new Color(BlushTint.r, BlushTint.g, BlushTint.b, alpha);
         }
         Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
