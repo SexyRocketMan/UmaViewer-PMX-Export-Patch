@@ -995,7 +995,7 @@ public class ModelExporter
     /// absolute length because the export is not in one unit system: the same decal is a few units from the head
     /// bone in file space and a few centimetres in the viewer's, and only the ratio means the same thing in both.
     /// </summary>
-    private const float DecalLift = 0.05f;
+    private const float DecalLift = 0.06f;
 
     /// <summary>How many UV steps one full spin is divided into. Seven morphs plus the rest state make eight,
     /// so each step is 45 degrees and a cross-fade between two neighbours lands any rotation in between.</summary>
