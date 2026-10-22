@@ -36,7 +36,8 @@ public class ModelExporter
         BuildBillboard(container);
 
         var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject,
-                                                       MorphPartRenderers(container));
+                                                       MorphPartRenderers(container),
+                                                       MorphPartTextures(container));
         RawMMDModel model;
         // The face locators that drive the extra morphs are animated, not posed: their transforms sit at the
         // locator object's origin until a face clip writes them, which is why an export put them all at the
@@ -1027,6 +1028,30 @@ public class ModelExporter
     private static string LocatorName(FacialOtherMorph morph)
     {
         return morph.locator != null ? morph.locator.name : morph.name;
+    }
+
+    /// <summary>
+    /// Textures the extra morphs bind that no material necessarily uses - the second cheek map is one: the game
+    /// swaps it into the same slot when the locator raises the other axis, so it is only ever referenced by the
+    /// morph. Without it in the exported folder a consumer cannot swap to it.
+    /// </summary>
+    public static List<Texture2D> MorphPartTextures(UmaContainerCharacter character)
+    {
+        var found = new List<Texture2D>();
+        if (character == null) return found;
+        if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return found;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null) return found;
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null || morph.BindProperties == null) continue;
+            foreach (BindProperty property in morph.BindProperties)
+            {
+                if (property == null || property.Type != BindProperty.BindType.Texture) continue;
+                if (property.BindTexture is Texture2D texture && !found.Contains(texture)) found.Add(texture);
+            }
+        }
+        return found;
     }
 
     private static List<Transform> MorphLocators(UmaContainerCharacter character)

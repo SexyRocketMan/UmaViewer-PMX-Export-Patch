@@ -35,7 +35,8 @@ public class TextureExporter
     /// <see cref="GameObject.GetComponentsInChildren{T}()"/>, so the cheek texture would never be written even
     /// though the material that uses it is exported.
     /// </summary>
-    static public string[] ExportAllTexture(string path, GameObject gameobj, IEnumerable<Renderer> extra = null)
+    static public string[] ExportAllTexture(string path, GameObject gameobj, IEnumerable<Renderer> extra = null,
+                                            IEnumerable<Texture2D> extraTextures = null)
     {
         string savePath = path + "/Texture2D/";
         List<string> textureNames = new List<string>();
@@ -105,6 +106,22 @@ public class TextureExporter
             foreach (Renderer renderer in extra)
             {
                 AddRenderer(renderer);
+            }
+        }
+        // textures a morph binds but no material uses: the second cheek map is one, and without it in the folder
+        // the addon cannot swap to it when the locator raises that axis
+        if (extraTextures != null)
+        {
+            foreach (Texture2D texture in extraTextures)
+            {
+                if (texture == null) continue;
+                string tex_name = texture.name;
+                string tex_path = savePath + tex_name + ".png";
+                var dpath = "Texture2D/" + tex_name + ".png";
+                if (!textureNames.Contains(dpath)) textureNames.Add(dpath);
+                if (File.Exists(tex_path)) continue;
+                var copy = duplicateTexture(texture);
+                File.WriteAllBytes(tex_path, copy.EncodeToPNG());
             }
         }
         Debug.Log($"Exported textures: {textureNames.ToArray()}");
