@@ -67,6 +67,9 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
 ## What the export carries today
 
 * `Blush`, `Tear_L`, `Tear_R` - one deploy morph per decal part.
+* `@_@_L_spin1` … `@_@_R_spin7` - the dizzy face's turn, seven UV morphs per eye at 45° steps (203 vertex
+  morphs and 14 UV morphs on character 1001). You spin it by cross-fading neighbours: `spin1` → `spin2` → … →
+  `spin7` → back to none, which is the 8th step and lands on the rest orientation.
 * `@_@_L`, `@_@_R`, `✦_✦_L`, `✦_✦_R`, `>_<_L`, `>_<_R`, `o_o_L`, `o_o_R` - the eye manga.
 * The five `morph=` / `object morphs:` token groups in the comments, for the parts a vertex morph cannot hold.
 * `Texture2D/tex_chr1001_00_cheek0_blush.png` and `…cheek1_blush.png` - the blush baked for alpha blending,

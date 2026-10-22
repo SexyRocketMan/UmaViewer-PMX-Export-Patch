@@ -247,10 +247,12 @@ public class ModelExporter
         if (deployed.Count > 0)
         {
             var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
-            if (deploy.Count > 0)
+            var spin = SpinMorphs(character, model, vertexRanges, restInvisible, deployed);
+            if (deploy.Count > 0 || spin.Count > 0)
             {
                 var all = new List<Morph>(model.Morphs);
                 all.AddRange(deploy);
+                all.AddRange(spin);
                 model.Morphs = all.ToArray();
             }
         }
@@ -994,6 +996,112 @@ public class ModelExporter
     /// bone in file space and a few centimetres in the viewer's, and only the ratio means the same thing in both.
     /// </summary>
     private const float DecalLift = 0.04f;
+
+    /// <summary>How many UV steps one full spin is divided into. Seven morphs plus the rest state make eight,
+    /// so each step is 45 degrees and a cross-fade between two neighbours lands any rotation in between.</summary>
+    private const int SpinSteps = 8;
+
+    /// <summary>
+    /// The UV morphs that make the dizzy face dizzy: the `@_@` decal's texture rotates, and no vertex moves.
+    ///
+    /// Each morph is one step of the turn (a rotation of the quad's own UVs about their centre), so the parts
+    /// of a spin are the same picture rotated. A continuous spin is an animation that cross-fades consecutive
+    /// morphs - linear weights over a linear UV delta add up to a linear rotation, so `w_k` falling while
+    /// `w_{k+1}` rises is exactly the turn between them, with no easing to fake. The rest state is the decal
+    /// at weight 0 everywhere, which is the orientation the game draws it in.
+    /// </summary>
+    private static List<Morph> SpinMorphs(UmaContainerCharacter character, RawMMDModel model,
+                                          List<(Renderer renderer, int start, int count)> ranges,
+                                          HashSet<Renderer> restInvisible,
+                                          Dictionary<int, Vector3> deployed)
+    {
+        var morphs = new List<Morph>();
+        if (character == null) return morphs;
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial == null || facial.OtherMorphs == null) return morphs;
+
+        var rangeOf = new Dictionary<Renderer, (int start, int count)>();
+        foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
+
+        // only the `@_@` face spins - the others are still pictures
+        string spinFace = MangaFaces[0];
+        foreach (FacialOtherMorph morph in facial.OtherMorphs)
+        {
+            if (morph == null || morph.BindProperties == null) continue;
+            var parts = new List<GameObject>();
+            foreach (BindProperty property in morph.BindProperties)
+            {
+                if (property == null || property.BindPrefabs == null) continue;
+                foreach (GameObject prefab in property.BindPrefabs)
+                {
+                    if (prefab == null || parts.Contains(prefab)) continue;
+                    if (prefab.name.IndexOf("emo_eye_000", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    parts.Add(prefab);
+                }
+            }
+
+            foreach (GameObject part in parts)
+            {
+                var indices = new List<int>();
+                var centre = Vector3.zero;
+                int placed = 0;
+                foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (renderer == null || !restInvisible.Contains(renderer)) continue;
+                    if (!rangeOf.TryGetValue(renderer, out var range)) continue;
+                    for (int i = range.start; i < range.start + range.count; i++)
+                    {
+                        indices.Add(i);
+                        if (!deployed.TryGetValue(i, out Vector3 where)) continue;
+                        centre += where;
+                        placed++;
+                    }
+                }
+                if (indices.Count < 3) continue;
+                centre = placed > 0 ? centre / placed : Vector3.zero;
+
+                var uv = new Vector2[indices.Count];
+                Vector2 pivot = Vector2.zero;
+                for (int i = 0; i < indices.Count; i++)
+                {
+                    uv[i] = model.Vertices[indices[i]].UvCoordinate;
+                    pivot += uv[i];
+                }
+                pivot /= uv.Length;
+
+                string name = spinFace + "_" + SideOf(character, centre);
+                for (int step = 1; step < SpinSteps; step++)
+                {
+                    float angle = Mathf.PI * 2f * step / SpinSteps;
+                    float cos = Mathf.Cos(angle), sin = Mathf.Sin(angle);
+                    var data = new List<Morph.MorphData>();
+                    for (int i = 0; i < indices.Count; i++)
+                    {
+                        Vector2 from = uv[i] - pivot;
+                        Vector2 to = new Vector2(from.x * cos - from.y * sin, from.x * sin + from.y * cos);
+                        Vector2 delta = to - from;
+                        if (delta.sqrMagnitude < 1e-12f) continue;
+                        data.Add(new Morph.UvMorphData
+                        {
+                            VertexIndex = indices[i],
+                            Offset = new Vector4(delta.x, delta.y, 0f, 0f)
+                        });
+                    }
+                    if (data.Count == 0) continue;
+                    string morphName = name + "_spin" + step;
+                    morphs.Add(new Morph
+                    {
+                        Name = morphName,
+                        NameEn = morphName,
+                        Category = Morph.MorphCategory.MorphCatOther,
+                        Type = Morph.MorphType.MorphTypeUv,
+                        MorphDatas = data.ToArray()
+                    });
+                }
+            }
+        }
+        return morphs;
+    }
 
     /// <summary>
     /// The expressions the four eye manga draw, in the order the game selects them. The names are the faces
