@@ -966,20 +966,38 @@ public class ModelExporter
                 if (property.Type == BindProperty.BindType.Texture || property.Type == BindProperty.BindType.Shader)
                     continue;
                 // the objects by name, without the runtime's " (Clone)" and without repeats: the eye manga are
-                // the same four prefabs twice, once for each eye, and nothing outside the game needs to know
-                var names = new List<string>();
+                // the same four prefabs twice, once for each eye, and nothing outside the game needs to know.
+                // Each is followed by '>' and the materials it is drawn with, because a consumer acts on
+                // materials - the object name is not a material name (`pfb_eff_chr_emo_eye_000` is drawn by
+                // `mtl_eff_chr_emo_eye_000` here, which happens to look like a rename and is not one).
+                var entries = new List<string>();
                 if (property.BindPrefabs != null)
                 {
                     foreach (GameObject prefab in property.BindPrefabs)
                     {
                         if (prefab == null) continue;
                         string plain = prefab.name.Replace(" (Clone)", "").Replace("(Clone)", "");
-                        if (!names.Contains(plain)) names.Add(plain);
+                        var materials = new List<string>();
+                        foreach (Renderer renderer in prefab.GetComponentsInChildren<Renderer>(true))
+                        {
+                            // only the renderers the model actually carries: these prefabs can hang a
+                            // material on something that is not a mesh (`Lit` on a particle, say), and a token
+                            // naming a material that is not in the file is just noise for whoever reads it
+                            if (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer)) continue;
+                            foreach (Material part in renderer.sharedMaterials)
+                            {
+                                if (part == null) continue;
+                                string name = part.name.Replace(" (Instance)", "");
+                                if (!materials.Contains(name)) materials.Add(name);
+                            }
+                        }
+                        string entry = materials.Count > 0 ? plain + ">" + string.Join("+", materials) : plain;
+                        if (!entries.Contains(entry)) entries.Add(entry);
                     }
                 }
                 objects.Append(objects.Length > 0 ? ";" : "").Append(LocatorName(morph)).Append(':')
                        .Append(property.Type).Append(':').Append(property.Part);
-                if (names.Count > 0) objects.Append(':').Append(string.Join(",", names));
+                if (entries.Count > 0) objects.Append(':').Append(string.Join(",", entries));
             }
         }
 
