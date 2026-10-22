@@ -126,10 +126,15 @@ them; their animation is whatever the `*_driven` clips write, exactly as the gam
 An export with the flag off has none of them: 437 bones instead of 444 on 1001, no `morph=` token, and no
 `extra morphs:` / `object morphs:` line.
 
-They have no rest position of their own: the face clips write their transforms, and until one plays they sit at
-the `DrivenKeyLocator` object's origin - the character's feet. They are therefore placed in front of the head
-and 2 cm apart, one above the next, purely so a rigger can find and pick them. Where a locator's rest position
-is does not affect a driver: it reads the pose's local channels, which are offsets from rest.
+They have no rest position of their own, anywhere in the game's data: the `drivenkeylocator` prefab is all
+zeros and the face clips write their transforms. So they are placed, by name, on the bones the face rig already
+has - `Cheek_Ctrl` at the midpoint of `Cheek_L`/`Cheek_R`, `Shade_Ctrl` at `Head_shade_start`, `Manga_Ctrl` at
+the midpoint of `Eye_L`/`Eye_R`, `Tear0`..`Tear3_Ctrl` at the `Eye_tear_attach_0n_L/R` pairs where the rig has
+them and at the eye midpoint otherwise - each nudged 1 cm along the head's forward so it sits outside the face
+mesh. Anything with a name none of those rules match falls back to the head.
+
+Where a locator's rest position is does not affect a driver: it reads the pose's local channels, which are
+offsets from rest. The placement is for the person in Blender.
 
 ## Status of the driver side
 

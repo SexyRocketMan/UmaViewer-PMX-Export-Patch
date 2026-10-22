@@ -234,11 +234,12 @@ public class ModelExporter
                     model.Bones[i].ParentIndex = 0;
             }
 
-            // The locators are animated, not posed: until a face clip writes them their transforms sit at the
-            // locator object's origin, so they were exported in a heap at the character's feet. Where the rest of
-            // a bone is does not matter to a driver - it reads the pose's local channels, which are offsets from
-            // rest - so they are moved where a rigger looks for them: in front of and above the head, one above
-            // the next so each can be picked in the viewport.
+            // The locators are animated, not posed: the game has no static position for them at all - the
+            // `drivenkeylocator` prefab is all zeros and the face clips write their transforms - so they were
+            // exported in a heap at the character's feet. Where a bone's rest is does not matter to a driver,
+            // which reads the pose's local channels, so they are placed on the bones the face rig already has,
+            // where a rigger would look for them: the cheeks for Cheek_Ctrl, the shade start for Shade_Ctrl,
+            // the eyes for the manga and the tear controls.
             Transform head = null;
             foreach (Transform bone in bones)
             {
@@ -246,16 +247,54 @@ public class ModelExporter
             }
             if (head != null)
             {
-                Vector3 origin = head.position + head.forward * 0.04f;
+                var socket = new Dictionary<string, Vector3>();
+                for (int b = 0; b < model.Bones.Length; b++) socket[model.Bones[b].Name] = model.Bones[b].Position;
+                Vector3 Mid(string first, string second)
+                {
+                    if (socket.TryGetValue(first, out Vector3 a) && socket.TryGetValue(second, out Vector3 b))
+                        return (a + b) * 0.5f;
+                    return Vector3.zero;
+                }
+                var placed = new Dictionary<string, Vector3>();
+                int tear = 0;
                 for (int i = 0; i < locators.Count; i++)
                 {
                     string name = locators[i] != null ? locators[i].name : string.Empty;
-                    for (int b = 0; b < model.Bones.Length; b++)
+                    string lower = name.ToLowerInvariant();
+                    Vector3 target;
+                    if (lower.Contains("cheek"))
                     {
-                        if (model.Bones[b].Name != name) continue;
-                        model.Bones[b].Position = origin + Vector3.up * (0.02f * i);
-                        break;
+                        target = Mid("Cheek_L", "Cheek_R");
+                        if (target == Vector3.zero) target = Mid("Cheek_offset_L", "Cheek_offset_R");
                     }
+                    else if (lower.Contains("shade"))
+                    {
+                        target = socket.TryGetValue("Head_shade_start", out Vector3 shade) ? shade : Vector3.zero;
+                    }
+                    else if (lower.Contains("manga"))
+                    {
+                        target = Mid("Eye_L", "Eye_R");
+                    }
+                    else if (lower.Contains("tear"))
+                    {
+                        // one per eye-attachment pair where the rig has them, the eye centre otherwise
+                        string index = (tear + 1).ToString("00");
+                        target = Mid("Eye_tear_attach_" + index + "_L", "Eye_tear_attach_" + index + "_R");
+                        if (target == Vector3.zero) target = Mid("Eye_L", "Eye_R");
+                        tear++;
+                    }
+                    else
+                    {
+                        target = Vector3.zero;
+                    }
+                    if (target == Vector3.zero) target = head.position;
+                    // slightly in front of the face, so the control is outside the head mesh and easy to grab
+                    placed[name] = target + head.forward * 0.01f;
+                }
+                for (int i = 0; i < model.Bones.Length; i++)
+                {
+                    if (placed.TryGetValue(model.Bones[i].Name, out Vector3 position))
+                        model.Bones[i].Position = position;
                 }
             }
         }
