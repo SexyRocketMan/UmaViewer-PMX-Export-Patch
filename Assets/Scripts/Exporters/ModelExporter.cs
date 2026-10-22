@@ -264,6 +264,7 @@ public class ModelExporter
         }
 
         model.Parts = ReadPartMaterials(renderers, model, character, restInvisible);
+        AddHighlightGeometry(model);
         model.Bones = ReadBones(bones);
 
         model.Morphs = ReadMorph(renderers);
@@ -1058,6 +1059,111 @@ public class ModelExporter
 
     /// <summary>How many UV steps one full spin is divided into. Seven morphs plus the rest state make eight,
     /// so each step is 45 degrees and a cross-fade between two neighbours lands any rotation in between.</summary>
+    /// <summary>How far the highlight layer sits in front of the eye, in file units. Small: it is a copy of the
+    /// eye surface, not a part of its own.</summary>
+    private const float HighlightLift = 0.03f;
+
+    /// <summary>
+    /// The teary-eye highlights, as geometry: a copy of the eye faces per `eyehi` map, drawn over the eye.
+    ///
+    /// An MMD material holds one texture, so the game's three highlight maps cannot ride on the eye material -
+    /// the game composites them in its eye shader at `uv * (4, 2)`. The copy carries that scale in its *vertex
+    /// UVs* instead, so the highlight material samples its own map one to one, and the layer needs nothing an
+    /// MMD viewer does not already do. The copy keeps each source vertex's skinning operator, so it follows the
+    /// eye bones exactly like the eye does.
+    /// </summary>
+    private static void AddHighlightGeometry(RawMMDModel model)
+    {
+        if (model == null || model.Parts == null || model.Vertices == null) return;
+        Part eyePart = null;
+        foreach (Part part in model.Parts)
+        {
+            string name = part.Material != null ? part.Material.Name : string.Empty;
+            if (name.IndexOf("_eye", System.StringComparison.OrdinalIgnoreCase) >= 0
+                && name.IndexOf("emo", System.StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                eyePart = part;
+                break;
+            }
+        }
+        if (eyePart == null) return;
+
+        var highlights = new List<MMDTexture>();
+        foreach (MMDTexture texture in model.TextureList)
+        {
+            if (texture == null || texture.TexturePath == null) continue;
+            if (texture.TexturePath.IndexOf("eyehi", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+            highlights.Add(texture);
+        }
+        if (highlights.Count == 0) return;
+
+        var triangles = new List<int>(model.TriangleIndexes);
+        var vertices = new List<Vertex>(model.Vertices);
+        var parts = new List<Part>(model.Parts);
+        int sourceStart = eyePart.BaseShift;
+        int sourceCount = eyePart.TriangleIndexNum;
+
+        foreach (MMDTexture highlight in highlights)
+        {
+            var remap = new Dictionary<int, int>();
+            var added = new List<int>();
+            for (int t = sourceStart; t < sourceStart + sourceCount; t++)
+            {
+                int index = triangles[t];
+                if (remap.TryGetValue(index, out int mapped))
+                {
+                    added.Add(mapped);
+                    continue;
+                }
+                Vertex source = model.Vertices[index];
+                var copy = new Vertex
+                {
+                    Coordinate = source.Coordinate + source.Normal * HighlightLift,
+                    Normal = source.Normal,
+                    // the highlight maps are sampled at a multiple of the eye UV (the game's `altUv`), and an
+                    // MMD material cannot scale UVs, so the scale is baked here instead
+                    UvCoordinate = new Vector2(source.UvCoordinate.x * 4f, source.UvCoordinate.y * 2f),
+                    ExtraUvCoordinate = source.ExtraUvCoordinate,
+                    SkinningOperator = source.SkinningOperator,
+                    EdgeScale = 0f
+                };
+                mapped = vertices.Count;
+                vertices.Add(copy);
+                remap[index] = mapped;
+                added.Add(mapped);
+            }
+            if (added.Count == 0) continue;
+            int shift = triangles.Count;
+            triangles.AddRange(added);
+            var material = new MMDMaterial
+            {
+                Name = eyePart.Material.Name + "_hi",
+                NameEn = eyePart.Material.Name + "_hi",
+                DiffuseColor = Color.white,
+                SpecularColor = Color.clear,
+                AmbientColor = Color.white * 0.5f,
+                Shiness = 0f,
+                DrawDoubleFace = true,
+                DrawGroundShadow = false,
+                CastSelfShadow = false,
+                DrawSelfShadow = false,
+                DrawEdge = false,
+                EdgeColor = Color.black,
+                EdgeSize = 0f,
+                Toon = null,
+                Texture = highlight,
+                SubTexture = null,
+                SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexOff,
+                MetaInfo = string.Empty
+            };
+            parts.Add(new Part { Material = material, BaseShift = shift, TriangleIndexNum = added.Count });
+        }
+
+        model.Vertices = vertices.ToArray();
+        model.TriangleIndexes = triangles.ToArray();
+        model.Parts = parts.ToArray();
+    }
+
     private const int SpinSteps = 8;
 
     /// <summary>
