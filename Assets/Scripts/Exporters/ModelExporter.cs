@@ -416,12 +416,19 @@ public class ModelExporter
             if (renderer is MeshRenderer mr)
             {
                 var meshfilter = mr.GetComponent<MeshFilter>();
-                mesh = meshfilter.mesh;
+                mesh = meshfilter != null ? meshfilter.mesh : null;
+            }
+            else if (renderer is SkinnedMeshRenderer skinned)
+            {
+                mesh = skinned.sharedMesh;
             }
             else
             {
-                mesh = ((SkinnedMeshRenderer)renderer).sharedMesh;
+                // the effect parts the facial morphs drive are not all meshes (a manga eye can be a particle or
+                // a sprite); anything without a mesh is simply not geometry this export can carry
+                continue;
             }
+            if (mesh == null) continue;
             var vertexCount = mesh.vertexCount;
 
             for (int i = 0; i < mesh.blendShapeCount; i++) 
@@ -1038,18 +1045,32 @@ public class ModelExporter
         if (facial == null || facial.OtherMorphs == null) return found;
         foreach (FacialOtherMorph morph in facial.OtherMorphs)
         {
-            if (morph == null || morph.BindGameObject == null || morph.BindProperties == null) continue;
-            bool materialBound = false;
+            if (morph == null) continue;
+
+            // the material-bound part: the object the material is on, the cheek decal
+            if (morph.BindGameObject != null)
+            {
+                foreach (Renderer renderer in morph.BindGameObject.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (renderer != null && !found.Contains(renderer)) found.Add(renderer);
+                }
+            }
+
+            // the object-bound parts: the objects the morph shows and hides - the eye manga and the static
+            // tears. They are effect prefabs the viewer instantiates and keeps inactive, so they are not in
+            // the walk either, and without them a visibility driver has nothing to hide.
+            if (morph.BindProperties == null) continue;
             foreach (BindProperty property in morph.BindProperties)
             {
-                if (property == null) continue;
-                if (property.Type == BindProperty.BindType.Texture || property.Type == BindProperty.BindType.Shader)
-                    materialBound = true;
-            }
-            if (!materialBound) continue;
-            foreach (Renderer renderer in morph.BindGameObject.GetComponentsInChildren<Renderer>(true))
-            {
-                if (renderer != null && !found.Contains(renderer)) found.Add(renderer);
+                if (property == null || property.BindPrefabs == null) continue;
+                foreach (GameObject prefab in property.BindPrefabs)
+                {
+                    if (prefab == null) continue;
+                    foreach (Renderer renderer in prefab.GetComponentsInChildren<Renderer>(true))
+                    {
+                        if (renderer != null && !found.Contains(renderer)) found.Add(renderer);
+                    }
+                }
             }
         }
         return found;
@@ -1067,12 +1088,19 @@ public class ModelExporter
             if (renderer is MeshRenderer mr)
             {
                 var meshfilter = mr.GetComponent<MeshFilter>();
-                mesh = meshfilter.mesh;
+                mesh = meshfilter != null ? meshfilter.mesh : null;
+            }
+            else if (renderer is SkinnedMeshRenderer skinned)
+            {
+                mesh = skinned.sharedMesh;
             }
             else
             {
-                mesh = ((SkinnedMeshRenderer)renderer).sharedMesh;
+                // the effect parts the facial morphs drive are not all meshes (a manga eye can be a particle or
+                // a sprite); anything without a mesh is simply not geometry this export can carry
+                continue;
             }
+            if (mesh == null) continue;
             if (!mesh.isReadable)
             {
                 try
@@ -1197,9 +1225,16 @@ public class ModelExporter
 
         foreach (Renderer renderer in renderers)
         {
+            if (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer))
+            {
+                // not a mesh renderer: the facial effect parts can be particles or sprites, and there is no
+                // geometry to read from one
+                continue;
+            }
             if (renderer is MeshRenderer mr)
             {
                 var meshfilter = mr.GetComponent<MeshFilter>();
+                if (meshfilter == null) continue;
                 //Cache this data to avoid copying arrays.
                 var mesh = meshfilter.mesh;
                 if (!mesh.isReadable)
