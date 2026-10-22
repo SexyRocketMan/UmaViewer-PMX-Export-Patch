@@ -1445,6 +1445,27 @@ public class ModelExporter
                 }
             }
         }
+
+        // The animated tears are the same kind of part but none of the morphs above owns them: they are runtime
+        // instances a `TearController` makes, off until its weight rises. They belong in this list for two
+        // reasons - the vertices that make their decals, and their *texture*, which lives on the prefab's own
+        // material and not in the character's texture set. This list is also what `ExportAllTexture` walks, so
+        // without them here their decals fall back to the first texture in the file (body diffuse).
+        if (character.TearControllers != null)
+        {
+            foreach (TearController tear in character.TearControllers)
+            {
+                if (tear == null) continue;
+                foreach (GameObject tearObject in new GameObject[] { tear.TearObject_0, tear.TearObject_1 })
+                {
+                    if (tearObject == null) continue;
+                    foreach (Renderer renderer in tearObject.GetComponentsInChildren<Renderer>(true))
+                    {
+                        if (renderer != null && !found.Contains(renderer)) found.Add(renderer);
+                    }
+                }
+            }
+        }
         return found;
     }
 
