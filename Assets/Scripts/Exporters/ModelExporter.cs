@@ -901,8 +901,8 @@ public class ModelExporter
     /// <summary>
     /// One vertex morph per decal part, carrying the offsets that put the part back where the game has it.
     ///
-    /// Named for what a user looks for: `Manga_000`..`Manga_003` for the eye manga, `Tear_L`/`Tear_R` for the
-    /// static tears, `Cheek_Show` for the blush decal. At weight 0 the part is collapsed away (the model's rest
+    /// Named for what a user looks for: `@_@_L` … `o_o_R` for the eye manga, `Tear_L`/`Tear_R` for the
+    /// static tears, `Blush` for the blush decal. At weight 0 the part is collapsed away (the model's rest
     /// state, as in the game); at 1 it is deployed.
     /// </summary>
     private static List<Morph> DeployMorphs(UmaContainerCharacter character,
@@ -993,7 +993,7 @@ public class ModelExporter
     /// absolute length because the export is not in one unit system: the same decal is a few units from the head
     /// bone in file space and a few centimetres in the viewer's, and only the ratio means the same thing in both.
     /// </summary>
-    private const float DecalLift = 0.02f;
+    private const float DecalLift = 0.04f;
 
     /// <summary>
     /// The expressions the four eye manga draw, in the order the game selects them. The names are the faces
@@ -1002,7 +1002,7 @@ public class ModelExporter
     /// </summary>
     private static readonly string[] MangaFaces = { "@_@", "✦_✦", ">_<", "o_o" };
 
-    /// <summary>The morph name a decal part is shown under: `@_@_L`, `Tear_L`, `Cheek_Show`.</summary>
+    /// <summary>The morph name a decal part is shown under: `@_@_L`, `Tear_L`, `Blush`.</summary>
     private static string DeployName(UmaContainerCharacter character, GameObject part, Vector3 centre)
     {
         string name = (part != null ? part.name : string.Empty)
@@ -1021,7 +1021,7 @@ public class ModelExporter
         }
         if (name.IndexOf("tear", System.StringComparison.OrdinalIgnoreCase) >= 0)
             return name.EndsWith("_L", System.StringComparison.OrdinalIgnoreCase) ? "Tear_L" : "Tear_R";
-        if (name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0) return "Cheek_Show";
+        if (name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0) return "Blush";
         return name;
     }
 

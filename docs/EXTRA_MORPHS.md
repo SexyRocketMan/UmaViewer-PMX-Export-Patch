@@ -8,7 +8,7 @@ inventory of those, read from the code (`Assets/Scripts/umamusume/Gallop/FacialM
 
 | morph | driven by (game) | what it does in the game | export |
 |---|---|---|---|
-| `Cheek_Ctrl` | locator scale X/Y/Z | `Texture` + `Shader` binds on the `M_Cheek` decal: `mainTexture = cheek0/1/2`, `_CheekRate` | **deploy morph `Cheek_Show`** + a baked blush map; the map pair stays in `Texture2D/` and the binding is in the material comment |
+| `Cheek_Ctrl` | locator scale X/Y/Z | `Texture` + `Shader` binds on the `M_Cheek` decal: `mainTexture = cheek0/1/2`, `_CheekRate` | **deploy morph `Blush`** + a baked blush map; the map pair stays in `Texture2D/` and the binding is in the material comment |
 | `Shade_Ctrl` | locator scale X | `Shader` bind `_faceShadowAlpha` on the face material | nothing yet - an MMD material has no such field; the addon would have to drive the uma shader's face region |
 | `Manga_Ctrl` | locator scale Y (select), scale X (enable) | `EyeSelect` + `Enable` over four manga prefabs, once per eye | **eight deploy morphs**, one per eye and expression (below) |
 | `StaticTear_Ctrl` | locator position X (L), Y (R) | `Enable` on `tearmesh_l` / `tearmesh_r`, drawn with `tex_chr_tear00` | **deploy morphs `Tear_L`, `Tear_R`** |
@@ -66,7 +66,7 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
 
 ## What the export carries today
 
-* `Cheek_Show`, `Tear_L`, `Tear_R` - one deploy morph per decal part.
+* `Blush`, `Tear_L`, `Tear_R` - one deploy morph per decal part.
 * `@_@_L`, `@_@_R`, `✦_✦_L`, `✦_✦_R`, `>_<_L`, `>_<_R`, `o_o_L`, `o_o_R` - the eye manga.
 * The five `morph=` / `object morphs:` token groups in the comments, for the parts a vertex morph cannot hold.
 * `Texture2D/tex_chr1001_00_cheek0_blush.png` and `…cheek1_blush.png` - the blush baked for alpha blending,
