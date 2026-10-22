@@ -264,13 +264,14 @@ public class ModelExporter
         }
 
         model.Parts = ReadPartMaterials(renderers, model, character, restInvisible);
-        AddHighlightGeometry(model);
+        var highlightMorphs = AddHighlightGeometry(model);
         model.Bones = ReadBones(bones);
 
         model.Morphs = ReadMorph(renderers);
         if (deployed.Count > 0)
         {
             var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
+            deploy.AddRange(highlightMorphs);
             var spin = SpinMorphs(character, model, vertexRanges, restInvisible, deployed);
             var tears = TearMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
             deploy.AddRange(tears);
@@ -1072,9 +1073,10 @@ public class ModelExporter
     /// MMD viewer does not already do. The copy keeps each source vertex's skinning operator, so it follows the
     /// eye bones exactly like the eye does.
     /// </summary>
-    private static void AddHighlightGeometry(RawMMDModel model)
+    private static List<Morph> AddHighlightGeometry(RawMMDModel model)
     {
-        if (model == null || model.Parts == null || model.Vertices == null) return;
+        var morphs = new List<Morph>();
+        if (model == null || model.Parts == null || model.Vertices == null) return morphs;
         // every part the eye material draws, not just the first one: the two eyes are two submeshes with the
         // same material name, and taking only the first highlighted one eye
         var eyeParts = new List<Part>();
@@ -1087,7 +1089,7 @@ public class ModelExporter
                 eyeParts.Add(part);
             }
         }
-        if (eyeParts.Count == 0) return;
+        if (eyeParts.Count == 0) return morphs;
         var eyeTriangles = new List<int>();
         foreach (Part part in eyeParts)
         {
@@ -1107,11 +1109,12 @@ public class ModelExporter
             else highlights.Add(texture);
         }
         if (masked.Count > 0) highlights = masked;
-        if (highlights.Count == 0) return;
+        if (highlights.Count == 0) return morphs;
 
         var triangles = new List<int>(model.TriangleIndexes);
         var vertices = new List<Vertex>(model.Vertices);
         var parts = new List<Part>(model.Parts);
+        var layerUvs = new List<Vector2>();
         int sourceStart = eyePart.BaseShift;
         int sourceCount = eyePart.TriangleIndexNum;
 
@@ -1141,6 +1144,7 @@ public class ModelExporter
                 };
                 mapped = vertices.Count;
                 vertices.Add(copy);
+                layerUvs.Add(copy.UvCoordinate);
                 remap[index] = mapped;
                 added.Add(mapped);
             }
@@ -1174,6 +1178,39 @@ public class ModelExporter
         model.Vertices = vertices.ToArray();
         model.TriangleIndexes = triangles.ToArray();
         model.Parts = parts.ToArray();
+
+        // The tremor: a highlight that sits still does not read as a wet eye, and MMD has no texture offset, so
+        // the shake is a stack of UV morphs - small translations round a circle, cycled. The turn is not here on
+        // purpose: it has to rotate about each eye's own UV cell, and the cell is not something the exporter
+        // knows, so it stays a hand animation on the addon side for now.
+        const int JitterSteps = 4;
+        const float JitterAmplitude = 0.004f;
+        int layerStart = model.Vertices.Length - layerUvs.Count;
+        for (int step = 0; step < JitterSteps; step++)
+        {
+            float angle = Mathf.PI * 2f * step / JitterSteps;
+            float dx = Mathf.Cos(angle) * JitterAmplitude;
+            float dy = Mathf.Sin(angle) * JitterAmplitude;
+            var data = new List<Morph.MorphData>();
+            for (int i = 0; i < layerUvs.Count; i++)
+            {
+                data.Add(new Morph.UvMorphData
+                {
+                    VertexIndex = layerStart + i,
+                    Offset = new Vector4(dx, dy, 0f, 0f)
+                });
+            }
+            string name = "Hi_Jit" + step;
+            morphs.Add(new Morph
+            {
+                Name = name,
+                NameEn = name,
+                Category = Morph.MorphCategory.MorphCatOther,
+                Type = Morph.MorphType.MorphTypeUv,
+                MorphDatas = data.ToArray()
+            });
+        }
+        return morphs;
     }
 
     private const int SpinSteps = 8;
