@@ -191,6 +191,29 @@ public class ModelExporter
             if (!renderers.Contains(renderer)) renderers.Add(renderer);
             restInvisible.Add(renderer);
         }
+        // The animated tears are runtime instances, switched off until a tear controller raises their weight, so
+        // the walk above misses them exactly like the eye manga. They are hidden the same way as the other
+        // decals: collapsed at rest, deployed by a morph of their own.
+        var tearObjects = new List<GameObject>();
+        if (character != null && character.TearControllers != null)
+        {
+            foreach (TearController tear in character.TearControllers)
+            {
+                if (tear == null) continue;
+                if (tear.TearObject_0 != null) tearObjects.Add(tear.TearObject_0);
+                if (tear.TearObject_1 != null) tearObjects.Add(tear.TearObject_1);
+            }
+        }
+        foreach (GameObject tear in tearObjects)
+        {
+            if (tear == null) continue;
+            foreach (Renderer tearRenderer in tear.GetComponentsInChildren<Renderer>(true))
+            {
+                if (tearRenderer == null) continue;
+                if (!renderers.Contains(tearRenderer)) renderers.Add(tearRenderer);
+                restInvisible.Add(tearRenderer);
+            }
+        }
         List<int> triangles = new List<int>();
         var vertexRanges = new List<(Renderer renderer, int start, int count)>();
         model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform, vertexRanges);
@@ -248,6 +271,8 @@ public class ModelExporter
         {
             var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
             var spin = SpinMorphs(character, model, vertexRanges, restInvisible, deployed);
+            var tears = TearMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
+            deploy.AddRange(tears);
             if (deploy.Count > 0 || spin.Count > 0)
             {
                 var all = new List<Morph>(model.Morphs);
@@ -1010,6 +1035,123 @@ public class ModelExporter
     /// `w_{k+1}` rises is exactly the turn between them, with no easing to fake. The rest state is the decal
     /// at weight 0 everywhere, which is the orientation the game draws it in.
     /// </summary>
+    /// <summary>
+    /// The animated tears: one deploy morph per tear object, plus the scroll that makes them run.
+    ///
+    /// Each `TearController` keeps two prefabs (`pfb_chr_tear000`, `pfb_chr_tear001`) whose animation is a
+    /// *sprite sheet scroll*: `TearController.UpdateOffset` steps `_TexScrollParam` across the sheet, and the
+    /// grid comes from the prefab's own asset table (`texture_width`/`_height`, `texture_part_width`/`_height`).
+    /// MMD has no texture offset, so the same roll is a stack of UV morphs - one per sheet frame, each
+    /// translating every UV by that frame's step - exactly as the eye manga's turn is a stack of rotations.
+    /// Frame 0 is the rest state, so a running tear is the deploy morph at 1 with the scroll morphs cycled
+    /// through.
+    /// </summary>
+    private static List<Morph> TearMorphs(UmaContainerCharacter character,
+                                          List<(Renderer renderer, int start, int count)> ranges,
+                                          HashSet<Renderer> restInvisible,
+                                          Dictionary<int, Vector3> deployed,
+                                          Vector3 collapsePoint)
+    {
+        var morphs = new List<Morph>();
+        if (character == null || character.TearControllers == null) return morphs;
+
+        var rangeOf = new Dictionary<Renderer, (int start, int count)>();
+        foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
+
+        for (int i = 0; i < character.TearControllers.Count; i++)
+        {
+            TearController tear = character.TearControllers[i];
+            if (tear == null) continue;
+            for (int variant = 0; variant < 2; variant++)
+            {
+                GameObject part = variant == 0 ? tear.TearObject_0 : tear.TearObject_1;
+                AssetHolder holder = part.GetComponent<AssetHolder>();
+                if (part == null) continue;
+
+                var indices = new List<int>();
+                Vector3 sum = Vector3.zero;
+                int placed = 0;
+                foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (renderer == null || !restInvisible.Contains(renderer)) continue;
+                    if (!rangeOf.TryGetValue(renderer, out var range)) continue;
+                    for (int v = range.start; v < range.start + range.count; v++)
+                    {
+                        if (!deployed.ContainsKey(v)) continue;
+                        indices.Add(v);
+                        sum += deployed[v];
+                        placed++;
+                    }
+                }
+                if (indices.Count == 0) continue;
+                Vector3 centre = placed > 0 ? sum / placed : part.transform.position;
+                string name = "TearDrop" + (i + 1) + (variant == 0 ? "" : "b") + "_" + SideOf(character, centre);
+
+                var data = new List<Morph.MorphData>();
+                foreach (int v in indices)
+                {
+                    data.Add(new Morph.VertexMorphData { VertexIndex = v, Offset = deployed[v] - collapsePoint });
+                }
+                morphs.Add(new Morph
+                {
+                    Name = name,
+                    NameEn = name,
+                    Category = Morph.MorphCategory.MorphCatOther,
+                    Type = Morph.MorphType.MorphTypeVertex,
+                    MorphDatas = data.ToArray()
+                });
+                morphs.AddRange(ScrollMorphs(name, indices, holder));
+            }
+        }
+        return morphs;
+    }
+
+    /// <summary>The UV morph stack that rolls a tear through its sprite sheet, or none when the grid is unknown.</summary>
+    private static List<Morph> ScrollMorphs(string name, List<int> indices, AssetHolder holder)
+    {
+        var morphs = new List<Morph>();
+        if (holder == null || holder._assetTableValue == null) return morphs;
+        float width = holder._assetTableValue["texture_width"];
+        float height = holder._assetTableValue["texture_height"];
+        float partWidth = holder._assetTableValue["texture_part_width"];
+        float partHeight = holder._assetTableValue["texture_part_height"];
+        if (width <= 0f || height <= 0f || partWidth <= 0f || partHeight <= 0f) return morphs;
+        int columns = Mathf.Max(1, Mathf.RoundToInt(width / partWidth));
+        int rows = Mathf.Max(1, Mathf.RoundToInt(height / partHeight));
+        int frames = columns * rows;
+        if (frames <= 1) return morphs;
+
+        // one morph per sheet frame (frame 0 is the rest state), capped: an 8x4 sheet is 32 frames and 32 morphs
+        // per tear object would swamp the list, so the stack is spread evenly over the sheet instead
+        const int MaxSteps = 8;
+        int stride = Mathf.Max(1, Mathf.CeilToInt((frames - 1) / (float)MaxSteps));
+        for (int frame = stride; frame < frames; frame += stride)
+        {
+            float u = (frame % columns) / (float)columns;
+            float v = (frame / columns) / (float)rows;
+            var data = new List<Morph.MorphData>();
+            foreach (int index in indices)
+            {
+                // the game scrolls down the sheet with a negative y, so a morph steps the same way
+                data.Add(new Morph.UvMorphData
+                {
+                    VertexIndex = index,
+                    Offset = new Vector4(u, -v, 0f, 0f)
+                });
+            }
+            string stepName = name + "_scr" + morphs.Count;
+            morphs.Add(new Morph
+            {
+                Name = stepName,
+                NameEn = stepName,
+                Category = Morph.MorphCategory.MorphCatOther,
+                Type = Morph.MorphType.MorphTypeUv,
+                MorphDatas = data.ToArray()
+            });
+        }
+        return morphs;
+    }
+
     private static List<Morph> SpinMorphs(UmaContainerCharacter character, RawMMDModel model,
                                           List<(Renderer renderer, int start, int count)> ranges,
                                           HashSet<Renderer> restInvisible,
