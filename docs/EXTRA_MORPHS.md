@@ -101,7 +101,28 @@ Two ways this could come to MMD, both of them the same tool as the animated tear
 2. **Material morphs** on the eye material can change a *texture index* but not a texture transform, so an MMD
    material morph can switch which highlight map is shown but cannot scroll it. Not enough on its own.
 
-Animations on the deploy morphs (and on such UV morphs) are the other half of this: a pmx carries keys only in a
-**vmd**, and the exporter's motion side (`UnityHumanoidVMDRecorder`) writes bone and the standard morph channels
-but has no export for these extra morph names yet. That is what "animations on the morphs" means here - the
-morphs exist and can be posed by hand, but nothing samples a game animation onto them yet.
+## Animated morphs: where the recorder stands
+
+A pmx carries no keys - a motion file (vmd) does. The standard 192 face morphs already animate: the recorder
+builds one driver per morph name from the character's `FaceDrivenKeyTarget` morph lists
+(`MorphRecorder` constructor, `UnityHumanoidVMDRecorder.cs:1497`), samples `morph.weight` every recorded frame
+(`MorphDriver.RecordMorph`, line 1659) and drops frames that do not change (`DisableIntron`, line 1612).
+
+What is missing is the other half of this document - the deploy morphs (`Blush`, the eight eye manga,
+`Tear_L`/`Tear_R`) and any UV morphs. They have no `FacialMorph` to read: the game shows those parts by moving a
+locator and enabling an object, so nothing in the sampled data is named `Blush`. The design that fits the
+existing code:
+
+1. a second, small driver type next to `MorphDriver` that holds a *name* and a *sampler* instead of a list of
+   `FacialMorph`s, with the same `ValueList` shape so `DisableIntron` and the writer treat it identically;
+2. the sampler reads the game's own state for that part - `FacialOtherMorph.GetLocatorValue(part)`
+   (`FacialMorph.cs:36`) against the bind's compare value, for a switch; for the eye manga, the `EyeSelect`
+   value picks one of four variants per eye, so both `_L` and `_R` of the selected face go to 1;
+3. `MorphRecorder` fills those drivers from `FaceDrivenKeyTarget.OtherMorphs` in its constructor
+   (`OtherMorphs` is the same list the exporter reads for the deploy morphs) and `RecrodAllMorph` samples them
+   alongside the face morphs;
+4. the vmd writer's morph-section assembly needs to know about the extra names - that is the one piece not yet
+   read, and the first thing to look at before writing code.
+
+The UV morphs for the animated tears and the eye highlights are a later step: they need the same driver shape
+plus a per-frame UV offset, which is a different section of the vmd.
