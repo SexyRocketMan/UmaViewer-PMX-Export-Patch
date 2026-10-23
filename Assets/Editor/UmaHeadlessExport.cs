@@ -137,6 +137,9 @@ public static class UmaHeadlessExport
         // what the facial morph system actually holds at runtime: the extra morphs, their locators and
         // their binds, and whether the cheek/texture plumbing behind them got filled in
         public bool ProbeMorphs;
+        // how the animated tears are built: they are skinned meshes posed by an Animator, so the mesh the exporter
+        // reads is a bind pose and not necessarily the shape the game draws
+        public bool ProbeTears;
         public bool DumpShaders;
         public string Variant = "";
         public int MorphNameMode = -1;
@@ -220,6 +223,7 @@ public static class UmaHeadlessExport
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaDumpFace": options.DumpFace = true; break;
             case "-umaProbeMorphs": options.ProbeMorphs = true; break;
+            case "-umaProbeTears": options.ProbeTears = true; break;
             case "-umaDumpShaders": options.DumpShaders = true; break;
                     case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
                     case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
@@ -798,6 +802,10 @@ public static class UmaHeadlessExport
                     if (options.ProbeMorphs && container is UmaContainerCharacter probed)
                     {
                         DumpMorphState(probed);
+                    }
+                    if (options.ProbeTears && container is UmaContainerCharacter tearProbe)
+                    {
+                        DumpTearState(tearProbe);
                     }
                     if (options.DumpShaders)
                     {
@@ -1488,6 +1496,307 @@ public static class UmaHeadlessExport
     /// so a morph being absent means one of those parts was missing when the target initialised. This prints the
     /// parts themselves as well, so the report says *why* rather than only what.
     /// </summary>
+    /// <summary>
+    /// How the animated tears are actually built, because the exporter only ever sees half of it.
+    ///
+    /// A tear is a <see cref="SkinnedMeshRenderer"/> posed by an <see cref="Animator"/> whose clip is the prefab's
+    /// own `default_animation`. `ModelExporter` reads `mesh.vertices`, which for a skinned mesh is the *bind*
+    /// pose - if the clip scales a bone to stretch the card from the eye corner down the cheek, the exported card
+    /// is only the bind-pose stub. This prints the bind-pose extent, the posed extent (through BakeMesh, which
+    /// runs the skinning for real), the skeleton, and the clip's own curves, so an authored-long card and a
+    /// card-that-only-becomes-long-when-posed can be told apart.
+    /// </summary>
+    private static void DumpTearState(UmaContainerCharacter character)
+    {
+        if (character == null || character.TearControllers == null)
+        {
+            Debug.Log($"{Tag} [tears] no tear controllers");
+            return;
+        }
+        Debug.Log($"{Tag} [tears] {character.TearControllers.Count} controller(s), "
+                  + $"FaceDrivenKeyTarget={(character.FaceDrivenKeyTarget != null)}, "
+                  + $"spring containers on the character={character.cySpringDataContainers.Count}");
+
+        // springs bind by bone *name* into one dictionary built from every transform on the character, so a
+        // container that lists joint000..joint010 is what makes a tear ribbon hang down the cheek
+        int springHits = 0;
+        foreach (CySpringDataContainer spring in character.cySpringDataContainers)
+        {
+            if (spring == null) continue;
+            foreach (CySpringParamDataElement element in spring.springParam)
+            {
+                if (element == null || string.IsNullOrEmpty(element._boneName)) continue;
+                if (element._boneName.IndexOf("joint", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                springHits++;
+                Debug.Log($"{Tag} [tears] spring '{spring.name}' binds '{element._boneName}' "
+                          + $"gravity={element._gravity:F3} stiffness={element._stiffnessForce:F5} "
+                          + $"drag={element._dragForce:F3} springForce={VectorText(element._springForce)} "
+                          + $"children={element._childElements.Count}");
+            }
+        }
+        Debug.Log($"{Tag} [tears] spring params naming a 'joint': {springHits}");
+
+        // the ribbon points along its own local +Y, so whichever transform it is hung from decides whether the
+        // stream runs down the cheek or up over the eye - print the attach bones' orientation, and the head's
+        Transform head = null;
+        foreach (Transform candidate in character.GetComponentsInChildren<Transform>(true))
+        {
+            if (candidate.name == "Head") { head = candidate; break; }
+        }
+        if (head != null)
+        {
+            var attach = new List<string> { "Eye_tear_attach_01_L", "Eye_tear_attach_02_L", "Eye_tear_attach_03_L",
+                                            "Eye_tear_attach_01_R", "Eye_tear_attach_02_R", "Eye_tear_attach_03_R" };
+            Debug.Log($"{Tag} [tears] Head rot={VectorText(head.eulerAngles)} up={VectorText(head.up)}");
+            foreach (string name in attach)
+            {
+                Transform bone = head.Find(name);
+                if (bone == null) { Debug.Log($"{Tag} [tears]   {name}: not found under Head"); continue; }
+                Debug.Log($"{Tag} [tears]   {name} localRot={VectorText(bone.localEulerAngles)} "
+                          + $"worldRot={VectorText(bone.eulerAngles)} up={VectorText(bone.up)} "
+                          + $"forward={VectorText(bone.forward)}");
+            }
+        }
+        for (int index = 0; index < character.TearControllers.Count; index++)
+        {
+            TearController controller = character.TearControllers[index];
+            if (controller == null) continue;
+            Debug.Log($"{Tag} [tears] controller {index}: dir={controller.CurrentDir} "
+                      + $"weight={controller.Weight:F3} object={controller.CurrenObject} speed={controller.Speed:F3}");
+            DumpTearPart($"[tears]   {index}a", controller.TearObject_0);
+            DumpTearPart($"[tears]   {index}b", controller.TearObject_1);
+        }
+    }
+
+    private static void DumpTearPart(string label, GameObject part)
+    {
+        if (part == null)
+        {
+            Debug.Log($"{Tag} {label} (null)");
+            return;
+        }
+        Transform transform = part.transform;
+        Debug.Log($"{Tag} {label} '{part.name}' active={part.activeSelf} "
+                  + $"localPos={VectorText(transform.localPosition)} worldPos={VectorText(transform.position)} "
+                  + $"localRot={VectorText(transform.localEulerAngles)} localScale={VectorText(transform.localScale)} "
+                  + $"lossyScale={VectorText(transform.lossyScale)}");
+        var chain = new List<string>();
+        for (Transform up = transform.parent; up != null && chain.Count < 6; up = up.parent) chain.Add(up.name);
+        Debug.Log($"{Tag} {label} parent chain: {string.Join(" < ", chain)}");
+
+        AssetHolder holder = part.GetComponent<AssetHolder>();
+        if (holder != null && holder._assetTableValue != null)
+        {
+            Debug.Log($"{Tag} {label} sheet grid: "
+                      + $"{holder._assetTableValue["texture_width"]}x{holder._assetTableValue["texture_height"]} "
+                      + $"cells {holder._assetTableValue["texture_part_width"]}x"
+                      + $"{holder._assetTableValue["texture_part_height"]}");
+        }
+
+        // what is actually attached, because that says how the ribbon is meant to move: an Animator, a
+        // CySpringDataContainer, a DynamicBone, or nothing at all
+        var types = new Dictionary<string, int>();
+        foreach (Component component in part.GetComponentsInChildren<Component>(true))
+        {
+            if (component == null) continue;
+            string name = component.GetType().Name;
+            types[name] = types.TryGetValue(name, out int count) ? count + 1 : 1;
+        }
+        Debug.Log($"{Tag} {label} components: "
+                  + string.Join(", ", types.OrderBy(pair => pair.Key).Select(pair => pair.Key + (pair.Value > 1 ? "x" + pair.Value : ""))));
+        foreach (CySpringDataContainer spring in part.GetComponentsInChildren<CySpringDataContainer>(true))
+        {
+            Debug.Log($"{Tag} {label}   CySpringDataContainer '{spring.name}': "
+                      + $"springParam={spring.springParam.Count} connected={spring.ConnectedBoneList.Count} "
+                      + $"dynamicBones={spring.DynamicBones.Count} collisions={spring.collisionParam.Count}");
+        }
+        foreach (CySpring spring in part.GetComponentsInChildren<CySpring>(true))
+        {
+            Debug.Log($"{Tag} {label}   CySpring '{spring.name}' on '{spring.gameObject.name}'");
+        }
+
+        // the parts sit switched off until a controller raises their weight, and skinning only evaluates on an
+        // active renderer, so the measurement happens on an activated copy of the state and the state is restored
+        bool wasActive = part.activeSelf;
+        part.SetActive(true);
+        try
+        {
+            foreach (SkinnedMeshRenderer renderer in part.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                Mesh mesh = renderer.sharedMesh;
+                Debug.Log($"{Tag} {label} skinned '{renderer.name}' mesh '{(mesh != null ? mesh.name : "null")}' "
+                          + $"verts={(mesh != null ? mesh.vertexCount : 0)} "
+                          + $"bindLocalBounds={(mesh != null ? BoundsText(mesh.bounds) : "none")} "
+                          + $"bones={renderer.bones.Length} rootBone={(renderer.rootBone ? renderer.rootBone.name : "none")}");
+                Transform[] bones = renderer.bones;
+                for (int b = 0; b < bones.Length && b < 8; b++)
+                {
+                    Transform bone = bones[b];
+                    if (bone == null) continue;
+                    Debug.Log($"{Tag} {label}   bone[{b}] '{bone.name}' localPos={VectorText(bone.localPosition)} "
+                              + $"localScale={VectorText(bone.localScale)} worldPos={VectorText(bone.position)}");
+                }
+                if (bones.Length > 8)
+                {
+                    Debug.Log($"{Tag} {label}   ... {bones.Length - 8} more bones");
+                }
+                if (bones.Length > 0 && bones[bones.Length - 1] != null)
+                {
+                    Debug.Log($"{Tag} {label}   last bone '{bones[bones.Length - 1].name}' "
+                              + $"worldPos={VectorText(bones[bones.Length - 1].position)}");
+                }
+
+                Animator animator = part.GetComponent<Animator>() ?? part.GetComponentInChildren<Animator>(true);
+                DumpTearAnimator(label, animator, part);
+
+                // the game raises the weight, which activates the object, and only then does the animator run -
+                // an inactive animator never evaluates, so this is the state the mesh is actually drawn in
+                if (animator != null && animator.runtimeAnimatorController != null)
+                {
+                    animator.speed = 1f;
+                    animator.Play(0, 0, 0f);
+                    for (int step = 0; step < 45; step++) animator.Update(1f / 30f);
+                    DumpTearBaked(label + " played", renderer, -1f);
+                    animator.speed = 0f;
+                }
+
+                foreach (float time in new[] { 0f, 0.25f, 0.5f, 0.75f, 0.999f })
+                {
+                    if (animator != null && animator.runtimeAnimatorController != null)
+                    {
+                        animator.speed = 0f;
+                        animator.Play(0, 0, time);
+                        animator.Update(0f);
+                    }
+                    DumpTearBaked(label, renderer, time);
+                }
+                if (animator != null && animator.runtimeAnimatorController != null)
+                {
+                    animator.speed = 1f;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.Log($"{Tag} {label} measurement failed: {exception.GetType().Name}: {exception.Message}");
+        }
+        finally
+        {
+            part.SetActive(wasActive);
+        }
+    }
+
+    /// <summary>The posed extent of a skinned mesh: BakeMesh runs the skinning, reading vertices does not.</summary>
+    private static void DumpTearBaked(string label, SkinnedMeshRenderer renderer, float time)
+    {
+        var baked = new Mesh();
+        try
+        {
+            renderer.BakeMesh(baked, false);
+            Vector3[] vertices = baked.vertices;
+            if (vertices.Length == 0)
+            {
+                Debug.Log($"{Tag} {label} t={time:F3} baked: no vertices");
+                return;
+            }
+            Vector3 min = vertices[0], max = vertices[0];
+            foreach (Vector3 vertex in vertices)
+            {
+                min = Vector3.Min(min, vertex);
+                max = Vector3.Max(max, vertex);
+            }
+            Debug.Log($"{Tag} {label} t={time:F3} baked={vertices.Length} verts "
+                      + $"min={VectorText(min)} max={VectorText(max)} size={VectorText(max - min)}");
+        }
+        catch (Exception exception)
+        {
+            Debug.Log($"{Tag} {label} t={time:F3} BakeMesh failed: {exception.GetType().Name}: {exception.Message}");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(baked);
+        }
+    }
+
+    private static void DumpTearAnimator(string label, Animator animator, GameObject part)
+    {
+        if (animator == null)
+        {
+            Debug.Log($"{Tag} {label} no Animator");
+            return;
+        }
+        var runtime = animator.runtimeAnimatorController;
+        Debug.Log($"{Tag} {label} animator enabled={animator.enabled} "
+                  + $"controller='{(runtime != null ? runtime.name : "none")}' "
+                  + $"clips={(runtime != null ? runtime.animationClips.Length : 0)}");
+        if (runtime == null) return;
+        AnimatorOverrideController overrides = runtime as AnimatorOverrideController;
+        if (overrides != null && overrides.runtimeAnimatorController != null)
+        {
+            Debug.Log($"{Tag} {label}   override over '{overrides.runtimeAnimatorController.name}'");
+        }
+        // the override only replaces the one state it is named for; the rest of the base controller - which is
+        // where a chain that bends down the cheek would have to live - is a different set of clips entirely
+        RuntimeAnimatorController baseController = overrides != null && overrides.runtimeAnimatorController != null
+            ? overrides.runtimeAnimatorController
+            : runtime;
+        if (baseController != null && !ReferenceEquals(baseController, runtime))
+        {
+            AnimationClip[] baseClips = baseController.animationClips;
+            Debug.Log($"{Tag} {label}   base controller '{baseController.name}' clips={baseClips.Length}");
+            foreach (AnimationClip baseClip in baseClips)
+            {
+                if (baseClip == null) continue;
+                EditorCurveBinding[] baseBindings = AnimationUtility.GetCurveBindings(baseClip);
+                Debug.Log($"{Tag} {label}     base clip '{baseClip.name}' length={baseClip.length:F3} "
+                          + $"bindings={baseBindings.Length}");
+                for (int b = 0; b < baseBindings.Length && b < 8; b++)
+                {
+                    Debug.Log($"{Tag} {label}       {baseBindings[b].path} | {baseBindings[b].type.Name} | "
+                              + $"{baseBindings[b].propertyName}");
+                }
+            }
+        }
+        var animatorController = baseController as UnityEditor.Animations.AnimatorController;
+        if (animatorController != null)
+        {
+            foreach (var layer in animatorController.layers)
+            {
+                Debug.Log($"{Tag} {label}   layer '{layer.name}' states={layer.stateMachine.states.Length}");
+                foreach (var state in layer.stateMachine.states)
+                {
+                    Debug.Log($"{Tag} {label}     state '{state.state.name}' "
+                              + $"clip='{(state.state.motion != null ? state.state.motion.name : "none")}'");
+                }
+            }
+        }
+        foreach (AnimationClip clip in runtime.animationClips)
+        {
+            if (clip == null) continue;
+            EditorCurveBinding[] bindings = AnimationUtility.GetCurveBindings(clip);
+            Debug.Log($"{Tag} {label}   clip '{clip.name}' length={clip.length:F3} "
+                      + $"loop={clip.isLooping} bindings={bindings.Length}");
+            for (int b = 0; b < bindings.Length && b < 12; b++)
+            {
+                EditorCurveBinding binding = bindings[b];
+                AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, binding);
+                string keys = curve == null || curve.length == 0
+                    ? "no keys"
+                    : $"keys={curve.length} first={curve.keys[0].value:F3} last={curve.keys[curve.length - 1].value:F3}";
+                Debug.Log($"{Tag} {label}     {binding.path} | {binding.type.Name} | {binding.propertyName} | {keys}");
+            }
+            if (bindings.Length > 12)
+            {
+                Debug.Log($"{Tag} {label}     ... {bindings.Length - 12} more bindings");
+            }
+        }
+    }
+
+    private static string VectorText(Vector3 value) => $"({value.x:F3},{value.y:F3},{value.z:F3})";
+
+    private static string BoundsText(UnityEngine.Bounds bounds) =>
+        $"center={VectorText(bounds.center)} size={VectorText(bounds.size)}";
+
     private static void DumpMorphState(UmaContainerCharacter character)
     {
         FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;

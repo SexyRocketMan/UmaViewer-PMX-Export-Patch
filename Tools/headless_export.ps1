@@ -45,6 +45,7 @@ param(
     [switch]$DumpMaterials,
 [switch]$DumpFace,
     [switch]$ProbeMorphs,
+    [switch]$ProbeTears,
     [switch]$DumpShaders,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
@@ -175,6 +176,7 @@ if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExport
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
 if ($DumpFace) { $arguments += "-umaDumpFace" }
     if ($ProbeMorphs) { $arguments += "-umaProbeMorphs" }
+    if ($ProbeTears) { $arguments += "-umaProbeTears" }
     if ($DumpShaders) { $arguments += "-umaDumpShaders" }
 if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
 if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
@@ -235,7 +237,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (Test-Path $LogPath) {
-    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]|\[shaders\]" |
+    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]|\[shaders\]|\[tears\]" |
         Where-Object { $_.Line -notmatch "StackTraceUtility|DebugLogHandler|Logger:Log|Debug:Log" } |
         ForEach-Object { $_.Line.Trim() }
 }
