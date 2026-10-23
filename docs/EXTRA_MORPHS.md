@@ -158,6 +158,27 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
 
 The deploy-morph mechanism is described in `PMX_EXTENSIONS.md`; the game-side inventory is `MORPHS.md`.
 
+### The audit: every extra morph, and where it stands
+
+Re-counted against the exported `1001_morphs25.pmx` (281 morphs: 211 vertex, 70 UV) and against
+`FaceDrivenKeyTarget.InitializeExtra`, which is the complete list of what the game builds:
+
+| game morph (`OtherMorphs`, 8 for 1001) | mechanism | in the pmx today | addon today |
+|---|---|---|---|
+| `Cheek_Ctrl` | up to 3 `_CheekRate` textures, locator axes ScaX/Y/Z | **yes** - `Blush` deploy + `morph=Cheek_Ctrl:Texture:ScaX:_CheekRate,ScaY:_CheekRate` on the cheek material + the baked `_blush` maps | yes |
+| `Shade_Ctrl` | shader `_faceShadowAlpha` | **yes, as data only** - `morph=Shade_Ctrl:Shader:ScaX:_faceShadowAlpha` on the face material; no geometry, so no morph | **no** - parked, waiting for the face-region port to have an input |
+| `Manga_Ctrl` | EyeSelect + Enable over 8 prefabs | **yes** - `@_@`, `✦_✦`, `>_<`, `o_o` × L/R deploy morphs | yes |
+| `StaticTear_Ctrl` | Enable over `tearmesh_l/r` | **yes** - `Tear_L`, `Tear_R` | yes |
+| `Tear0_Ctrl`…`Tear3_Ctrl` | TearWeight/Side/Select/Speed on a `TearController` | **partly** - 8 deploy morphs + 56 `_scr` UV morphs + `scroll=<cols>x<rows>`; **the skeleton animation is not exported** | yes for the scroll, no for the roll |
+
+The 192 remaining morphs are the ordinary facial ones (eye, brow, mouth, ear). Those come from the meshes' own
+blend shapes (`ReadMorph` walks `mesh.blendShapeCount`), so they cannot be "missed" - whatever shape keys the
+game's meshes carry is what gets exported.
+
+So the audit finds exactly one true gap in the model data - the tear card's skeleton animation - and one piece of
+data that is exported but unused (the face shadow). The `@_@` spin also carries the V-sign suspicion noted above.
+
+
 ## The teary eye highlights
 
 The effect that makes a character look like they are about to cry is not one of the five morphs: it is the
