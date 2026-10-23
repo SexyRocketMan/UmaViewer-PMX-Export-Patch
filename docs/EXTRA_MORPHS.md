@@ -70,6 +70,30 @@ scroll through it, so the drip was never going to run the right way. The `@_@` r
 way and has not been re-measured: a mirrored rotation looks plausible on a symmetrical decal, so if the dizzy face
 turns the wrong way, suspect the same thing.
 
+### What actually poses the card: nothing in the assets
+
+`headless_export.ps1 -ProbeTears` dumps the runtime objects (see the handoff), and it answers "why does the tear
+card stand up over the eye instead of running down the cheek" with: no shipped data gives it a pose.
+
+| what could pose it | measured |
+|---|---|
+| the clip | `anm_chr_tear000` **and** the base `anm_tear000_00` both have **0 curve bindings** — they are timers for the sprite scroll (4.267 s and 1.0 s long) |
+| a spring | no `CySpring`, `CySpringDataContainer` or `DynamicBone` on either prefab, and no spring container lists a `joint*` bone name |
+| the attach bones | `Eye_tear_attach_01..03_L/R` all carry local rotation 0; their up vector is world +Y |
+| the placement | `SetDir` sets `transform.position`, and `localScale = (-1,1,1)` for the right eye — it never sets a rotation |
+| the animator running | `BakeMesh` is identical at t = 0, 0.25, 0.5, 0.75, 1 and after 45 played frames |
+
+So the card is a **rigid ribbon in its rest pose**, pointing straight up along world +Y from whichever attach bone
+placed it. For 1001 that is `pfb_chr_tear000`: 66 vertices skinned to an 11-joint chain, 0.010 wide by 0.046
+tall, which lands in the pmx as **0.603 units from Y 17.495 to 18.098** while the eye corner
+(`Eye_tear_attach_03_L`) is at 17.455 and the `Chin` bone at 16.466. It is roughly the right length for the trip
+to the chin but pointing the wrong way, and about 40% short of actually reaching it.
+
+The game must pose those joints in code — IL2CPP, and there is no `global-metadata.dat` to decompile (see the
+handoff). Reconstructing the pose is therefore a choice rather than an extraction. The defensible one uses the
+rig's own landmarks instead of an invented angle: aim the ribbon from `Eye_tear_attach_03_*` at the `Chin` bone,
+and scale its length to the distance between them (1.225 units against the ribbon's 0.603, so about 2x on Y).
+
 ### The four controllers are not four positions
 
 Worth knowing before reading the morph list. `SetDir` puts *both* of a controller's prefabs on the same eye -
