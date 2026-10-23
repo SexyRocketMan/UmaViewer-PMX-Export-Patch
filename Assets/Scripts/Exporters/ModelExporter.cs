@@ -1092,6 +1092,10 @@ public class ModelExporter
         var rangeOf = new Dictionary<Renderer, (int start, int count)>();
         foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
 
+        // cards already written, by kind + side + geometry, so a controller that duplicates another one's card is
+        // skipped instead of shipped twice
+        var seenCards = new HashSet<string>();
+
         for (int i = 0; i < character.TearControllers.Count; i++)
         {
             TearController tear = character.TearControllers[i];
@@ -1099,8 +1103,8 @@ public class ModelExporter
             for (int variant = 0; variant < 2; variant++)
             {
                 GameObject part = variant == 0 ? tear.TearObject_0 : tear.TearObject_1;
-                AssetHolder holder = part.GetComponent<AssetHolder>();
                 if (part == null) continue;
+                AssetHolder holder = part.GetComponent<AssetHolder>();
 
                 var indices = new List<int>();
                 Vector3 sum = Vector3.zero;
@@ -1119,7 +1123,20 @@ public class ModelExporter
                 }
                 if (indices.Count == 0) continue;
                 Vector3 centre = placed > 0 ? sum / placed : part.transform.position;
-                string name = "TearDrop" + (i + 1) + (variant == 0 ? "" : "b") + "_" + SideOf(character, centre);
+                string side = SideOf(character, centre);
+                // `tear000` is the tall card that rolls; `tear001` is the wide one. Named for what they are rather
+                // than for which controller instantiated them.
+                string kind = variant == 0 ? "Stream" : "Pool";
+                string name = "Tear_" + kind + "_" + side;
+
+                // The four controllers are not four positions: `SetDir` puts both of a controller's prefabs on one
+                // eye, and what separates them in the game is `TearSide`, a position-Y offset the face clips drive
+                // and this viewer never does. So controllers 1 and 3 hold the *same* card in the same place, as do
+                // 2 and 4 - writing a deploy morph for each shipped four redundant morphs and drew the decal
+                // twice. The signature is the placed geometry itself, so a model whose controllers genuinely
+                // differ keeps them.
+                string signature = kind + "|" + side + "|" + CardSignature(indices, deployed);
+                if (!seenCards.Add(signature)) continue;
 
                 var data = new List<Morph.MorphData>();
                 foreach (int v in indices)
@@ -1138,6 +1155,21 @@ public class ModelExporter
             }
         }
         return morphs;
+    }
+
+    /// <summary>What a tear card is and where it sits, rounded, so two identical cards hash the same.</summary>
+    private static string CardSignature(List<int> indices, Dictionary<int, Vector3> deployed)
+    {
+        var text = new StringBuilder();
+        text.Append(indices.Count).Append(':');
+        foreach (int index in indices)
+        {
+            Vector3 where = deployed.TryGetValue(index, out Vector3 value) ? value : Vector3.zero;
+            text.Append(Mathf.RoundToInt(where.x * 1000f)).Append(',')
+                .Append(Mathf.RoundToInt(where.y * 1000f)).Append(',')
+                .Append(Mathf.RoundToInt(where.z * 1000f)).Append(';');
+        }
+        return text.ToString();
     }
 
     /// <summary>The UV morph stack that rolls a tear through its sprite sheet, or none when the grid is unknown.</summary>
@@ -1180,7 +1212,9 @@ public class ModelExporter
                     Offset = new Vector4(u, v, 0f, 0f)
                 });
             }
-            string stepName = name + "_scr" + morphs.Count;
+            // `<card>_Sheet1..7`: one sheet frame each, numbered from 1 because frame 0 is the rest state and has
+            // no morph of its own
+            string stepName = name + "_Sheet" + (morphs.Count + 1);
             morphs.Add(new Morph
             {
                 Name = stepName,
@@ -1271,7 +1305,7 @@ public class ModelExporter
                         });
                     }
                     if (data.Count == 0) continue;
-                    string morphName = name + "_spin" + step;
+                    string morphName = name + "_Turn" + step;
                     morphs.Add(new Morph
                     {
                         Name = morphName,
@@ -1287,13 +1321,16 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The expressions the four eye manga draw, in the order the game selects them. The names are the faces
-    /// themselves - a `@_@` eye, a sparkle, a squint, a wide-open one - so a morph list reads like the emoticon
-    /// it produces instead of like an index.
+    /// The expressions the four eye manga draw, in the order the game selects them, as morph-name words.
+    ///
+    /// These used to be the emoticons themselves (`@_@`, `✦_✦`, `>_<`, `o_o`), which read nicely in a morph list
+    /// but sort into nothing and collide with every other name a user might already have. Every advanced morph now
+    /// carries a feature prefix and a word for what it does - `Manga_Spin_L`, `Tear_Static_L`, `Cheek_Blush` - so
+    /// they group together in a list and a user can find one without knowing the game's notation.
     /// </summary>
-    private static readonly string[] MangaFaces = { "@_@", "✦_✦", ">_<", "o_o" };
+    private static readonly string[] MangaFaces = { "Manga_Spin", "Manga_Star", "Manga_Shut", "Manga_Wide" };
 
-    /// <summary>The morph name a decal part is shown under: `@_@_L`, `Tear_L`, `Blush`.</summary>
+    /// <summary>The morph name a decal part is shown under: `Manga_Spin_L`, `Tear_Static_L`, `Cheek_Blush`.</summary>
     private static string DeployName(UmaContainerCharacter character, GameObject part, Vector3 centre)
     {
         string name = (part != null ? part.name : string.Empty)
@@ -1302,7 +1339,7 @@ public class ModelExporter
         if (eye >= 0)
         {
             string suffix = name.Substring(eye + "emo_eye_".Length);
-            string face = "Manga";
+            string face = "Manga_Other";
             if (suffix.Length >= 3 && int.TryParse(suffix.Substring(suffix.Length - 3), out int index)
                 && index >= 0 && index < MangaFaces.Length)
             {
@@ -1311,8 +1348,8 @@ public class ModelExporter
             return face + "_" + SideOf(character, centre);
         }
         if (name.IndexOf("tear", System.StringComparison.OrdinalIgnoreCase) >= 0)
-            return name.EndsWith("_L", System.StringComparison.OrdinalIgnoreCase) ? "Tear_L" : "Tear_R";
-        if (name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0) return "Blush";
+            return name.EndsWith("_L", System.StringComparison.OrdinalIgnoreCase) ? "Tear_Static_L" : "Tear_Static_R";
+        if (name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0) return "Cheek_Blush";
         return name;
     }
 
@@ -1678,6 +1715,8 @@ public class ModelExporter
     {
         List<Vertex> verticesList = new List<Vertex>();
         int vertexOffset = 0;
+        // the bone a part with no bones of its own should ride: every decal in this model is a child of the head
+        Transform headBone = FindHeadBone(bones);
 
         foreach (Renderer renderer in renderers)
         {
@@ -1729,7 +1768,10 @@ public class ModelExporter
                     };
 
                     vertex.SkinningOperator = new SkinningOperator() { Type = SkinningType.SkinningBdef1 };
-                    vertex.SkinningOperator.Param = new Bdef1() { BoneId = bones.IndexOf(renderer.transform) };
+                    vertex.SkinningOperator.Param = new Bdef1()
+                    {
+                        BoneId = SkinningBone(renderer.transform, bones, headBone)
+                    };
                     vertex.EdgeScale = 1;
                     verticesList.Add(vertex);
                     if (VertexDumpPath != null) RecordVertex(vertex, renderer.name);
@@ -1746,7 +1788,6 @@ public class ModelExporter
             else if (renderer is SkinnedMeshRenderer smr)
             {
                 var mesh = smr.sharedMesh;
-                Transform headBone = FindHeadBone(bones);
                 if (VertexDumpPath != null)
                 {
                     _writtenVertices.Add($"# renderer {renderer.name} mesh {mesh.name} "
@@ -1808,14 +1849,19 @@ public class ModelExporter
                     switch (boneCount)
                     {
                         case 0:
+                            // no bone weights at all: the part rides whatever bone its transform hangs from,
+                            // which for a decal is the head - not bone 0, which was what a missing index became
                             vertex.SkinningOperator = new SkinningOperator() { Type = SkinningType.SkinningBdef1 };
-                            vertex.SkinningOperator.Param = new Bdef1() { BoneId = GetBoneIndex(bones, renderer.transform) };
+                            vertex.SkinningOperator.Param = new Bdef1()
+                            {
+                                BoneId = SkinningBone(renderer.transform, bones, headBone)
+                            };
                             break;
 
                         default:
                         case 1:
                             vertex.SkinningOperator = new SkinningOperator() { Type = SkinningType.SkinningBdef1 };
-                            vertex.SkinningOperator.Param = new Bdef1() { BoneId = GetBoneIndex(bones, skinbone[boneWeight.boneIndex0]) };
+                            vertex.SkinningOperator.Param = new Bdef1() { BoneId = SkinningBone(skinbone[boneWeight.boneIndex0], bones, headBone) };
                             break;
 
                         case 2:
@@ -1823,8 +1869,8 @@ public class ModelExporter
                             vertex.SkinningOperator.Param = new Bdef2()
                             {
                                 BoneId = new int[]{
-                                    GetBoneIndex(bones, skinbone[boneWeight.boneIndex0]),
-                                    GetBoneIndex(bones, skinbone[boneWeight.boneIndex1]),
+                                    SkinningBone(skinbone[boneWeight.boneIndex0], bones, headBone),
+                                    SkinningBone(skinbone[boneWeight.boneIndex1], bones, headBone),
                                 },
                                 BoneWeight = boneWeight.weight0
                             };
@@ -1836,10 +1882,10 @@ public class ModelExporter
                             vertex.SkinningOperator.Param = new Bdef4()
                             {
                                 BoneId = new int[]{
-                                    GetBoneIndex(bones, skinbone[boneWeight.boneIndex0]),
-                                    GetBoneIndex(bones, skinbone[boneWeight.boneIndex1]),
-                                    GetBoneIndex(bones, skinbone[boneWeight.boneIndex2]),
-                                    GetBoneIndex(bones, skinbone[boneWeight.boneIndex3]),
+                                    SkinningBone(skinbone[boneWeight.boneIndex0], bones, headBone),
+                                    SkinningBone(skinbone[boneWeight.boneIndex1], bones, headBone),
+                                    SkinningBone(skinbone[boneWeight.boneIndex2], bones, headBone),
+                                    SkinningBone(skinbone[boneWeight.boneIndex3], bones, headBone),
                                 },
                                 BoneWeight = new float[]
                                 {
@@ -1912,6 +1958,27 @@ public class ModelExporter
     private static int GetBoneIndex(List<Transform> bones, Transform bone)
     {
         return bones.Contains(bone) ? bones.IndexOf(bone) : 0;
+    }
+
+    /// <summary>
+    /// The bone a part with no skinning of its own should ride.
+    ///
+    /// A decal is a child of a bone, not a bone: `M_Cheek`, the eye-manga quads and the tear cards are parented to
+    /// `Head`, and their own transforms are not in the bone list. Asking for the index of one anyway gives -1, and
+    /// a vertex weighted to bone -1 does not move with the head at all - which is exactly what happens when the
+    /// head is turned in MMD or Blender with a decal deployed: the face turns and the decal stays where it was.
+    /// So walk up the parents to the first transform that *is* a bone, and fall back to the head bone, which is
+    /// where every decal in these models belongs.
+    /// </summary>
+    private static int SkinningBone(Transform transform, List<Transform> bones, Transform headBone)
+    {
+        for (Transform up = transform; up != null; up = up.parent)
+        {
+            int index = bones.IndexOf(up);
+            if (index >= 0) return index;
+        }
+        int head = headBone != null ? bones.IndexOf(headBone) : -1;
+        return head >= 0 ? head : 0;
     }
 
     /// <summary>

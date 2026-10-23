@@ -194,13 +194,24 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
 
 ## What the export carries today
 
-* `Blush`, `Tear_L`, `Tear_R` - one deploy morph per static decal part.
-* `TearDrop1_L` … `TearDrop4b_L` - one deploy morph per animated tear object, each with its `_scr0` … `_scr6`
-  sprite-sheet scroll steps.
-* `@_@_L_spin1` … `@_@_R_spin7` - the dizzy face's turn, seven UV morphs per eye at 45° steps (203 vertex
-  morphs and 14 UV morphs on character 1001). You spin it by cross-fading neighbours: `spin1` → `spin2` → … →
-  `spin7` → back to none, which is the 8th step and lands on the rest orientation.
-* `@_@_L`, `@_@_R`, `✦_✦_L`, `✦_✦_R`, `>_<_L`, `>_<_R`, `o_o_L`, `o_o_R` - the eye manga.
+Every advanced morph is named `<feature>_<what it does>_<side>`, so the set groups together in a morph list:
+`Cheek_Blush`, `Manga_Spin_L`, `Tear_Static_L`, `Tear_Stream_L`. Before 2.34 the names were the game's own
+spelling - the emoticons `@_@_L`, `✦_✦_L`, `>_<_L`, `o_o_L`, then `Tear_L`/`Tear_R` and `TearDrop1_L` … `TearDrop4b_R`
+- and models exported then keep working: the add-on matches both spellings everywhere.
+
+* `Cheek_Blush`, `Tear_Static_L`, `Tear_Static_R` - one deploy morph per static decal part.
+* `Tear_Stream_L/R` and `Tear_Pool_L/R` - one deploy morph per *distinct* animated tear card, each with its
+  `_Sheet1` … `_Sheet7` sprite-sheet scroll steps. Two kinds because there are two prefabs: `tear000` is the tall
+  card that rolls down the cheek, `tear001` the wide one.
+* The four controllers used to produce four cards a side - `TearDrop1_L` was `TearDrop3_L`. They are deduplicated
+  on the placed geometry now, because the four controllers differ only by `TearSide`, a position offset the face
+  clips drive and this viewer never does. That removed two deploy morphs and 28 duplicate sheet morphs, and stopped
+  the decal being drawn twice.
+* `Manga_Spin_L_Turn1` … `Manga_Spin_R_Turn7` - the dizzy face's turn, seven UV morphs per eye at 45° steps (207
+  vertex morphs and 42 UV morphs on character 1001). You spin it by cross-fading neighbours: `Turn1` → `Turn2` →
+  … → `Turn7` → back to none, which is the 8th step and lands on the rest orientation.
+* `Manga_Spin_L/R`, `Manga_Star_L/R`, `Manga_Shut_L/R`, `Manga_Wide_L/R` - the eye manga, one per expression
+  (`@_@`, `✦_✦`, `>_<`, `o_o`).
 * The five `morph=` / `object morphs:` token groups in the comments, for the parts a vertex morph cannot hold.
 * `Texture2D/tex_chr1001_00_cheek0_blush.png` and `…cheek1_blush.png` - the blush baked for alpha blending,
   beside the game's own maps.
@@ -214,11 +225,11 @@ Re-counted against the exported `1001_morphs25.pmx` (281 morphs: 211 vertex, 70 
 
 | game morph (`OtherMorphs`, 8 for 1001) | mechanism | in the pmx today | addon today |
 |---|---|---|---|
-| `Cheek_Ctrl` | up to 3 `_CheekRate` textures, locator axes ScaX/Y/Z | **yes** - `Blush` deploy + `morph=Cheek_Ctrl:Texture:ScaX:_CheekRate,ScaY:_CheekRate` on the cheek material + the baked `_blush` maps | yes |
+| `Cheek_Ctrl` | up to 3 `_CheekRate` textures, locator axes ScaX/Y/Z | **yes** - `Cheek_Blush` deploy + `morph=Cheek_Ctrl:Texture:ScaX:_CheekRate,ScaY:_CheekRate` on the cheek material + the baked `_blush` maps | yes |
 | `Shade_Ctrl` | shader `_faceShadowAlpha` | **yes, as data only** - `morph=Shade_Ctrl:Shader:ScaX:_faceShadowAlpha` on the face material; no geometry, so no morph | **no** - parked, waiting for the face-region port to have an input |
-| `Manga_Ctrl` | EyeSelect + Enable over 8 prefabs | **yes** - `@_@`, `✦_✦`, `>_<`, `o_o` × L/R deploy morphs | yes |
-| `StaticTear_Ctrl` | Enable over `tearmesh_l/r` | **yes** - `Tear_L`, `Tear_R` | yes |
-| `Tear0_Ctrl`…`Tear3_Ctrl` | TearWeight/Side/Select/Speed on a `TearController` | **partly** - 8 deploy morphs + 56 `_scr` UV morphs + `scroll=<cols>x<rows>`; **the skeleton animation is not exported** | yes for the scroll, no for the roll |
+| `Manga_Ctrl` | EyeSelect + Enable over 8 prefabs | **yes** - `Manga_*_L/R` deploy morphs | yes |
+| `StaticTear_Ctrl` | Enable over `tearmesh_l/r` | **yes** - `Tear_Static_L/R` | yes |
+| `Tear0_Ctrl`…`Tear3_Ctrl` | TearWeight/Side/Select/Speed on a `TearController` | **partly** - 4 deploy morphs + 28 `_Sheet` UV morphs (after dedupe) + `scroll=<cols>x<rows>`; **the skeleton animation is not exported** | yes for the scroll, no for the roll |
 
 The 192 remaining morphs are the ordinary facial ones (eye, brow, mouth, ear). Those come from the meshes' own
 blend shapes (`ReadMorph` walks `mesh.blendShapeCount`), so they cannot be "missed" - whatever shape keys the
