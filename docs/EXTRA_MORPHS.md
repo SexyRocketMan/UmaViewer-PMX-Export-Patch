@@ -98,8 +98,8 @@ and scale its length to the distance between them (1.225 units against the ribbo
 
 Worth knowing before reading the morph list. `SetDir` puts *both* of a controller's prefabs on the same eye -
 `TearObject_0` at `Eye_tear_attach_03_L/R`, `TearObject_1` at `attach_02_L/R` - and the per-controller spacing in
-the game comes from `TearSide`, a position-Y offset that the face clips drive. The viewer has no tear UI and never
-drives it, so controllers 1 and 3 land on the left eye at the same place and 2 and 4 on the right: measured,
+the game comes from `TearSide`, a position-Y offset that the face clips drive. Nothing drives it by default, so
+controllers 1 and 3 land on the left eye at the same place and 2 and 4 on the right: measured,
 `TearDrop1_L` and `TearDrop3_L` hold **identical** offsets (same shape, same position, different vertices), as do
 `TearDrop2_R`/`TearDrop4_R` and the `b` pair. That is also why there is no `TearDrop3_R` or `TearDrop4_L`: the
 number is the *controller*, and a controller only ever sits on one eye. Two stacked decals and four redundant
@@ -110,9 +110,15 @@ morphs are the price of exporting the viewer's default placement rather than the
 `tex_chr_tear00` is not only the animated tears' texture: `UmaContainerCharacter.cs:927` loads it and assigns it
 as the *main texture* of the two static tear meshes (`tearmesh_l`, `tearmesh_r`), which is the shine that sits
 on the lower lid when a character is about to cry. Those two meshes are in the export (as `Tear_L`/`Tear_R`
-above), so the effect *is* reachable - what is not reachable from the viewer is the animated version, because
-the viewer has no tear UI at all (the `Tear0`…`Tear3` controls are only ever written by the game's own face
-clips). Settling whether there is a *third* mechanism - a shader input for wetness on the eye material - needs
+above), so the effect *is* reachable.
+
+The animated version is reachable too, which this document used to deny: the viewer's **Other** morph list builds
+a slider for every `Tear0_Ctrl`…`Tear3_Ctrl` bind (`UmaViewerUI.cs`, the `TearWeight`/`TearSide`/`TearSelect`/
+`TearSpeed` cases), so the tears can be switched on by hand. What that shows is the sprite rolling and the card
+staying where it is - `UpdateOffset` writes `_TexScrollParam` and nothing else moves. See "What actually poses the
+card" above for the measurement.
+
+Settling whether there is a *third* mechanism - a shader input for wetness on the eye material - needs
 a material probe: every material property whose name contains "tear"/"wet". No such property exists in the
 shader set the viewer knows, but the probe is the evidence, not the absence.
 
