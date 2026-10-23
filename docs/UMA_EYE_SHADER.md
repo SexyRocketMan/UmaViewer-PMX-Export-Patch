@@ -22,8 +22,14 @@ The parameters are what matters:
 | `_MainParam[0..1]` | `float4(x, y, z, w)` | the iris plate: `.xy` = per-eye UV offset, `.z` = rotation angle, `.w` = eye type 0–3 |
 | `_Offset` | `float4` | per-eye UV offset for the highlight sampling |
 | `_High0Tex_ST` | `float4(1, 1, 0, 0)` | highlight UV scale — **1:1, no tiling** |
-| `_Limit` | `float` | the threshold the highlights are cut at (default 0.1) |
+| `_Limit` | `float` | the threshold the highlights are cut at (declared 0.1 in the port; the shipped material carries **0.5** — see "Measured" below) |
 | `_HighParam1[2].w` | `float` | intensity of the blink layer |
+
+**Read the table's provenance carefully.** The `_HighParam*` and `_MainParam*` rows are the uniforms the MME
+*port* declares so that an MMD effect can be driven from outside. The shipped shader does not expose them: it has
+46 properties and none of those names are among them (see "Measured", below). So the port is faithfully
+reproducing the *maths* while inventing the *interface*, and a value read from the port is not evidence about
+what the game's material holds.
 
 ## The motion, per vertex
 
@@ -56,6 +62,39 @@ colour += max(0, saturate(intensity));           // per layer, three times
 i.e. **luminance above a threshold, scaled by the layer's own intensity, added to the eye**. That is why the
 maps are black-background rather than alpha-masked, and why an MMD-style alpha blend of them draws black
 (`export` notes: `TextureExporter.BakeHighlight` exists for exactly that reason).
+
+## Measured: what the shipped material exposes
+
+`Tools/headless_export.ps1 -Char 1001 -Costume 00 -DumpShaders -Out <path>` prints the property list of the eye
+and face materials as loaded, and this is not a port's opinion: `UmaContainerCharacter` swaps the material's
+shader for the game's *own compiled* shader out of `shader.a` (`UmaAssetManager.EyeShader` =
+`charactertooneyet.shader`), so the names, ranges and values below are the game's.
+
+The eye material (`mtl_chr1001_00_eye`, shader `Gallop/3D/Chara/ToonEye/T`) has 46 properties. The ones that
+matter here, with the shipped values:
+
+| property | type | shipped value | note |
+|---|---|---|---|
+| `_High0Tex` / `_High1Tex` / `_High2Tex` | texture | `tex_chr1001_00_eyehi00/01/02` | the three layers, exactly as the port assumes |
+| `_Limit` | Range | **0.5** | one threshold for all three layers, not one per layer |
+| `_Offset` | Vector | (0, 0, 0, 0) | the port's per-eye UV offset |
+| `_WetTex` | texture | `<none>` | **not in the port** — a wet/teary overlay slot |
+| `_WetRate` | Range | 1.0 | strength of the above |
+| `_EyePupliScale` | Float | 1.0 | pupil scale, as the port assumes |
+| `_NormalizeNormal` | Range | 0 | matches `UMA_SHADER.md`'s note on the face |
+
+What this settles and what it does not:
+
+* **Settled:** the threshold the port calls `_Limit` is real, is a single scalar, and the normal value is
+  **0.5** — not the 0.1 the port declares. The three-layer split with per-layer intensity (`_HighParam*`) does
+  not exist on the shipped shader, so the "third layer has no threshold" reading of `_HighParam1[2].w` was
+  describing the port. That the highlights in Blender are thresholded at 0.5 was therefore right.
+* **Not settled:** the teary values. A material asset only carries the static numbers; nothing in it drops
+  `_Limit`. The teary state has to be driven by code or by animation — `-DumpShaders` also scans for material
+  animation curves in motion bundles, and sampled 8 `campaign/bg` bundles (7 clips) with **none**.
+* **A new lead:** `_WetTex`/`_WetRate`. Every character texture ships a wet variant — 8128 asset names contain
+  `wet` (`tex_*_diff_wet`, `tex_*_shad_c_wet`, …) — which is the rain/wet look, so `_WetTex` on the eye is
+  plausibly that system rather than a tear overlay. Worth separating before assuming it explains the tears.
 
 ## What this implies for Blender and MMD
 

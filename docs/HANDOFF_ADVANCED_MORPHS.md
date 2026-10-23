@@ -57,56 +57,78 @@ and drives the threshold nodes and the `UMA Hi N` rotate nodes.
 the motion is the addon's. `Tools/patch_eye_masters.py` re-applies the nodes (backs each library up as `.bak`
 first, skips an already-patched file). If a shader update ever lands, re-run it.
 
-## The open lead: real values from the shipped shader
+## The shipped shader's values: measured, and what is left
 
-`Tools/headless_export.ps1 -DumpShaders` was added for exactly this and **is not wired yet** — the flag parses
-and `DumpShaderFacts()` exists and compiles (`Assets/Editor/UmaHeadlessExport.cs`, ~line 1487), but nothing calls
-it, so a run does a plain export with no `[shaders]` lines. Fix: insert
-
-```csharp
-                    if (options.DumpShaders)
-                    {
-                        DumpShaderFacts(container);
-                    }
-```
-
-immediately after the `ProbeMorphs` block (around line 801, after its closing brace), then run:
+`Tools/headless_export.ps1 -DumpShaders` **is wired and has been run** (the call sits in the Export stage right
+after the `ProbeMorphs` block; the prompt for it is:
 
 ```powershell
 .\Tools\headless_export.ps1 -Char 1001 -Costume 00 -DumpShaders -Out C:\tmp\x.pmx
 ```
 
-and read `[shaders]` lines. It prints eye/face material properties (`_High*`, `_Limit`, `_Offset`,
-`_Highlight*`, `_Show*`, `_Eye*`) with the values the game's own material carries, then scans motion bundles
-(capped at 8) for clips that animate a material property — where a keyframed teary threshold would be.
+A run prints `[shaders]` lines to the log and, since the display filter includes them, to the console. It prints
+the **whole** property list of the loaded eye/face/cheek materials rather than a guessed subset, then
+`chara_shader_effect`, then a scan for material animation curves.
 
-If that returns only defaults, the values are written by IL2CPP code (`MaterialPropertyBlock`, the pattern the
-viewer's own `Director.cs` uses for rim), and decompiling that is blocked here (no `global-metadata.dat`). The
-next tool to reach for is **AssetStudio/AssetRipper** over the material and animation bundles — not installed.
+This is the game's own data, not a port's: `UmaContainerCharacter` swaps the material's shader for the shipped
+compiled shader out of `shader.a` (`UmaAssetManager.EyeShader`), so names, ranges and values are real. What was
+learned is written up in `docs/UMA_EYE_SHADER.md` under "Measured". In short:
+
+* `_Limit` is real, is **one** scalar, and the normal value is **0.5** (the MME port declares 0.1).
+* The shipped shader has **no** `_HighParam*`/`_MainParam*` — those are the port's own interface. So "the third
+  layer has no threshold" was describing the port, and the 0.5 the addon thresholds at was right.
+* There is a `_WetTex`/`_WetRate` pair on the eye that nothing in this repository uses, and 8128 asset names
+  contain `wet` (every texture has a wet variant — the rain/wet look). Separating "wet look" from "tears" is
+  the first thing to settle before using this as the tear lead.
+* `chara_shader_effect` is `none` on both head and body for 1001, so `CharaShaderEffectData` (the
+  `_UVEmissiveScroll` driver, the animated-tear mechanism) is not where the highlight numbers live for her.
+* The first motion scan sampled 8 `campaign/bg` bundles (7 clips, 0 material curves) — a useless sample, because
+  alphabetical order starts at campaign backgrounds. It now selects character motions (`chara` in the name) and
+  logs each bundle's clip count, so the next run actually tests the character side.
+
+**The decision this was meant to inform:** the material has now given everything a material can give. A material
+asset carries static values only, so nothing in it drops `_Limit` in the teary state — that is code
+(`MaterialPropertyBlock`, the pattern the viewer's own `Director.cs` uses for rim) or a keyed animation. And the
+decompile route is confirmed blocked: there is **no `global-metadata.dat`** anywhere under
+`C:\Users\user\Umamusume` (only `GameAssembly.dll`, 179 MB, and `il2cpp_data\Resources`), so the IL2CPP metadata
+needed to name the method that sets `_Limit` is simply absent. AssetStudio/AssetRipper over the material and
+animation bundles stays the next tool — still not installed.
 
 A reminder on what a shipped shader can and cannot give: the game's shaders are *compiled* assets in `shader.a`;
 properties and defaults are readable, **source is not**. The decompile remains the source of truth for logic.
 
 ## Known gaps and next steps, in order
 
-1. **Wire the `-DumpShaders` call site** (above) and run it. Decide from its output whether AssetStudio is needed.
-2. **Morphs panel rows**: `AddonPanels.py` has a `Morphs` panel listing `Spin_Speed`, `Spin`, `Tear_Scroll` and
-   the deploy keys, but not the `Hi_*` properties — a few lines, same pattern.
-3. **Normals donor retained morphs** (parked by the user, design agreed): the static face copy used for the
+1. **DONE — the `-DumpShaders` call site is wired and run.** See "The shipped shader's values" above for what it
+   found. The AssetStudio question is answered as far as this tool can answer it: the material holds nothing
+   more, and the IL2CPP route is confirmed blocked (no `global-metadata.dat`).
+2. **DONE — the `Hi_*` rows are in the Morphs panel** (`Morphs` panel, an "Eye highlights" box: `Hi_Limit`,
+   `Hi_Throb`, `Hi_Swirl`, `Hi_Jitter`, `Hi_Jitter_Rate`, with a single info row when the step has not been run).
+3. **Next real question: what sets `_Limit` in the teary state?** Three cheap candidates, cheapest first:
+   (a) a facial morph binding the property — `-ProbeMorphs` prints every `OtherMorphs` bind with its
+   `property=` name, so grep that log for `_Limit`/`_Wet`/`_High`; (b) a material animation curve — the motion
+   scan says no for 8 character motions, so this needs a wider or targeted sample before it is called dead;
+   (c) code. Also worth a look, independent of tears: **`_WetTex` has no matching texture anywhere** — there are
+   0 asset names containing both `wet` and `eye`, while face/hair/body have thousands — so whatever the game
+   assigns to it is not part of the wet-texture-variant system and is worth identifying on its own.
+4. **Normals donor retained morphs** (parked by the user, design agreed): the static face copy used for the
    normal transfer should *keep* selected shape keys (`Eye_EyeHideA_L/_R` first) and drive them from the real
    face's keys, instead of masking the transfer. The Vertex Group field of the Data Transfer modifier does not
    mask normal transfers. Hooks: `FaceNormals.split_face_into_object`, `prune_dead_shape_keys`,
    `remove_shape_keys`.
-4. **Parked deliberately**: `Shade_Ctrl` (`_faceShadowAlpha`; needs the face-region port to have an input),
+5. **Parked deliberately**: `Shade_Ctrl` (`_faceShadowAlpha`; needs the face-region port to have an input),
    vmd/recording of the advanced morphs (the sampler design is in `EXTRA_MORPHS.md`, judged not worth it yet),
    eye-highlight UV morphs in the pmx (superseded by the shader route).
-5. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
+6. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
    file sets in the fork (rain/wet look, VMD loop lead-in) belong to the user.
 
 ## Pitfalls that cost time this session
 
 * **Panel `bl_idname` collision**: a new panel taking an existing `SCENE_PT_umaaddonpanel5` silently ate the
   shading panel. New panels use their own id (`SCENE_PT_umaaddonpanel_morphs`).
+* **`Tools/headless_export.ps1` echoes only what its allowlist matches.** New `Debug.Log` prefixes are invisible
+  on the console even when the run succeeds — the `[shaders]` lines were there in the log all along. Add the
+  prefix to the `Select-String` pattern at the bottom of the script, or grep the log file.
 * **PowerShell here-string replacements fail silently** on these files (line endings), and one of them truncated
   `ModelExporter.cs` to zero bytes. Prefer a small Python script with `assert` on every anchor, or the `edit`
   tool; check `Get-Item … Length` after a scripted write.
