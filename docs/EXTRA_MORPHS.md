@@ -70,18 +70,33 @@ scroll through it, so the drip was never going to run the right way. The `@_@` r
 way and has not been re-measured: a mirrored rotation looks plausible on a symmetrical decal, so if the dizzy face
 turns the wrong way, suspect the same thing.
 
-### What actually poses the card: nothing in the assets
+### The skeleton is there, but the clips carry no animation
 
-`headless_export.ps1 -ProbeTears` dumps the runtime objects (see the handoff), and it answers "why does the tear
-card stand up over the eye instead of running down the cheek" with: no shipped data gives it a pose.
+The tear card is **not** a static mesh, and it is worth being precise about that, because the first pass through
+this looked like a rig with nothing driving it and that was the wrong conclusion:
 
-| what could pose it | measured |
+| part of the setup | what it is |
 |---|---|
-| the clip | `anm_chr_tear000` **and** the base `anm_tear000_00` both have **0 curve bindings** — they are timers for the sprite scroll (4.267 s and 1.0 s long) |
-| a spring | no `CySpring`, `CySpringDataContainer` or `DynamicBone` on either prefab, and no spring container lists a `joint*` bone name |
-| the attach bones | `Eye_tear_attach_01..03_L/R` all carry local rotation 0; their up vector is world +Y |
-| the placement | `SetDir` sets `transform.position`, and `localScale = (-1,1,1)` for the right eye — it never sets a rotation |
-| the animator running | `BakeMesh` is identical at t = 0, 0.25, 0.5, 0.75, 1 and after 45 played frames |
+| the mesh | `SkinnedMeshRenderer`, 66 verts on an 11-joint chain (`joint000`…`joint010`, 5 mm apart) for `tear000`, 36 verts on 3 joints for `tear001` |
+| the animator | present and enabled, with its own generic avatar `mdl_chr_tear000Avatar` (`valid=True`, `human=False`) |
+| the controller | created at run time: `TearController` builds an `AnimatorOverrideController` over `anm_chara_tear_animator` and overrides the state `anm_tear000_00` with the prefab's `default_animation` |
+| the clips | **`bindings=0`, `humanMotion=False`, `motionCurves=False`, `genericRoot=False`** — for the override clip *and* the base controller's own clip |
+
+The empty clips are not a per-character quirk. Scanning every bundle whose path contains `tear` finds the same
+Clip at 4.267 s with zero bindings for chr0001, chr0900, chr1001, chr1002 and on - the `*_faceXXX_tear000_00`
+and `anm_chr*_tear000_00` family. They are **timers**: their only job is to make
+`AnimatorStateInfo.normalizedTime` advance, which is exactly what `TearController.UpdateOffset` reads to pick a
+sprite-sheet cell. A clip's serialized data confirms it — no `m_MuscleClip`, no curve lists.
+
+Measured with the tears switched on (all four weights raised the way the slider does it) and sampled over 2 s of
+wall clock: the state runs (`norm` rises from 0.000 to 0.012 of the 4.267 s clip) and the posed extent **never
+changes** — `0.010 × 0.046 × 0.001` for the tall card on every frame, `0.039 × 0.014 × 0.001` for the wide one.
+The joint world positions drift by millimetres, in step with the character's own idle animation moving the head;
+the card itself is rigid.
+
+So the "rolling down the cheek" is drawn by the **sprite**, not by the geometry: the sheet scrolls through the
+card's UVs, and the card keeps the pose and the size it was authored with. That is why the export - which copies
+the card and adds the `_scr` UV stack - reproduces the roll but not a card that reaches the chin.
 
 So the card is a **rigid ribbon in its rest pose**, pointing straight up along world +Y from whichever attach bone
 placed it. For 1001 that is `pfb_chr_tear000`: 66 vertices skinned to an 11-joint chain, 0.010 wide by 0.046
@@ -89,10 +104,12 @@ tall, which lands in the pmx as **0.603 units from Y 17.495 to 18.098** while th
 (`Eye_tear_attach_03_L`) is at 17.455 and the `Chin` bone at 16.466. It is roughly the right length for the trip
 to the chin but pointing the wrong way, and about 40% short of actually reaching it.
 
-The game must pose those joints in code — IL2CPP, and there is no `global-metadata.dat` to decompile (see the
-handoff). Reconstructing the pose is therefore a choice rather than an extraction. The defensible one uses the
-rig's own landmarks instead of an invented angle: aim the ribbon from `Eye_tear_attach_03_*` at the `Chin` bone,
-and scale its length to the distance between them (1.225 units against the ribbon's 0.603, so about 2x on Y).
+Since the clips carry no animation, nothing in the data can stretch the card to the chin either — so if the game
+shows a stream that long, the difference is in how the card is *placed and sized*, and that is a reconstruction
+rather than an extraction. The defensible one uses the rig's own landmarks instead of an invented angle: aim the
+ribbon from `Eye_tear_attach_03_*` at the `Chin` bone, and scale its length to the distance between them (1.225
+units against the ribbon's 0.603, so about 2x on Y). Worth confirming against the Editor first: with a tear
+switched on, does the card's own bounding box grow as it plays, or does only the sprite move?
 
 ### The four controllers are not four positions
 

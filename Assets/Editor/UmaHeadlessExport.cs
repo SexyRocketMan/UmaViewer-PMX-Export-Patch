@@ -140,6 +140,8 @@ public static class UmaHeadlessExport
         // how the animated tears are built: they are skinned meshes posed by an Animator, so the mesh the exporter
         // reads is a bind pose and not necessarily the shape the game draws
         public bool ProbeTears;
+        // how long -ProbeTears watches the tears with the animator actually running, in wall clock seconds
+        public double TearSampleSeconds = 2.0;
         public bool DumpShaders;
         public string Variant = "";
         public int MorphNameMode = -1;
@@ -601,6 +603,23 @@ public static class UmaHeadlessExport
                     if (options.PlaySeconds > 0 && EditorApplication.timeSinceStartup < _playDeadline)
                     {
                         return;
+                    }
+
+                    // the tears last: they have to be watched with the animator running, which needs wall clock
+                    // time rather than frames (see the note by _playDeadline)
+                    if (options.ProbeTears)
+                    {
+                        if (!_tearSamplingStarted)
+                        {
+                            _tearSamplingStarted = true;
+                            _tearSampleSeconds = options.TearSampleSeconds;
+                            BeginTearSampling();
+                        }
+                        if (EditorApplication.timeSinceStartup < _tearSampleDeadline)
+                        {
+                            SampleTearFrame();
+                            return;
+                        }
                     }
 
                     CurrentStage = !string.IsNullOrEmpty(options.Screenshot)
@@ -1496,6 +1515,92 @@ public static class UmaHeadlessExport
     /// so a morph being absent means one of those parts was missing when the target initialised. This prints the
     /// parts themselves as well, so the report says *why* rather than only what.
     /// </summary>
+    /// <summary>Watchers for -ProbeTears: the tears are sampled over wall clock time, not frames.</summary>
+    private static bool _tearSamplingStarted;
+    private static double _tearSampleDeadline;
+    private static int _tearSampleCount;
+
+    /// <summary>
+    /// Switches the tears on the way the UI does - every `Tear*_Ctrl` weight to 1 - and marks the animation as
+    /// running. Note the objects only animate once they are active, and the animator then needs real time.
+    /// </summary>
+    private static void BeginTearSampling()
+    {
+        var character = CurrentContainer() as UmaContainerCharacter;
+        _tearSampleCount = 0;
+        _tearSampleDeadline = EditorApplication.timeSinceStartup + Math.Max(0.1, _tearSampleSeconds);
+        if (character == null || character.FaceDrivenKeyTarget == null)
+        {
+            Debug.Log($"{Tag} [tears] no facial target, nothing to sample");
+            return;
+        }
+        int driven = 0;
+        foreach (FacialOtherMorph morph in character.FaceDrivenKeyTarget.OtherMorphs)
+        {
+            if (morph == null || !morph.name.StartsWith("Tear")) continue;
+            foreach (BindProperty property in morph.BindProperties)
+            {
+                if (property == null || property.Type != BindProperty.BindType.TearWeight) continue;
+                character.FaceDrivenKeyTarget.ChangeMorphWeight(property, 1f, morph, false);
+                driven++;
+            }
+        }
+        Debug.Log($"{Tag} [tears] sampling '{character.name}' for {_tearSampleSeconds:F1}s, {driven} weight(s) raised");
+    }
+
+    private static double _tearSampleSeconds = 2.0;
+
+    /// <summary>One sample per editor frame: where the animator is, and the posed extent of every active tear.</summary>
+    private static void SampleTearFrame()
+    {
+        var character = CurrentContainer() as UmaContainerCharacter;
+        if (character == null || character.TearControllers == null) return;
+        _tearSampleCount++;
+        for (int index = 0; index < character.TearControllers.Count; index++)
+        {
+            TearController controller = character.TearControllers[index];
+            if (controller == null) continue;
+            // SetWegiht shows CurrenObject and hides the other one, so that is the part that is really on screen
+            GameObject part = controller.CurrenObject < 1 ? controller.TearObject_0 : controller.TearObject_1;
+            if (part == null) continue;
+            Animator animator = part.GetComponent<Animator>();
+            string state = "no animator";
+            if (animator != null && animator.isActiveAndEnabled)
+            {
+                AnimatorStateInfo info = animator.GetCurrentAnimatorStateInfo(0);
+                state = $"norm={info.normalizedTime:F3} len={info.length:F3} "
+                        + $"intransition={(animator.IsInTransition(0) ? 1 : 0)} speed={animator.speed:F2}";
+            }
+            foreach (SkinnedMeshRenderer renderer in part.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var baked = new Mesh();
+                try
+                {
+                    renderer.BakeMesh(baked, false);
+                    Vector3[] vertices = baked.vertices;
+                    if (vertices.Length == 0) continue;
+                    Vector3 min = vertices[0], max = vertices[0];
+                    foreach (Vector3 vertex in vertices)
+                    {
+                        min = Vector3.Min(min, vertex);
+                        max = Vector3.Max(max, vertex);
+                    }
+                    Transform[] bones = renderer.bones;
+                    string last = bones.Length > 0 && bones[bones.Length - 1] != null
+                        ? $"{bones[bones.Length - 1].name}{VectorText(bones[bones.Length - 1].position)}"
+                        : "none";
+                    Debug.Log($"{Tag} [tears] frame {_tearSampleCount} ctrl{index} '{part.name}' "
+                              + $"active={part.activeSelf} {state} size={VectorText(max - min)} "
+                              + $"min={VectorText(min)} tip={last}");
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(baked);
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// How the animated tears are actually built, because the exporter only ever sees half of it.
     ///
@@ -1513,6 +1618,7 @@ public static class UmaHeadlessExport
             Debug.Log($"{Tag} [tears] no tear controllers");
             return;
         }
+        DumpTearBundles();
         Debug.Log($"{Tag} [tears] {character.TearControllers.Count} controller(s), "
                   + $"FaceDrivenKeyTarget={(character.FaceDrivenKeyTarget != null)}, "
                   + $"spring containers on the character={character.cySpringDataContainers.Count}");
@@ -1708,11 +1814,22 @@ public static class UmaHeadlessExport
 
                 foreach (float time in new[] { 0f, 0.25f, 0.5f, 0.75f, 0.999f })
                 {
-                    if (animator != null && animator.runtimeAnimatorController != null)
+                    if (animator != null && animator.runtimeAnimatorController != null && animator.avatar != null)
                     {
-                        animator.speed = 0f;
+                        // speed 1 with a tiny step: the pose is set by the normalised time, and the step is what
+                        // makes Unity evaluate it at all (a zero step often evaluates nothing)
+                        animator.speed = 1f;
                         animator.Play(0, 0, time);
-                        animator.Update(0f);
+                        animator.Update(0.0001f);
+                    }
+                    if (bones.Length > 0)
+                    {
+                        var moved = new List<string>();
+                        for (int b = 0; b < bones.Length && b < 5; b++)
+                        {
+                            if (bones[b] != null) moved.Add($"{bones[b].name}{VectorText(bones[b].position)}");
+                        }
+                        Debug.Log($"{Tag} {label} t={time:F3} joints: {string.Join(" ", moved)}");
                     }
                     DumpTearBaked(label, renderer, time);
                 }
@@ -1731,6 +1848,55 @@ public static class UmaHeadlessExport
             part.SetActive(wasActive);
         }
     }
+
+    /// <summary>
+    /// Every asset in the tear bundles, with curve counts for anything that is an animation. The clip the
+    /// reconstruction picks (`default_animation`) is empty as loaded; if the real animation lives in a sibling
+    /// clip, it is in one of these bundles and this finds it.
+    /// </summary>
+    private static void DumpTearBundles()
+    {
+        var main = UmaViewerMain.Instance;
+        if (main == null) return;
+        foreach (var pair in main.AbList)
+        {
+            if (pair.Key.IndexOf("tear", StringComparison.OrdinalIgnoreCase) < 0) continue;
+            AssetBundle bundle = null;
+            try
+            {
+                bundle = UmaAssetManager.LoadAssetBundle(pair.Value, true, false);
+            }
+            catch (Exception exception)
+            {
+                Debug.Log($"{Tag} [tears] bundle '{pair.Key}' failed: {exception.GetType().Name}");
+                continue;
+            }
+            if (bundle == null) continue;
+            UnityEngine.Object[] assets = bundle.LoadAllAssets();
+            Debug.Log($"{Tag} [tears] bundle '{pair.Key}': {assets.Length} asset(s)");
+            foreach (UnityEngine.Object asset in assets)
+            {
+                if (asset == null) continue;
+                var clip = asset as AnimationClip;
+                if (clip != null)
+                {
+                    Debug.Log($"{Tag} [tears]   AnimationClip '{clip.name}' legacy={clip.legacy} "
+                              + $"length={clip.length:F3} bindings={AnimationUtility.GetCurveBindings(clip).Length} "
+                              + $"humanMotion={clip.humanMotion} motionCurves={clip.hasMotionCurves}");
+                    continue;
+                }
+                var controller = asset as RuntimeAnimatorController;
+                if (controller != null)
+                {
+                    Debug.Log($"{Tag} [tears]   controller '{asset.name}' "
+                              + $"clips={string.Join(",", controller.animationClips.Select(c => c != null ? c.name : "null"))}");
+                    continue;
+                }
+                Debug.Log($"{Tag} [tears]   {asset.GetType().Name} '{asset.name}'");
+            }
+        }
+    }
+
 
     /// <summary>The posed extent only, for re-measuring a part after the weight has been driven.</summary>
     private static void DumpTearPartWidth(string label, GameObject part)
@@ -1787,6 +1953,45 @@ public static class UmaHeadlessExport
         }
     }
 
+    /// <summary>
+    /// The clip's serialized fields, to a shallow depth: which curve lists exist and how big they are. This is
+    /// how you tell "the clip is empty" apart from "the clip has data that GetCurveBindings does not report".
+    /// </summary>
+    private static void DumpClipSerialized(string label, AnimationClip clip)
+    {
+        try
+        {
+            var serialized = new SerializedObject(clip);
+            SerializedProperty iterator = serialized.GetIterator();
+            int printed = 0;
+            while (iterator.NextVisible(true) && printed < 60)
+            {
+                if (iterator.depth > 2) continue;
+                if (iterator.propertyType == SerializedPropertyType.Generic && iterator.propertyPath.Contains(".")) continue;
+                string detail;
+                switch (iterator.propertyType)
+                {
+                    case SerializedPropertyType.Integer:
+                    case SerializedPropertyType.Enum:
+                    case SerializedPropertyType.Boolean:
+                    case SerializedPropertyType.Float:
+                        detail = iterator.ToString() == null ? iterator.propertyType.ToString() : iterator.propertyType.ToString();
+                        break;
+                    default:
+                        detail = iterator.propertyType.ToString();
+                        break;
+                }
+                string size = iterator.isArray ? $"[{iterator.arraySize}]" : "";
+                Debug.Log($"{Tag} {label}     field {iterator.propertyPath} = {detail}{size}");
+                printed++;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.Log($"{Tag} {label}     serialized dump failed: {exception.GetType().Name}");
+        }
+    }
+
     private static void DumpTearAnimator(string label, Animator animator, GameObject part)
     {
         if (animator == null)
@@ -1798,6 +2003,28 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag} {label} animator enabled={animator.enabled} "
                   + $"controller='{(runtime != null ? runtime.name : "none")}' "
                   + $"clips={(runtime != null ? runtime.animationClips.Length : 0)}");
+
+        // a *humanoid* clip has no generic curve bindings at all - its motion lives in muscle curves, and what
+        // maps them onto this skeleton is the avatar. `bindings=0` therefore says nothing about whether the clip
+        // animates anything, which is exactly the trap this probe fell into first time round.
+        Avatar avatar = animator.avatar;
+        if (avatar == null)
+        {
+            Debug.Log($"{Tag} {label} avatar: NONE - a humanoid clip cannot be applied without one");
+        }
+        else
+        {
+            Debug.Log($"{Tag} {label} avatar '{avatar.name}' valid={avatar.isValid} human={avatar.isHuman}");
+            if (avatar.isHuman)
+            {
+                HumanBone[] human = avatar.humanDescription.human;
+                Debug.Log($"{Tag} {label}   human bones mapped: {human.Length}");
+                foreach (HumanBone bone in human)
+                {
+                    Debug.Log($"{Tag} {label}     {bone.humanName} -> '{bone.boneName}'");
+                }
+            }
+        }
         if (runtime == null) return;
         AnimatorOverrideController overrides = runtime as AnimatorOverrideController;
         if (overrides != null && overrides.runtimeAnimatorController != null)
@@ -1844,7 +2071,8 @@ public static class UmaHeadlessExport
             if (clip == null) continue;
             EditorCurveBinding[] bindings = AnimationUtility.GetCurveBindings(clip);
             Debug.Log($"{Tag} {label}   clip '{clip.name}' length={clip.length:F3} "
-                      + $"loop={clip.isLooping} bindings={bindings.Length}");
+                      + $"loop={clip.isLooping} bindings={bindings.Length} humanMotion={clip.humanMotion} "
+                      + $"motionCurves={clip.hasMotionCurves} genericRoot={clip.hasGenericRootTransform}");
             for (int b = 0; b < bindings.Length && b < 12; b++)
             {
                 EditorCurveBinding binding = bindings[b];
@@ -1858,6 +2086,9 @@ public static class UmaHeadlessExport
             {
                 Debug.Log($"{Tag} {label}     ... {bindings.Length - 12} more bindings");
             }
+            // GetCurveBindings only reports generic curves. A clip can still carry data the API does not list
+            // (muscle curves, additive data), so the serialized fields are printed too rather than trusted.
+            DumpClipSerialized(label, clip);
         }
     }
 
