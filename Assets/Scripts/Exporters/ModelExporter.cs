@@ -57,7 +57,7 @@ public class ModelExporter
         FileStream fileStream = new FileStream(path, FileMode.Create);
         BinaryWriter writer = new BinaryWriter(fileStream);
         var config = new ModelConfig() { GlobalToonPath = "Toon" };
-        PMXWriter.Write(writer, model, config);
+        PMXWriter.Write(writer, model, config, PmxConfigFor(model));
 
         writer.Close();
         fileStream.Close();
@@ -65,6 +65,31 @@ public class ModelExporter
         RemoveBillboard(container);
         ClearBlendShape(container);
         UmaViewerUI.Instance.ShowMessage($"PMX Save at {path}", UIMessageType.Success);
+    }
+
+    /// <summary>
+    /// The index widths a pmx needs for this model.
+    ///
+    /// Worth spelling out because the writer's fallback is not safe for every model: `PMXWriter`'s default is
+    /// `VertexIndexSize = 2` and the 2-byte path casts each index with `(ushort)`, so a model past 65,535 vertices
+    /// wraps its indices silently instead of failing. The character path used to rely on that default while the
+    /// generic one computed the widths, which meant the *common* case was the unwatched one. Counts decide every
+    /// width here, so a costume with more parts than usual cannot quietly corrupt the file.
+    /// </summary>
+    private static PmxConfig PmxConfigFor(RawMMDModel model)
+    {
+        return new PmxConfig()
+        {
+            Utf8Encoding = false,
+            Encoding = Encoding.Unicode,
+            ExtraUvNumber = 3, //include uv2 and color
+            VertexIndexSize = model.Vertices.Length > 65535 ? 4 : (model.Vertices.Length > 255 ? 2 : 1),
+            TextureIndexSize = model.TextureList.Count > 255 ? 2 : 1,
+            MaterialIndexSize = model.Parts.Length > 255 ? 2 : 1,
+            BoneIndexSize = model.Bones.Length > 65535 ? 4 : (model.Bones.Length > 255 ? 2 : 1),
+            MorphIndexSize = model.Morphs.Length > 65535 ? 4 : (model.Morphs.Length > 255 ? 2 : 1),
+            RigidBodyIndexSize = model.Rigidbodies.Length > 65535 ? 4 : (model.Rigidbodies.Length > 255 ? 2 : 1)
+        };
     }
 
     public static void ExportModel(UmaContainer container, string path)
@@ -81,18 +106,7 @@ public class ModelExporter
         }
 
         // Vertex index size fix
-        PmxConfig pmxConfig = new PmxConfig()
-            {
-                Utf8Encoding = false,
-                Encoding = Encoding.Unicode,
-                ExtraUvNumber = 3, //include uv2 and color
-                VertexIndexSize = model.Vertices.Length > 65535 ? 4 : (model.Vertices.Length > 255 ? 2 : 1),
-                TextureIndexSize = model.TextureList.Count > 255 ? 2 : 1,
-                MaterialIndexSize = model.Parts.Length > 255 ? 2 : 1,
-                BoneIndexSize = model.Bones.Length > 65535 ? 4 : (model.Bones.Length > 255 ? 2 : 1),
-                MorphIndexSize = model.Morphs.Length > 65535 ? 4 : (model.Morphs.Length > 255 ? 2 : 1),
-                RigidBodyIndexSize = model.Rigidbodies.Length > 65535 ? 4 : (model.Rigidbodies.Length > 255 ? 2 : 1)
-            };
+        PmxConfig pmxConfig = PmxConfigFor(model);
 
         FileStream fileStream = new FileStream(path, FileMode.Create);
         BinaryWriter writer = new BinaryWriter(fileStream);
@@ -1986,14 +2000,27 @@ public class ModelExporter
     /// `_faceShadowHeadMat` from it every frame (`HeadBone.transform.worldToLocalMatrix`) and the vertex
     /// program transforms each vertex by it, so the pixel program can read the vertex's height inside the
     /// head. A static export can carry the same number computed at the rest pose.
+    ///
+    /// Matched loosely and reported when missing, because this bone is also the fallback a bone-less decal rides:
+    /// requiring the exact name "Head" quietly sent every decal to bone 0 on a rig that spells it otherwise, which
+    /// is the same "the decal does not follow the head" bug one fallback further along.
     /// </summary>
     private static Transform FindHeadBone(List<Transform> bones)
     {
+        Transform loose = null;
         foreach (var bone in bones)
         {
-            if (bone != null && bone.name == "Head") return bone;
+            if (bone == null) continue;
+            if (bone.name == "Head") return bone;
+            if (loose == null && bone.name.StartsWith("Head", StringComparison.OrdinalIgnoreCase)) loose = bone;
         }
-        return null;
+        if (loose == null)
+        {
+            Debug.LogWarning($"{Tag} no bone named 'Head' (or starting with it): decals fall back to bone 0, so "
+                             + "they will not follow the head. Bones seen: "
+                             + string.Join(", ", bones.Take(8).Select(b => b != null ? b.name : "null")));
+        }
+        return loose;
     }
 
     /// <summary> Credit to pohype: https://discussions.unity.com/t/reading-meshes-at-runtime-that-are-not-enabled-for-read-write/804189/7 </summary>
