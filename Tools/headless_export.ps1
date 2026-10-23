@@ -45,6 +45,7 @@ param(
     [switch]$DumpMaterials,
 [switch]$DumpFace,
     [switch]$ProbeMorphs,
+    [switch]$DumpShaders,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
     [int]$RecordReduction = 0,
@@ -174,6 +175,7 @@ if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExport
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
 if ($DumpFace) { $arguments += "-umaDumpFace" }
     if ($ProbeMorphs) { $arguments += "-umaProbeMorphs" }
+    if ($DumpShaders) { $arguments += "-umaDumpShaders" }
 if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
 if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
 if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordReduction) }

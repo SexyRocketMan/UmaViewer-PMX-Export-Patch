@@ -137,6 +137,7 @@ public static class UmaHeadlessExport
         // what the facial morph system actually holds at runtime: the extra morphs, their locators and
         // their binds, and whether the cheek/texture plumbing behind them got filled in
         public bool ProbeMorphs;
+        public bool DumpShaders;
         public string Variant = "";
         public int MorphNameMode = -1;
         public bool APoseRestPose;
@@ -219,6 +220,7 @@ public static class UmaHeadlessExport
                     case "-umaDumpMaterials": options.DumpMaterials = true; break;
                     case "-umaDumpFace": options.DumpFace = true; break;
             case "-umaProbeMorphs": options.ProbeMorphs = true; break;
+            case "-umaDumpShaders": options.DumpShaders = true; break;
                     case "-umaShotTexture": options.ShotTextures.Add(Next()); break;
                     case "-umaShotGlobal": options.ShotGlobals.Add(Next()); break;
                     case "-umaShotFloat": options.ShotFloats.Add(Next()); break;
@@ -1482,6 +1484,60 @@ public static class UmaHeadlessExport
     /// so a morph being absent means one of those parts was missing when the target initialised. This prints the
     /// parts themselves as well, so the report says *why* rather than only what.
     /// </summary>
+        private static void DumpShaderFacts(UmaContainer container)
+        {
+            var wanted = new[] { "_High", "_Limit", "_Offset", "_Highlight", "_Eye", "_Show", "_EyeSelect" };
+            Debug.Log("[shaders] ---- materials on the loaded model ----");
+            foreach (Renderer renderer in container.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null) continue;
+                foreach (Material material in renderer.materials)
+                {
+                    if (material == null || material.shader == null) continue;
+                    if (material.name.IndexOf("eye", System.StringComparison.OrdinalIgnoreCase) < 0
+                        && material.name.IndexOf("face", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    Debug.Log($"[shaders] material '{material.name}' shader '{material.shader.name}'");
+                    int count = material.shader.GetPropertyCount();
+                    for (int i = 0; i < count; i++)
+                    {
+                        string property = material.shader.GetPropertyName(i);
+                        bool interesting = false;
+                        foreach (string needle in wanted)
+                        {
+                            if (property.IndexOf(needle, System.StringComparison.OrdinalIgnoreCase) >= 0) { interesting = true; break; }
+                        }
+                        if (!interesting) continue;
+                        var type = material.shader.GetPropertyType(i);
+                        string value;
+                        try
+                        {
+                            switch (type)
+                            {
+                                case UnityEngine.Rendering.ShaderPropertyType.Float:
+                                case UnityEngine.Rendering.ShaderPropertyType.Range:
+                                    value = material.GetFloat(property).ToString("0.0000"); break;
+                                case UnityEngine.Rendering.ShaderPropertyType.Color:
+                                    value = material.GetColor(property).ToString(); break;
+                                case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                                    value = material.GetVector(property).ToString(); break;
+                                case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                                    var texture = material.GetTexture(property);
+                                    value = texture != null ? texture.name : "none"; break;
+                                default:
+                                    value = "?"; break;
+                            }
+                        }
+                        catch (System.Exception exception)
+                        {
+                            value = "(" + exception.GetType().Name + ")";
+                        }
+                        Debug.Log($"[shaders]    {property} [{type}] = {value}");
+                    }
+                }
+            }
+            Debug.Log("[shaders] done");
+        }
+
     private static void DumpMorphState(UmaContainerCharacter character)
     {
         FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
