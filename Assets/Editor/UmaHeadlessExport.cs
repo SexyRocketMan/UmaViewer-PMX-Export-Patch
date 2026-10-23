@@ -1536,6 +1536,52 @@ public static class UmaHeadlessExport
         }
         Debug.Log($"{Tag} [tears] spring params naming a 'joint': {springHits}");
 
+        // every asset the prefab carries, because the body's chara_shader_effect was exactly the kind of thing
+        // that hid in a table we had not enumerated yet
+        for (int index = 0; index < character.TearControllers.Count; index++)
+        {
+            TearController controller = character.TearControllers[index];
+            if (controller == null) continue;
+            foreach (GameObject part in new[] { controller.TearObject_0, controller.TearObject_1 })
+            {
+                if (part == null) continue;
+                AssetHolder holder = part.GetComponent<AssetHolder>();
+                if (holder == null || holder._assetTable == null || holder._assetTable.list == null) continue;
+                var entries = new List<string>();
+                foreach (StringObjectPair pair in holder._assetTable.list)
+                {
+                    if (pair == null) continue;
+                    entries.Add($"{pair.Key}={pair.Value.GetType().Name}:{pair.Value.name}");
+                }
+                Debug.Log($"{Tag} [tears] '{part.name}' asset table ({entries.Count}): {string.Join(", ", entries)}");
+            }
+        }
+
+        // and the same path the UI slider takes, in case the pose is hung off the weight rather than off frames
+        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
+        if (facial != null && facial.OtherMorphs != null)
+        {
+            foreach (FacialOtherMorph morph in facial.OtherMorphs)
+            {
+                if (morph == null || !morph.name.StartsWith("Tear")) continue;
+                foreach (BindProperty property in morph.BindProperties)
+                {
+                    if (property == null || property.Type != BindProperty.BindType.TearWeight) continue;
+                    Debug.Log($"{Tag} [tears] driving '{morph.name}' TearWeight to 1 through the facial target");
+                    facial.ChangeMorphWeight(property, 1f, morph, false);
+                }
+            }
+            for (int index = 0; index < character.TearControllers.Count; index++)
+            {
+                TearController controller = character.TearControllers[index];
+                if (controller == null) continue;
+                Debug.Log($"{Tag} [tears] after weight: controller {index} weight={controller.Weight:F3} "
+                          + $"0active={(controller.TearObject_0 != null && controller.TearObject_0.activeSelf)} "
+                          + $"1active={(controller.TearObject_1 != null && controller.TearObject_1.activeSelf)}");
+                DumpTearPartWidth($"[tears]   {index}a weighted", controller.TearObject_0);
+            }
+        }
+
         // the ribbon points along its own local +Y, so whichever transform it is hung from decides whether the
         // stream runs down the cheek or up over the eye - print the attach bones' orientation, and the head's
         Transform head = null;
@@ -1679,6 +1725,29 @@ public static class UmaHeadlessExport
         catch (Exception exception)
         {
             Debug.Log($"{Tag} {label} measurement failed: {exception.GetType().Name}: {exception.Message}");
+        }
+        finally
+        {
+            part.SetActive(wasActive);
+        }
+    }
+
+    /// <summary>The posed extent only, for re-measuring a part after the weight has been driven.</summary>
+    private static void DumpTearPartWidth(string label, GameObject part)
+    {
+        if (part == null) return;
+        bool wasActive = part.activeSelf;
+        part.SetActive(true);
+        try
+        {
+            foreach (SkinnedMeshRenderer renderer in part.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                DumpTearBaked(label, renderer, -1f);
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.Log($"{Tag} {label} measure failed: {exception.GetType().Name}: {exception.Message}");
         }
         finally
         {
