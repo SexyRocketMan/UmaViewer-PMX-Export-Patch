@@ -111,9 +111,58 @@ The card's rest pose is a stub pointing up from the eye corner, and it measures 
 to 18.098 while the eye corner (`Eye_tear_attach_03_L`) is at 17.455 and the `Chin` bone at 16.466 - which is why
 an export that copies the rest pose reads as a small quad above the eye.
 
-Which means the export does not need a reconstruction at all - it needs to *sample* this motion. The card
-at rest is a stub pointing up from the eye corner, so exporting the rest pose (what the exporter does today) is
-what makes it look like a small quad above the eye. Baking the sweep above gives the roll itself.
+### Shelved: exporting the roll
+
+The motion above *was* exported, and then taken back out. It is worth writing down what it did and why it went,
+because the measurement above is the expensive part and it stands.
+
+**What it was.** `TearRollTimes = {0.2, 0.5, 0.9}` - the corner, mid-cheek, the chin - baked as three more vertex
+morphs per animated card, each offset measured from the deployed pose:
+
+```
+TearDrop1_L            deploy, the card at the eye corner
+TearDrop1_L_roll1..3   the three sampled poses
+```
+
+and a `roll=<seconds>:<t1>,<t2>,t3>` material token so a consumer knew the loop and where the poses sit in it. In
+the addon, `build_tear_roll` drove the three weights piecewise-linearly from a `Tear_Roll` property (and a
+`Tear_Roll_Phase` property holding the loop position, because inlining the phase into the weight expressions made
+one of them 267 characters and Blender's driver parser rejected it). Verified working: the card travelled from Z
+1.442 at frame 1 to 1.334 at frame 90, the eye corner to the chin, weights crossfading 1.00/0 → 0.69/0.31 → 0/0.79/0.21
+→ 0/0.05/0.95.
+
+**Why it was shelved** - the user's call, and the reasoning is worth keeping:
+
+* **Twelve morphs for one effect.** The effect is real but it is one small card, and it cost 12 of 293 morphs
+  (four cards × three poses) where the whole rest of the advanced set costs 89.
+* **It only works with the addon.** A pmx morph cannot hold a curve, so the animation *is* the crossfade between
+  stored poses. Opened in plain `mmd_tools` the three morphs are inert keys that do nothing on their own - the
+  exact opposite of how the other advanced morphs behave, which degrade gracefully (the deploy keys still work as
+  shape keys even with no addon).
+* **It still looked rough.** Piecewise-linear between three poses is a visible approximation on a flat quad,
+  and the sprite scroll underneath is already carrying most of the "tear running down" reading.
+
+**What was kept.** The tear scroll's V-sign fix (that one was a bug in shipped code, not a feature), the
+`headless_export.ps1 -ProbeTears` probe, `Assets/Editor/UmaTearWatch.cs`, and every
+measurement on this page.
+
+**What would make it worth revisiting** - the carrier, not the sampler. The card is a *skinned mesh on an
+11-joint chain*, so the honest export is **bones plus a VMD**: the joints as pmx bones with per-vertex weights,
+and the sampled pose baked into bone curves. That costs no morphs at all, works in plain `mmd_tools` and MMD, and
+is what the game itself uses. The sampling code that produced the sweep is the part to keep for that route; the
+pose-stack-and-crossfade layer is what was wrong.
+
+### Traps worth not rediscovering
+
+Three of these cost time here, and none is obvious from the API:
+
+* **`Animator.cullingMode`** - in the default mode an animator does not write bone transforms while its renderer is
+  not being drawn, which in a headless run is *always*. `BakeMesh` then returns the rest pose and the clip looks
+  like it animates nothing. Set `AlwaysAnimate` before sampling.
+* **`AnimationUtility.GetCurveBindings` reports generic curves only**, so a clip that animates perfectly can report
+  `bindings=0`. Judge a clip by posing through it, not by counting its curves.
+* Also, for drivers to survive here at all: a face separation gives the new object a **copy** of the shape-key
+  datablock, so any driver on the original key does not follow it.
 
 ### The four controllers are not four positions
 

@@ -118,7 +118,10 @@ properties and defaults are readable, **source is not**. The decompile remains t
    `remove_shape_keys`.
 5. **Parked deliberately**: `Shade_Ctrl` (`_faceShadowAlpha`; needs the face-region port to have an input),
    vmd/recording of the advanced morphs (the sampler design is in `EXTRA_MORPHS.md`, judged not worth it yet),
-   eye-highlight UV morphs in the pmx (superseded by the shader route).
+   eye-highlight UV morphs in the pmx (superseded by the shader route), and **the tear card's roll** - it was
+   built, verified and then taken back out: twelve morphs for one effect, animated only by an addon-side crossfade,
+   so in plain `mmd_tools` it is dead weight. The measurement and the reason are in `EXTRA_MORPHS.md` under
+   "Shelved: exporting the roll"; if it is ever revisited, the carrier to use is bones plus a VMD, not morphs.
 6. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
    file sets in the fork (rain/wet look, VMD loop lead-in) belong to the user.
 

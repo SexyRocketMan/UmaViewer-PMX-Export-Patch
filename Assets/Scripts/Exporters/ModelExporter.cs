@@ -231,10 +231,6 @@ public class ModelExporter
         // cheek it is painted on, which a renderer shows as shadow acne across the face. Offsetting the deploy
         // target rather than the rest position keeps the rest state exactly as hidden as before.
         var deployed = new Dictionary<int, Vector3>();
-        // where each decal vertex sat before the outward nudge. A roll morph is a delta from the *deployed* pose,
-        // so it needs the pre-lift position to subtract from: sampled - bindWorld + lift is the same as
-        // sampled + lift - deployed, and the lift is what the deploy morph already carries.
-        var bindWorld = new Dictionary<int, Vector3>();
         Vector3 collapsePoint = Vector3.zero;
         if (morphParts.Count > 0)
         {
@@ -250,7 +246,6 @@ public class ModelExporter
                 for (int i = range.start; i < range.start + range.count && i < model.Vertices.Length; i++)
                 {
                     Vector3 where = model.Vertices[i].Coordinate;
-                    bindWorld[i] = where;
                     Vector3 outward = where - collapsePoint;
                     if (outward.sqrMagnitude > 1e-8f)
                     {
@@ -268,11 +263,6 @@ public class ModelExporter
             model.TextureList.Add(new MMDTexture(texture));
         }
 
-        // The tear cards are skinned ribbons: their animator rolls them down the cheek. The roll is sampled
-        // here, before the comments are written, because the material comment carries its period and the morph
-        // stack below carries the poses.
-        SampleTearRolls(character, vertexRanges);
-
         model.Parts = ReadPartMaterials(renderers, model, character, restInvisible);
         model.Bones = ReadBones(bones);
 
@@ -282,9 +272,7 @@ public class ModelExporter
             var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
             var spin = SpinMorphs(character, model, vertexRanges, restInvisible, deployed);
             var tears = TearMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
-            var roll = TearRollMorphs(character, vertexRanges, restInvisible, bindWorld);
             deploy.AddRange(tears);
-            spin.AddRange(roll);
             if (deploy.Count > 0 || spin.Count > 0)
             {
                 var all = new List<Morph>(model.Morphs);
@@ -947,25 +935,7 @@ public class ModelExporter
                 int columns = Mathf.Max(1, Mathf.RoundToInt(width / partWidth));
                 int rows = Mathf.Max(1, Mathf.RoundToInt(height / partHeight));
                 if (columns * rows <= 1) continue;
-                // `roll=` is how long one pass of the card's own animation takes, followed by the normalised
-                // times its roll morphs were sampled at, so a consumer can time the stack without the clip. It
-                // is absent for a card the clip does not move.
-                string roll = string.Empty;
-                foreach (Renderer tearRenderer in tearObject.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (tearRenderer != null && _tearRollPoses.ContainsKey(tearRenderer) && _tearRollLength > 0f)
-                    {
-                        var times = new List<string>();
-                        foreach (float time in TearRollTimes)
-                        {
-                            times.Add(time.ToString("0.###", CultureInfo.InvariantCulture));
-                        }
-                        roll = " roll=" + _tearRollLength.ToString("0.###", CultureInfo.InvariantCulture)
-                               + ":" + string.Join(",", times);
-                        break;
-                    }
-                }
-                return " scroll=" + columns + "x" + rows + roll;
+                return " scroll=" + columns + "x" + rows;
             }
         }
         return string.Empty;
@@ -1165,226 +1135,6 @@ public class ModelExporter
                     MorphDatas = data.ToArray()
                 });
                 morphs.AddRange(ScrollMorphs(name, indices, holder));
-            }
-        }
-        return morphs;
-    }
-
-    /// <summary>The poses sampled for the tear roll, per renderer, in world space, and the clip's length in seconds.</summary>
-    private static readonly Dictionary<Renderer, List<Vector3[]>> _tearRollPoses =
-        new Dictionary<Renderer, List<Vector3[]>>();
-    private static float _tearRollLength;
-
-    /// <summary>
-    /// Which points of the tear loop are stored as morphs, as normalised times into the clip.
-    ///
-    /// Sampled from the shipped animation, the card stands at the eye corner until about t=0.2, is clear of the
-    /// eye and running down by t=0.5, and is at the chin and nearly gone by t=0.9. Three poses carry that
-    /// motion: the addon cross-fades the weights between them, and a cross-fade between two stored poses is a
-    /// straight interpolation, which is all a pmx morph can express anyway.
-    /// </summary>
-    private static readonly float[] TearRollTimes = { 0.2f, 0.5f, 0.9f };
-
-    /// <summary>
-    /// How far a card has to move, in world units, before it counts as animated. The tall card travels about 0.12;
-    /// the wide one comes back within 0.002 of its own pose at every sample, which is noise rather than motion.
-    /// </summary>
-    private const float TearRollMinimumMoved = 0.01f;
-
-    /// <summary>
-    /// Samples the animated tear cards.
-    ///
-    /// The cards are skinned meshes posed by an Animator, so `mesh.vertices` - what the rest of this exporter
-    /// reads - is only the bind pose: a stub standing at the eye corner. Two things are needed to see the real
-    /// pose, and both cost a day to find the first time: the animator must be set to `AlwaysAnimate` (in the
-    /// default culling mode it does not even write its bone transforms while the renderer is not being drawn,
-    /// which in a headless run is always), and the object must be active. `BakeMesh` then runs the skinning for
-    /// real. Only the tall `tear000` card animates; the wide `tear001` one is static, so its poses come back
-    /// unchanged and it gets no roll morphs.
-    /// </summary>
-    private static void SampleTearRolls(UmaContainerCharacter character,
-                                        List<(Renderer renderer, int start, int count)> ranges)
-    {
-        _tearRollPoses.Clear();
-        _tearRollLength = 0f;
-        if (character == null || character.TearControllers == null) return;
-
-        var rangeOf = new Dictionary<Renderer, (int start, int count)>();
-        foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
-
-        foreach (TearController tear in character.TearControllers)
-        {
-            if (tear == null) continue;
-            foreach (GameObject part in new GameObject[] { tear.TearObject_0, tear.TearObject_1 })
-            {
-                if (part == null) continue;
-                Animator animator = part.GetComponent<Animator>();
-                if (animator == null || animator.runtimeAnimatorController == null) continue;
-
-                AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
-                AnimationClip clip = null;
-                foreach (AnimationClip candidate in clips)
-                {
-                    if (candidate != null) { clip = candidate; break; }
-                }
-                if (clip == null || clip.length <= 0f) continue;
-
-                bool wasActive = part.activeSelf;
-                AnimatorCullingMode culling = animator.cullingMode;
-                float speed = animator.speed;
-                part.SetActive(true);
-                try
-                {
-                    animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
-                    animator.enabled = true;
-                    animator.speed = 0f; // Play() sets the time; speed would let it drift between samples
-
-                    foreach (SkinnedMeshRenderer renderer in part.GetComponentsInChildren<SkinnedMeshRenderer>(true))
-                    {
-                        if (renderer == null || !rangeOf.ContainsKey(renderer)) continue;
-                        var poses = new List<Vector3[]>();
-                        foreach (float time in TearRollTimes)
-                        {
-                            animator.Play(0, 0, time);
-                            animator.Update(0.0001f);
-                            var baked = new Mesh();
-                            try
-                            {
-                                renderer.BakeMesh(baked, false);
-                                Vector3[] vertices = baked.vertices;
-                                var world = new Vector3[vertices.Length];
-                                for (int i = 0; i < vertices.Length; i++)
-                                {
-                                    world[i] = renderer.transform.TransformPoint(vertices[i]);
-                                }
-                                poses.Add(world);
-                            }
-                            finally
-                            {
-                                UnityEngine.Object.DestroyImmediate(baked);
-                            }
-                        }
-                        if (poses.Count == TearRollTimes.Length)
-                        {
-                            // the wide tear001 card does not animate, and returns the same pose three times
-                            // give or take a sub-millimetre of noise. Below this threshold it is not a roll, and
-                            // writing it would put a wall of near-zero morphs in the file and a bogus `roll=`
-                            // token on its material.
-                            float moved = 0f;
-                            for (int step = 1; step < poses.Count; step++)
-                            {
-                                for (int v = 0; v < poses[step].Length && v < poses[0].Length; v++)
-                                {
-                                    moved = Mathf.Max(moved, (poses[step][v] - poses[0][v]).magnitude);
-                                }
-                            }
-                            if (moved < TearRollMinimumMoved)
-                            {
-                                Debug.Log($"[export] '{part.name}' does not animate the card "
-                                          + $"({moved:F4} world units over the clip), no roll morphs");
-                                continue;
-                            }
-                            _tearRollPoses[renderer] = poses;
-                            _tearRollLength = clip.length;
-                        }
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Debug.Log($"[export] tear roll sampling failed on '{part.name}': {exception.GetType().Name}: "
-                              + exception.Message);
-                }
-                finally
-                {
-                    animator.Play(0, 0, 0f);
-                    animator.speed = speed;
-                    animator.cullingMode = culling;
-                    part.SetActive(wasActive);
-                }
-            }
-        }
-        if (_tearRollPoses.Count > 0)
-        {
-            Debug.Log($"[export] sampled {_tearRollPoses.Count} tear card(s) over a {_tearRollLength:F3}s loop, "
-                      + $"{TearRollTimes.Length} poses each");
-        }
-    }
-
-    /// <summary>
-    /// The tear roll as a stack of vertex morphs, one per sampled pose, each offset measured from the pose the
-    /// deploy morph produces. Deploy at 1 plus `_rollN` at 1 is the sampled pose, so the addon animates the card
-    /// by cross-fading the roll weights - the same shape of trick as the `_scr` uv stack, one layer down.
-    /// </summary>
-    private static List<Morph> TearRollMorphs(UmaContainerCharacter character,
-                                              List<(Renderer renderer, int start, int count)> ranges,
-                                              HashSet<Renderer> restInvisible,
-                                              Dictionary<int, Vector3> bindWorld)
-    {
-        var morphs = new List<Morph>();
-        if (character == null || _tearRollPoses.Count == 0) return morphs;
-
-        var rangeOf = new Dictionary<Renderer, (int start, int count)>();
-        foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
-
-        for (int i = 0; i < character.TearControllers.Count; i++)
-        {
-            TearController tear = character.TearControllers[i];
-            if (tear == null) continue;
-            for (int variant = 0; variant < 2; variant++)
-            {
-                GameObject part = variant == 0 ? tear.TearObject_0 : tear.TearObject_1;
-                if (part == null) continue;
-
-                var indices = new List<int>();
-                var renderers = new List<Renderer>();
-                Vector3 sum = Vector3.zero;
-                foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (renderer == null || !restInvisible.Contains(renderer)) continue;
-                    if (!rangeOf.TryGetValue(renderer, out var range)) continue;
-                    if (!_tearRollPoses.ContainsKey(renderer)) continue;
-                    renderers.Add(renderer);
-                    for (int v = range.start; v < range.start + range.count; v++)
-                    {
-                        if (!bindWorld.ContainsKey(v)) continue;
-                        indices.Add(v);
-                        sum += bindWorld[v];
-                    }
-                }
-                if (indices.Count == 0) continue;
-                Vector3 centre = sum / indices.Count;
-                string name = "TearDrop" + (i + 1) + (variant == 0 ? "" : "b") + "_" + SideOf(character, centre);
-
-                for (int step = 0; step < TearRollTimes.Length; step++)
-                {
-                    var data = new List<Morph.MorphData>();
-                    foreach (Renderer renderer in renderers)
-                    {
-                        var range = rangeOf[renderer];
-                        Vector3[] pose = _tearRollPoses[renderer][step];
-                        for (int v = range.start; v < range.start + range.count; v++)
-                        {
-                            int local = v - range.start;
-                            if (local < 0 || local >= pose.Length) continue;
-                            if (!bindWorld.TryGetValue(v, out Vector3 bind)) continue;
-                            Vector3 offset = pose[local] - bind;
-                            // a card the clip does not move contributes nothing; skipping those vertices keeps
-                            // the morph out of the file entirely rather than writing a wall of zeros
-                            if (offset.sqrMagnitude < 1e-10f) continue;
-                            data.Add(new Morph.VertexMorphData { VertexIndex = v, Offset = offset });
-                        }
-                    }
-                    if (data.Count == 0) continue;
-                    string rollName = name + "_roll" + (step + 1);
-                    morphs.Add(new Morph
-                    {
-                        Name = rollName,
-                        NameEn = rollName,
-                        Category = Morph.MorphCategory.MorphCatOther,
-                        Type = Morph.MorphType.MorphTypeVertex,
-                        MorphDatas = data.ToArray()
-                    });
-                }
             }
         }
         return morphs;
