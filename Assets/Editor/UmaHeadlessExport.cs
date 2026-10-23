@@ -1546,6 +1546,69 @@ public static class UmaHeadlessExport
             }
         }
         Debug.Log($"{Tag} [tears] sampling '{character.name}' for {_tearSampleSeconds:F1}s, {driven} weight(s) raised");
+
+        // and sweep the clip from end to end, because wall clock is far too slow in batch mode to walk 4.267s of
+        // animation (two seconds of it advance the state by about 1%)
+        for (int index = 0; index < character.TearControllers.Count; index++)
+        {
+            TearController controller = character.TearControllers[index];
+            if (controller == null) continue;
+            GameObject part = controller.CurrenObject < 1 ? controller.TearObject_0 : controller.TearObject_1;
+            if (part == null) continue;
+            SweepTearClip($"[tears]   sweep ctrl{index}", part);
+        }
+    }
+
+    /// <summary>
+    /// Steps the animator through the clip by normalised time and reports the posed extent each step. This is the
+    /// routine an export would use to bake the roll into morphs, so it is the same code path either way.
+    /// </summary>
+    private static void SweepTearClip(string label, GameObject part)
+    {
+        Animator animator = part.GetComponent<Animator>();
+        if (animator == null || animator.runtimeAnimatorController == null)
+        {
+            Debug.Log($"{Tag} {label} no animator to sweep");
+            return;
+        }
+        animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+        animator.enabled = true;
+        animator.Rebind();
+        animator.speed = 0f; // Play() sets the time; speed only decides whether it drifts between calls
+        int movedSteps = 0;
+        Vector3 first = Vector3.zero;
+        for (int step = 0; step <= 10; step++)
+        {
+            float time = step / 10f;
+            animator.Play(0, 0, time);
+            animator.Update(0.0001f);
+            foreach (SkinnedMeshRenderer renderer in part.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var baked = new Mesh();
+                try
+                {
+                    renderer.BakeMesh(baked, false);
+                    Vector3[] vertices = baked.vertices;
+                    if (vertices.Length == 0) continue;
+                    Vector3 min = vertices[0], max = vertices[0];
+                    foreach (Vector3 vertex in vertices)
+                    {
+                        min = Vector3.Min(min, vertex);
+                        max = Vector3.Max(max, vertex);
+                    }
+                    Vector3 size = max - min;
+                    if (step == 0) first = size;
+                    else if ((size - first).sqrMagnitude > 1e-8f) movedSteps++;
+                    Debug.Log($"{Tag} {label} t={time:F1} size={VectorText(size)} min={VectorText(min)} max={VectorText(max)}");
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(baked);
+                }
+            }
+        }
+        animator.speed = 1f;
+        Debug.Log($"{Tag} {label} steps that differ from t=0: {movedSteps} of 10");
     }
 
     private static double _tearSampleSeconds = 2.0;
@@ -1564,12 +1627,20 @@ public static class UmaHeadlessExport
             GameObject part = controller.CurrenObject < 1 ? controller.TearObject_0 : controller.TearObject_1;
             if (part == null) continue;
             Animator animator = part.GetComponent<Animator>();
+            // An animator in the default culling mode does not write its bone transforms when the renderer is not
+            // being drawn, and batch mode draws nothing at all - which is exactly how a card that visibly rolls in
+            // the editor measured rigid here. AlwaysAnimate is what makes the pose real without a camera.
+            if (animator != null && animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+            {
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            }
             string state = "no animator";
             if (animator != null && animator.isActiveAndEnabled)
             {
                 AnimatorStateInfo info = animator.GetCurrentAnimatorStateInfo(0);
                 state = $"norm={info.normalizedTime:F3} len={info.length:F3} "
-                        + $"intransition={(animator.IsInTransition(0) ? 1 : 0)} speed={animator.speed:F2}";
+                        + $"intransition={(animator.IsInTransition(0) ? 1 : 0)} speed={animator.speed:F2} "
+                        + $"culling={animator.cullingMode}";
             }
             foreach (SkinnedMeshRenderer renderer in part.GetComponentsInChildren<SkinnedMeshRenderer>(true))
             {
