@@ -947,14 +947,21 @@ public class ModelExporter
                 int columns = Mathf.Max(1, Mathf.RoundToInt(width / partWidth));
                 int rows = Mathf.Max(1, Mathf.RoundToInt(height / partHeight));
                 if (columns * rows <= 1) continue;
-                // `roll=` is how long one pass of the card's own animation takes, so a consumer can time the
-                // roll morphs without the clip; it is absent for a card the clip does not move.
+                // `roll=` is how long one pass of the card's own animation takes, followed by the normalised
+                // times its roll morphs were sampled at, so a consumer can time the stack without the clip. It
+                // is absent for a card the clip does not move.
                 string roll = string.Empty;
                 foreach (Renderer tearRenderer in tearObject.GetComponentsInChildren<Renderer>(true))
                 {
                     if (tearRenderer != null && _tearRollPoses.ContainsKey(tearRenderer) && _tearRollLength > 0f)
                     {
-                        roll = " roll=" + _tearRollLength.ToString("0.###", CultureInfo.InvariantCulture);
+                        var times = new List<string>();
+                        foreach (float time in TearRollTimes)
+                        {
+                            times.Add(time.ToString("0.###", CultureInfo.InvariantCulture));
+                        }
+                        roll = " roll=" + _tearRollLength.ToString("0.###", CultureInfo.InvariantCulture)
+                               + ":" + string.Join(",", times);
                         break;
                     }
                 }
