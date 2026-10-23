@@ -799,6 +799,10 @@ public static class UmaHeadlessExport
                     {
                         DumpMorphState(probed);
                     }
+                    if (options.DumpShaders)
+                    {
+                        DumpShaderFacts(container);
+                    }
 
                     Debug.Log($"{Tag} exporting to {exportPath}");
                     // the exporter records what it writes, so the pmx can be compared against the game's
@@ -1484,60 +1488,6 @@ public static class UmaHeadlessExport
     /// so a morph being absent means one of those parts was missing when the target initialised. This prints the
     /// parts themselves as well, so the report says *why* rather than only what.
     /// </summary>
-        private static void DumpShaderFacts(UmaContainer container)
-        {
-            var wanted = new[] { "_High", "_Limit", "_Offset", "_Highlight", "_Eye", "_Show", "_EyeSelect" };
-            Debug.Log("[shaders] ---- materials on the loaded model ----");
-            foreach (Renderer renderer in container.GetComponentsInChildren<Renderer>(true))
-            {
-                if (renderer == null) continue;
-                foreach (Material material in renderer.materials)
-                {
-                    if (material == null || material.shader == null) continue;
-                    if (material.name.IndexOf("eye", System.StringComparison.OrdinalIgnoreCase) < 0
-                        && material.name.IndexOf("face", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    Debug.Log($"[shaders] material '{material.name}' shader '{material.shader.name}'");
-                    int count = material.shader.GetPropertyCount();
-                    for (int i = 0; i < count; i++)
-                    {
-                        string property = material.shader.GetPropertyName(i);
-                        bool interesting = false;
-                        foreach (string needle in wanted)
-                        {
-                            if (property.IndexOf(needle, System.StringComparison.OrdinalIgnoreCase) >= 0) { interesting = true; break; }
-                        }
-                        if (!interesting) continue;
-                        var type = material.shader.GetPropertyType(i);
-                        string value;
-                        try
-                        {
-                            switch (type)
-                            {
-                                case UnityEngine.Rendering.ShaderPropertyType.Float:
-                                case UnityEngine.Rendering.ShaderPropertyType.Range:
-                                    value = material.GetFloat(property).ToString("0.0000"); break;
-                                case UnityEngine.Rendering.ShaderPropertyType.Color:
-                                    value = material.GetColor(property).ToString(); break;
-                                case UnityEngine.Rendering.ShaderPropertyType.Vector:
-                                    value = material.GetVector(property).ToString(); break;
-                                case UnityEngine.Rendering.ShaderPropertyType.Texture:
-                                    var texture = material.GetTexture(property);
-                                    value = texture != null ? texture.name : "none"; break;
-                                default:
-                                    value = "?"; break;
-                            }
-                        }
-                        catch (System.Exception exception)
-                        {
-                            value = "(" + exception.GetType().Name + ")";
-                        }
-                        Debug.Log($"[shaders]    {property} [{type}] = {value}");
-                    }
-                }
-            }
-            Debug.Log("[shaders] done");
-        }
-
     private static void DumpMorphState(UmaContainerCharacter character)
     {
         FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
@@ -1581,6 +1531,203 @@ public static class UmaHeadlessExport
                           + $"texture='{(property.BindTexture ? property.BindTexture.name : "none")}' "
                           + $"prefabs=[{string.Join(",", prefabs)}]");
             }
+        }
+    }
+
+    /// <summary>
+    /// The eye-highlight numbers the game actually ships: how far <c>_Limit</c> drops in the teary state, and
+    /// the throb's rate and amplitude - the three values docs/UMA_EYE_SHADER.md leaves open.
+    ///
+    /// This is worth reading here rather than reaching for an extractor for two reasons. The harness already
+    /// loads the game's own bundles, and UmaContainerCharacter swaps each material's shader for the game's
+    /// *shipped* compiled shader out of shader.a (<see cref="UmaAssetManager.EyeShader"/>), so the property list
+    /// and the values below are the real ones rather than a port's. What a compiled shader can give is
+    /// properties and defaults, never source - the decompile stays the source of truth for the logic.
+    ///
+    /// Prints every property of the eye/face/cheek materials rather than a guessed subset: the property names
+    /// on the shipped shader are not known in advance, so a filter is what would hide the answer. Then it prints
+    /// chara_shader_effect, the one asset the game keeps runtime material-driving numbers in, and scans a few
+    /// motion bundles for clips that animate a material property - where a keyframed teary threshold would live.
+    /// </summary>
+    private static void DumpShaderFacts(UmaContainer container)
+    {
+        Debug.Log("[shaders] ---- eye/face/cheek materials on the loaded model ----");
+        var seen = new HashSet<string>();
+        foreach (Renderer renderer in container.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null) continue;
+            // sharedMaterials, not materials: the latter instantiates a copy per call and leaks it
+            foreach (Material material in renderer.sharedMaterials)
+            {
+                if (material == null || material.shader == null) continue;
+                string shaderName = material.shader.name;
+                bool facial = Contains(shaderName, "eye") || Contains(shaderName, "face") || Contains(shaderName, "cheek")
+                              || Contains(material.name, "eye") || Contains(material.name, "face");
+                if (!facial) continue;
+                // several renderers share one material; print each distinct one once
+                if (!seen.Add(shaderName + "|" + material.name)) continue;
+
+                int propertyCount = material.shader.GetPropertyCount();
+                Debug.Log($"[shaders] '{material.name}' on '{renderer.name}' uses shader '{shaderName}', "
+                          + $"{propertyCount} properties");
+                for (int i = 0; i < propertyCount; i++)
+                {
+                    string property = material.shader.GetPropertyName(i);
+                    var type = material.shader.GetPropertyType(i);
+                    string value;
+                    try
+                    {
+                        switch (type)
+                        {
+                            case ShaderPropertyType.Float:
+                            case ShaderPropertyType.Range:
+                                value = material.GetFloat(property).ToString("0.0000"); break;
+                            case ShaderPropertyType.Int:
+                                value = material.GetInt(property).ToString(); break;
+                            case ShaderPropertyType.Color:
+                                var colour = material.GetColor(property);
+                                value = $"({colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3})"; break;
+                            case ShaderPropertyType.Vector:
+                                var vector = material.GetVector(property);
+                                value = $"({vector.x:F3},{vector.y:F3},{vector.z:F3},{vector.w:F3})"; break;
+                            case ShaderPropertyType.Texture:
+                                var texture = material.GetTexture(property);
+                                value = texture != null ? texture.name : "<none>"; break;
+                            default:
+                                value = "?"; break;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        value = "(" + exception.GetType().Name + ")";
+                    }
+                    Debug.Log($"[shaders]    {property} [{type}] = {value}");
+                }
+            }
+        }
+
+        DumpShaderEffectData("head", container.HeadShaderEffectData);
+        DumpShaderEffectData("body", container.BodyShaderEffectData);
+
+        // The shipped eye shader has a _WetTex slot and a _WetRate that nothing in this viewer writes, and no
+        // exported character carries a wet texture - so the teary state may be a wet overlay the game assigns at
+        // runtime rather than only a _Limit drop. Name scan only, no bundle loading: whether such assets exist at
+        // all is the question, and it is answerable from the asset list. Counted by part rather than listed,
+        // because "wet" turns out to match thousands of them (every texture has a wet variant).
+        var viewer = UmaViewerMain.Instance;
+        if (viewer != null)
+        {
+            var wet = viewer.AbList.Keys.Where(name => Contains(name, "wet")).ToList();
+            Debug.Log($"[shaders] asset names containing 'wet': {wet.Count}");
+            foreach (var part in new[] { "eyehi", "eye", "face", "cheek", "tear", "hair", "body", "attach" })
+            {
+                Debug.Log($"[shaders]   wet+{part}: {wet.Count(name => Contains(name, part))}");
+            }
+            foreach (var name in wet.Where(name => Contains(name, "eye")).Take(10))
+            {
+                Debug.Log($"[shaders]   eye wet: {name}");
+            }
+        }
+
+        // A keyframed teary threshold would be a material curve on some clip in a motion bundle. Capped and
+        // fully guarded: these are large bundles and a failure in here must cost the probe, not the export.
+        // Character motions are looked at, not the first eight bundles: alphabetically those are campaign
+        // backgrounds, which carry a background clip and nothing facial.
+        int scanned = 0, clips = 0, materialCurves = 0, highlightCurves = 0;
+        var main = UmaViewerMain.Instance;
+        if (main != null)
+        {
+            var candidates = main.AbMotions.Where(entry => Contains(entry.Name, "chara")).ToList();
+            Debug.Log($"[shaders] motion scan: {candidates.Count} character motion bundle(s) of "
+                      + $"{main.AbMotions.Count} available, sampling 8");
+            foreach (var entry in candidates.Take(8))
+            {
+                try
+                {
+                    var bundle = UmaAssetManager.LoadAssetBundle(entry, true, false);
+                    if (bundle == null) continue;
+                    scanned++;
+                    var loaded = bundle.LoadAllAssets<AnimationClip>();
+                    int before = clips;
+                    foreach (var clip in loaded)
+                    {
+                        if (clip == null) continue;
+                        clips++;
+                        foreach (var binding in AnimationUtility.GetCurveBindings(clip))
+                        {
+                            if (binding.propertyName.IndexOf("aterial", StringComparison.Ordinal) < 0) continue;
+                            materialCurves++;
+                            if (binding.propertyName.IndexOf("_Limit", StringComparison.Ordinal) < 0
+                                && binding.propertyName.IndexOf("_High", StringComparison.Ordinal) < 0) continue;
+                            highlightCurves++;
+                            Debug.Log($"[shaders] MATERIAL CURVE '{entry.Name}' clip '{clip.name}' "
+                                      + $"{binding.path} -> {binding.propertyName}");
+                        }
+                    }
+                    Debug.Log($"[shaders]   motion '{entry.Name}': {clips - before} clip(s)");
+                }
+                catch (Exception exception)
+                {
+                    Debug.Log($"[shaders] skipping motion '{entry.Name}': "
+                              + $"{exception.GetType().Name}: {exception.Message}");
+                }
+            }
+        }
+        else
+        {
+            Debug.Log("[shaders] no UmaViewerMain instance, skipped the motion scan");
+        }
+        Debug.Log($"[shaders] motion scan: {scanned} bundle(s), {clips} clip(s), {materialCurves} material "
+                  + $"curve(s), {highlightCurves} on _Limit/_High");
+        Debug.Log("[shaders] done");
+    }
+
+    private static bool Contains(string text, string needle) =>
+        !string.IsNullOrEmpty(text) && text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+
+    /// <summary>
+    /// chara_shader_effect, printed as the serialised fields it is stored as. This is the one asset that carries
+    /// runtime material-driving numbers rather than a static material value: CharaShaderEffectData.updateUV
+    /// writes _UVEmissiveScroll and _UVEmissivePower from these params every frame, which is the mechanism
+    /// behind the animated tears. The fields are private, so this goes through SerializedObject.
+    /// </summary>
+    private static void DumpShaderEffectData(string label, CharaShaderEffectData data)
+    {
+        if (data == null)
+        {
+            Debug.Log($"[shaders] chara_shader_effect ({label}): none");
+            return;
+        }
+        var serialized = new SerializedObject(data);
+        var settings = serialized.FindProperty("_settingDataArray");
+        int count = settings != null && settings.isArray ? settings.arraySize : 0;
+        Debug.Log($"[shaders] chara_shader_effect ({label}) '{data.name}': {count} setting(s)");
+        for (int i = 0; i < count; i++)
+        {
+            var element = settings.GetArrayElementAtIndex(i);
+            var type = element.FindPropertyRelative("Type");
+            var target = element.FindPropertyRelative("TargetMaterial");
+            var parameters = element.FindPropertyRelative("ParamArray");
+            var curves = element.FindPropertyRelative("ParamCurveArray");
+
+            string kind = "?";
+            if (type != null && type.enumNames != null
+                && type.enumValueIndex >= 0 && type.enumValueIndex < type.enumNames.Length)
+            {
+                kind = type.enumNames[type.enumValueIndex];
+            }
+            string targetName = target != null && target.objectReferenceValue != null
+                ? target.objectReferenceValue.name
+                : "none";
+            var values = new List<string>();
+            if (parameters != null && parameters.isArray)
+            {
+                for (int p = 0; p < parameters.arraySize; p++)
+                    values.Add(parameters.GetArrayElementAtIndex(p).intValue.ToString());
+            }
+            int curveCount = curves != null && curves.isArray ? curves.arraySize : 0;
+            Debug.Log($"[shaders]   [{i}] {kind} material '{targetName}' "
+                      + $"params=[{string.Join(",", values)}] curves={curveCount}");
         }
     }
 

@@ -235,7 +235,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (Test-Path $LogPath) {
-    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]" |
+    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]|\[shaders\]" |
         Where-Object { $_.Line -notmatch "StackTraceUtility|DebugLogHandler|Logger:Log|Debug:Log" } |
         ForEach-Object { $_.Line.Trim() }
 }
