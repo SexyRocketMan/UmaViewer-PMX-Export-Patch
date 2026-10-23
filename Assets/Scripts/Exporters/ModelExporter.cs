@@ -1166,11 +1166,18 @@ public class ModelExporter
             var data = new List<Morph.MorphData>();
             foreach (int index in indices)
             {
-                // the game scrolls down the sheet with a negative y, so a morph steps the same way
+                // The game steps the sheet with a *negative* y (`_TexScrollParam = (x, -offsetY)`) and this used
+                // to write that same sign here. It is the wrong sign for the pmx, and the reason is the flip the
+                // rest of the export does: uvs are written `1 - v` because the pmx stores v top-down, and
+                // mmd_tools flips it back on import - but it *negates* a uv-morph offset's v as well
+                // (`pmx.importer: (x, -y, z, -w)` rather than a flip), so the game's -v step has to be stored
+                // as +v. Written as -v the stack walked the uvs off the sheet instead of through it: the base
+                // cell is v [0, 1/rows], so seven steps of 1/rows reach exactly 1.0 stored the right way round
+                // and -0.875 the wrong way.
                 data.Add(new Morph.UvMorphData
                 {
                     VertexIndex = index,
-                    Offset = new Vector4(u, -v, 0f, 0f)
+                    Offset = new Vector4(u, v, 0f, 0f)
                 });
             }
             string stepName = name + "_scr" + morphs.Count;

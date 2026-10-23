@@ -58,6 +58,29 @@ mirrored at runtime rather than placed would need its right-side instance create
 The sprite sheets themselves are inside the tear prefabs' asset tables, not in `Persistent/textures`, which is
 why the viewer has never listed them.
 
+### The sign of a UV morph, which cost a bug
+
+The pmx stores uv **top-down**. That is why vertex uvs are written `1 - v`, and mmd_tools flips them back on
+import (`pmx/importer.py: flipUV_V`), so static uvs round-trip unchanged. A uv *morph* is a delta, and the
+importer **negates** a delta's v rather than flipping it (`(x, -y, z, -w)`), so a delta has to be stored with the
+sign the game does *not* use. The tear scroll had this wrong: its base cell sits at v `[0, 1/rows]`, and the seven
+steps of `1/rows` land the uvs at exactly 1.0 - the far edge of the sheet - when stored `+v`, and at **-0.875**,
+off the sheet entirely, when stored `-v`, which is what shipped. A stack that walks the uvs off the sheet cannot
+scroll through it, so the drip was never going to run the right way. The `@_@` rotation writes its deltas the same
+way and has not been re-measured: a mirrored rotation looks plausible on a symmetrical decal, so if the dizzy face
+turns the wrong way, suspect the same thing.
+
+### The four controllers are not four positions
+
+Worth knowing before reading the morph list. `SetDir` puts *both* of a controller's prefabs on the same eye -
+`TearObject_0` at `Eye_tear_attach_03_L/R`, `TearObject_1` at `attach_02_L/R` - and the per-controller spacing in
+the game comes from `TearSide`, a position-Y offset that the face clips drive. The viewer has no tear UI and never
+drives it, so controllers 1 and 3 land on the left eye at the same place and 2 and 4 on the right: measured,
+`TearDrop1_L` and `TearDrop3_L` hold **identical** offsets (same shape, same position, different vertices), as do
+`TearDrop2_R`/`TearDrop4_R` and the `b` pair. That is also why there is no `TearDrop3_R` or `TearDrop4_L`: the
+number is the *controller*, and a controller only ever sits on one eye. Two stacked decals and four redundant
+morphs are the price of exporting the viewer's default placement rather than the game's runtime one.
+
 ## The teary-eye effect that the viewer cannot show
 
 `tex_chr_tear00` is not only the animated tears' texture: `UmaContainerCharacter.cs:927` loads it and assigns it
