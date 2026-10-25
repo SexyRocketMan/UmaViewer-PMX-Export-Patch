@@ -301,14 +301,11 @@ public class ModelExporter
         if (deployed.Count > 0)
         {
             var deploy = DeployMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
-            var spin = SpinMorphs(character, model, vertexRanges, restInvisible, deployed);
-            var tears = TearMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint);
-            deploy.AddRange(tears);
-            if (deploy.Count > 0 || spin.Count > 0)
+            deploy.AddRange(TearMorphs(character, vertexRanges, restInvisible, deployed, collapsePoint));
+            if (deploy.Count > 0)
             {
                 var all = new List<Morph>(model.Morphs);
                 all.AddRange(deploy);
-                all.AddRange(spin);
                 model.Morphs = all.ToArray();
             }
         }
@@ -941,10 +938,10 @@ public class ModelExporter
     /// <summary>
     /// The sprite-sheet grid of an animated tear material, as `scroll=<cols>x<rows>`.
     ///
-    /// The scroll itself is the `_scrN` UV morphs; this token says what grid those morphs step through, so a
-    /// consumer that cannot play UV morphs (the Blender addon) can move the texture itself by the same grid.
-    /// The grid is the prefab's, not the material's: `texture_width`/`_height` and the part size come from the
-    /// tear object's own asset table.
+    /// This token is the *only* carrier of the grid: the pmx used to hold it a second time as one uv morph per sheet
+    /// frame, and those are gone (see `TearMorphs`). A consumer that reads the comment - the Blender add-on - steps
+    /// the texture itself over this grid, which is what a sprite sheet scroll is. The grid is the prefab's, not the
+    /// material's: `texture_width`/`_height` and the part size come from the tear object's own asset table.
     /// </summary>
     private static string ExtraMorphGrid(UmaContainerCharacter character, Renderer renderer)
     {
@@ -1089,29 +1086,23 @@ public class ModelExporter
     /// </summary>
     private const float DecalLift = 0.06f;
 
-    /// <summary>How many UV steps one full spin is divided into. Seven morphs plus the rest state make eight,
-    /// so each step is 45 degrees and a cross-fade between two neighbours lands any rotation in between.</summary>
-    private const int SpinSteps = 8;
-
     /// <summary>
-    /// The UV morphs that make the dizzy face dizzy: the `@_@` decal's texture rotates, and no vertex moves.
-    ///
-    /// Each morph is one step of the turn (a rotation of the quad's own UVs about their centre), so the parts
-    /// of a spin are the same picture rotated. A continuous spin is an animation that cross-fades consecutive
-    /// morphs - linear weights over a linear UV delta add up to a linear rotation, so `w_k` falling while
-    /// `w_{k+1}` rises is exactly the turn between them, with no easing to fake. The rest state is the decal
-    /// at weight 0 everywhere, which is the orientation the game draws it in.
-    /// </summary>
-    /// <summary>
-    /// The animated tears: one deploy morph per tear object, plus the scroll that makes them run.
+    /// The animated tears: one deploy morph per tear object.
     ///
     /// Each `TearController` keeps two prefabs (`pfb_chr_tear000`, `pfb_chr_tear001`) whose animation is a
     /// *sprite sheet scroll*: `TearController.UpdateOffset` steps `_TexScrollParam` across the sheet, and the
     /// grid comes from the prefab's own asset table (`texture_width`/`_height`, `texture_part_width`/`_height`).
-    /// MMD has no texture offset, so the same roll is a stack of UV morphs - one per sheet frame, each
-    /// translating every UV by that frame's step - exactly as the eye manga's turn is a stack of rotations.
-    /// Frame 0 is the rest state, so a running tear is the deploy morph at 1 with the scroll morphs cycled
-    /// through.
+    /// That grid is not a deform - it is a texture coordinate - and its consumer is the add-on's fragment
+    /// animation, so it travels as the `scroll=<cols>x<rows>` token in the material comment (`ExtraMorphGrid`)
+    /// and *no* uv morph is written for it any more.
+    ///
+    /// The uv morph stacks this used to emit (one per sheet frame, and a rotation stack for the `@_@` face) were
+    /// removed deliberately: nothing in the pipeline reads them. Blender cannot animate a uv layer, so the add-on
+    /// drives the spin with a Vector Rotate node and the scroll with a Mapping node, both from the comment tokens -
+    /// which left 42 of the model's 249 morphs as sliders that no tool of ours uses, on effects that are already
+    /// animated. The cost of dropping them is that a consumer without the add-on (plain MMD, where a material
+    /// animation can only *translate* uvs and a comment is not readable) no longer gets these two effects; the
+    /// whole point of this pipeline is the add-on, and it does.
     /// </summary>
     private static List<Morph> TearMorphs(UmaContainerCharacter character,
                                           List<(Renderer renderer, int start, int count)> ranges,
@@ -1137,8 +1128,6 @@ public class ModelExporter
             {
                 GameObject part = variant == 0 ? tear.TearObject_0 : tear.TearObject_1;
                 if (part == null) continue;
-                AssetHolder holder = part.GetComponent<AssetHolder>();
-
                 var indices = new List<int>();
                 Vector3 sum = Vector3.zero;
                 int placed = 0;
@@ -1184,7 +1173,6 @@ public class ModelExporter
                     Type = Morph.MorphType.MorphTypeVertex,
                     MorphDatas = data.ToArray()
                 });
-                morphs.AddRange(ScrollMorphs(name, indices, holder));
             }
         }
         return morphs;
@@ -1203,154 +1191,6 @@ public class ModelExporter
                 .Append(Mathf.RoundToInt(where.z * 1000f)).Append(';');
         }
         return text.ToString();
-    }
-
-    /// <summary>The UV morph stack that rolls a tear through its sprite sheet, or none when the grid is unknown.</summary>
-    private static List<Morph> ScrollMorphs(string name, List<int> indices, AssetHolder holder)
-    {
-        var morphs = new List<Morph>();
-        if (holder == null || holder._assetTableValue == null) return morphs;
-        float width = holder._assetTableValue["texture_width"];
-        float height = holder._assetTableValue["texture_height"];
-        float partWidth = holder._assetTableValue["texture_part_width"];
-        float partHeight = holder._assetTableValue["texture_part_height"];
-        if (width <= 0f || height <= 0f || partWidth <= 0f || partHeight <= 0f) return morphs;
-        int columns = Mathf.Max(1, Mathf.RoundToInt(width / partWidth));
-        int rows = Mathf.Max(1, Mathf.RoundToInt(height / partHeight));
-        int frames = columns * rows;
-        if (frames <= 1) return morphs;
-
-        // one morph per sheet frame (frame 0 is the rest state), capped: an 8x4 sheet is 32 frames and 32 morphs
-        // per tear object would swamp the list, so the stack is spread evenly over the sheet instead
-        const int MaxSteps = 8;
-        int stride = Mathf.Max(1, Mathf.CeilToInt((frames - 1) / (float)MaxSteps));
-        for (int frame = stride; frame < frames; frame += stride)
-        {
-            float u = (frame % columns) / (float)columns;
-            float v = (frame / columns) / (float)rows;
-            var data = new List<Morph.MorphData>();
-            foreach (int index in indices)
-            {
-                // The game steps the sheet with a *negative* y (`_TexScrollParam = (x, -offsetY)`) and this used
-                // to write that same sign here. It is the wrong sign for the pmx, and the reason is the flip the
-                // rest of the export does: uvs are written `1 - v` because the pmx stores v top-down, and
-                // mmd_tools flips it back on import - but it *negates* a uv-morph offset's v as well
-                // (`pmx.importer: (x, -y, z, -w)` rather than a flip), so the game's -v step has to be stored
-                // as +v. Written as -v the stack walked the uvs off the sheet instead of through it: the base
-                // cell is v [0, 1/rows], so seven steps of 1/rows reach exactly 1.0 stored the right way round
-                // and -0.875 the wrong way.
-                data.Add(new Morph.UvMorphData
-                {
-                    VertexIndex = index,
-                    Offset = new Vector4(u, v, 0f, 0f)
-                });
-            }
-            // `<card>_Sheet1..7`: one sheet frame each, numbered from 1 because frame 0 is the rest state and has
-            // no morph of its own
-            string stepName = name + "_Sheet" + (morphs.Count + 1);
-            morphs.Add(new Morph
-            {
-                Name = stepName,
-                NameEn = stepName,
-                Category = Morph.MorphCategory.MorphCatOther,
-                Type = Morph.MorphType.MorphTypeUv,
-                MorphDatas = data.ToArray()
-            });
-        }
-        return morphs;
-    }
-
-    private static List<Morph> SpinMorphs(UmaContainerCharacter character, RawMMDModel model,
-                                          List<(Renderer renderer, int start, int count)> ranges,
-                                          HashSet<Renderer> restInvisible,
-                                          Dictionary<int, Vector3> deployed)
-    {
-        var morphs = new List<Morph>();
-        if (character == null) return morphs;
-        FaceDrivenKeyTarget facial = character.FaceDrivenKeyTarget;
-        if (facial == null || facial.OtherMorphs == null) return morphs;
-
-        var rangeOf = new Dictionary<Renderer, (int start, int count)>();
-        foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
-
-        // only the `@_@` face spins - the others are still pictures
-        string spinFace = MangaFaces[0];
-        foreach (FacialOtherMorph morph in facial.OtherMorphs)
-        {
-            if (morph == null || morph.BindProperties == null) continue;
-            var parts = new List<GameObject>();
-            foreach (BindProperty property in morph.BindProperties)
-            {
-                if (property == null || property.BindPrefabs == null) continue;
-                foreach (GameObject prefab in property.BindPrefabs)
-                {
-                    if (prefab == null || parts.Contains(prefab)) continue;
-                    if (prefab.name.IndexOf("emo_eye_000", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    parts.Add(prefab);
-                }
-            }
-
-            foreach (GameObject part in parts)
-            {
-                var indices = new List<int>();
-                var centre = Vector3.zero;
-                int placed = 0;
-                foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (renderer == null || !restInvisible.Contains(renderer)) continue;
-                    if (!rangeOf.TryGetValue(renderer, out var range)) continue;
-                    for (int i = range.start; i < range.start + range.count; i++)
-                    {
-                        indices.Add(i);
-                        if (!deployed.TryGetValue(i, out Vector3 where)) continue;
-                        centre += where;
-                        placed++;
-                    }
-                }
-                if (indices.Count < 3) continue;
-                centre = placed > 0 ? centre / placed : Vector3.zero;
-
-                var uv = new Vector2[indices.Count];
-                Vector2 pivot = Vector2.zero;
-                for (int i = 0; i < indices.Count; i++)
-                {
-                    uv[i] = model.Vertices[indices[i]].UvCoordinate;
-                    pivot += uv[i];
-                }
-                pivot /= uv.Length;
-
-                string name = spinFace + "_" + SideOf(character, centre);
-                for (int step = 1; step < SpinSteps; step++)
-                {
-                    float angle = Mathf.PI * 2f * step / SpinSteps;
-                    float cos = Mathf.Cos(angle), sin = Mathf.Sin(angle);
-                    var data = new List<Morph.MorphData>();
-                    for (int i = 0; i < indices.Count; i++)
-                    {
-                        Vector2 from = uv[i] - pivot;
-                        Vector2 to = new Vector2(from.x * cos - from.y * sin, from.x * sin + from.y * cos);
-                        Vector2 delta = to - from;
-                        if (delta.sqrMagnitude < 1e-12f) continue;
-                        data.Add(new Morph.UvMorphData
-                        {
-                            VertexIndex = indices[i],
-                            Offset = new Vector4(delta.x, delta.y, 0f, 0f)
-                        });
-                    }
-                    if (data.Count == 0) continue;
-                    string morphName = name + "_Turn" + step;
-                    morphs.Add(new Morph
-                    {
-                        Name = morphName,
-                        NameEn = morphName,
-                        Category = Morph.MorphCategory.MorphCatOther,
-                        Type = Morph.MorphType.MorphTypeUv,
-                        MorphDatas = data.ToArray()
-                    });
-                }
-            }
-        }
-        return morphs;
     }
 
     /// <summary>

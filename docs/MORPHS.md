@@ -29,10 +29,12 @@ driven-key clips animate them (`anm_*_face_driven`, `anm_*_ear_driven`, `anm_chr
 does not carry is the *response*.
 
 What the export does carry now is in `PMX_EXTENSIONS.md`: the parts these morphs show and hide (the cheek
-blush, the four eye manga, the two static tears) are collapsed onto a point inside the head at rest and one
-vertex morph per part deploys it - `Blush`, `@_@_L` … `o_o_R`, `Tear_L`, `Tear_R` - so a plain MMD
-viewer can show them without any addon. What a vertex morph still cannot hold is the cheek's *texture pair and
-rate* and the face shadow's `_faceShadowAlpha`, which stay as `morph=` tokens in the material comments.
+blush, the four eye manga, the static tears, the animated tear cards) are collapsed onto a point inside the head at
+rest and one vertex morph per part deploys it - `Cheek_Blush`, `Manga_Star_L` … `Manga_Wide_R`,
+`Tear_Static_L/R`, `Tear_Stream_L/R`, `Tear_Pool_L/R` - so a plain MMD viewer can show them without any addon. What a
+vertex morph still cannot hold is the cheek's *texture pair and rate* and the face shadow's `_faceShadowAlpha`, which
+stay as `morph=` tokens in the material comments; the two *animated* decals (the `@_@` turn and the tear sheet
+scroll) are driven by the add-on from those tokens and ship with no uv morphs at all.
 
 ## The bind types and exactly what they do
 

@@ -94,11 +94,16 @@ exactly what a vertex morph can do.
 
 | morph | part it deploys | vertices |
 |---|---|---|
-| `Blush` | the cheek blush decal (`mtl_chr1001_00_cheek`) | 54 |
-| `@_@_L`, `@_@_R`, `✦_✦_L`, `✦_✦_R`, `>_<_L`, `>_<_R`, `o_o_L`, `o_o_R` | the four eye manga (`mtl_eff_chr_emo_eye_000` … `_003`), one morph per eye and expression | 4 each |
-| `Tear_L`, `Tear_R` | the static tears (`mtl_chr1001_00_tear`) | 15 each |
-| `TearDrop1_L` … `TearDrop4b_L` | the animated tears, 8 objects (two prefabs per controller) | 66 / 36 |
-| `…_scr0` … `…_scr6` | UV morphs: one sprite-sheet frame each, the scroll of the animated tears | all of their part's vertices |
+| `Cheek_Blush` | the cheek blush decal (`mtl_chr1001_00_cheek`) | 54 |
+| `Manga_Spin_L/R`, `Manga_Star_L/R`, `Manga_Shut_L/R`, `Manga_Wide_L/R` | the four eye manga (`mtl_eff_chr_emo_eye_000` … `_003`), one morph per eye and expression | 4 each |
+| `Tear_Static_L/R` | the static tears (`mtl_chr1001_00_tear`) | 15 each |
+| `Tear_Stream_L/R`, `Tear_Pool_L/R` | the animated tears, deduplicated to one morph per distinct card (`tear000` is the tall one, `tear001` the wide one) | 66 / 36 |
+
+These are the *only* morphs the exporter adds, and every one of them is a **vertex** morph. Older exports carried
+two more stacks - `Manga_Spin_*_Turn1..7` rotations and `<card>_Sheet1..7` sprite-sheet steps - which were removed:
+nothing in the pipeline can use them (Blender cannot animate a uv layer, so the add-on drives the same two effects
+from the material with the `scroll=`/`Spin_*` route), and they were 42 of a character's 249 morphs. The reasoning and
+what it costs are in `EXTRA_MORPHS.md` under "Why the export carries no UV morphs".
 
 A pmx is read with every morph at 0, so the state the model must *rest* in is the collapsed one: every vertex
 of a decal part is written on a single point inside the head, which makes it a handful of zero-area triangles -
@@ -137,10 +142,12 @@ MMD material values, vertex morphs, bones and textures.
 ## What a user without the addon sees
 
 * The model loads, poses and renders normally.
-* Every vertex morph the PMX can hold is there - eyes, brows, mouth, ears - and the five deploy morphs as
-well: `Blush`, the eight eye manga (`@_@_L` … `o_o_R`), `Tear_L`, `Tear_R`, the eight animated
-tears with their `_scrN` scroll steps, and the `@_@_L_spin1` … `@_@_R_spin7` turn - 281 morphs on
-character 1001.
+* Every vertex morph the PMX can hold is there - eyes, brows, mouth, ears - and the fifteen deploy morphs as
+well: `Cheek_Blush`, the eight eye manga (`Manga_Star_L` … `Manga_Wide_R`), `Tear_Static_L/R` and the four
+animated cards `Tear_Stream_L/R`/`Tear_Pool_L/R` - 207 morphs on character 1001, and no uv morphs at all.
+* The `@_@` turn and the tear sheet scroll are **not animated** without the add-on: their uv-morph stacks were
+  removed on purpose (see "Why the export carries no UV morphs" in `EXTRA_MORPHS.md`), so the two decals sit still
+  in plain MMD. Everything else described here is unaffected.
 * The cheek blush is a pale wash rather than the game's multiply (see `blend=multiply` above), which is the
   one part plain MMD cannot draw as the game does.
 * The comments above are visible in the material panel and the model properties, which is the point of them.

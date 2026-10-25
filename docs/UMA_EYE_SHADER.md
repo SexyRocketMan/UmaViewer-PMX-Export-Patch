@@ -104,6 +104,7 @@ What this settles and what it does not:
 * **The rate and the amplitude are not in the shader** — they are uniforms the game's own code animates, so the
   only remaining unknowns are two numbers, and both are exposed as constants in
   `Tools/patch_eye_masters.py` (`ROTATE_RATE`, `ROTATE_AMPLITUDE`).
-* **MMD:** the same motion is a **UV-morph stack** (a rotation of the highlight vertices' UVs per step), which is
-  how the `@_@` spin and the tear scroll are already carried. That is the route if the highlights ever need to
-  work without the addon.
+* **MMD:** there is no route today. This used to say the same motion would be a **UV-morph stack**, the way the
+  `@_@` spin and the tear scroll were carried - but those two stacks have since been removed (nothing in the
+  pipeline reads a uv morph, and Blender cannot animate one), so a highlight motion outside the add-on would need a
+  carrier that MMD can actually play, such as material animation or geometry.

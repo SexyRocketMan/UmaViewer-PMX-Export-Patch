@@ -8,24 +8,30 @@ involved:
 | `C:\Users\user\Documents\dev\UmaViewer-PMX-Export-Patch` | `feat/extra-morphs` | the Unity viewer fork and its PMX exporter |
 | `C:\Users\user\AppData\Roaming\Blender Foundation\Blender\5.2\extensions\user_default\uma_addon` | `feat/morph-drivers` | the Blender addon |
 
-Current export: `C:\Users\user\Documents\umaviewer_exports\morphs\1001_morphs23.pmx` (281 morphs, 27 materials).
-A shaded character for inspecting the eye material lives beside it as `Special_Week_Looper.blend`.
+Current export: `C:\Users\user\Documents\umaviewer_exports\morphs\1001_nouv.pmx` (207 morphs, 27 materials, no uv
+morphs). A shaded character for inspecting the eye material lives beside it as `Special_Week_Looper.blend`.
 
 ## What "advanced morphs" are, and where each one stands
 
 The game drives five facial effects outside its vertex morphs (`docs/EXTRA_MORPHS.md`). The mechanism that makes
 them portable is the **collapse + deploy morph**: every decal part is written collapsed onto one point inside the
 head (zero-area triangles, invisible) and one vertex morph per part puts it back, so MMD rests hidden and weight
-1 is the deployed part. Three UV-morph stacks carry the animated ones.
+1 is the deployed part. The animated ones are carried by the add-on's material drivers, not by morphs.
 
 | effect | MMD / pmx | Blender (addon) |
 |---|---|---|
-| cheek blush | `Blush` deploy morph, baked blush maps `<map>_blush.png` | decal material blended, no shadow, maps clipped |
-| eye manga ×4 ×2 eyes | `@_@_L` … `o_o_R` | decal material rules |
-| `@_@` spin | `@_@_L_spin1..7` UV morphs | `Spin_Speed` (turns/s) + `Spin` offset |
-| animated tears ×8 | `TearDrop1_L` … `TearDrop4b_R`, each with `_scr0..6` | `Tear_Scroll` (sheet frames/s), texture scroll |
-| static tears | `Tear_L`, `Tear_R` | decal material rules |
+| cheek blush | `Cheek_Blush` deploy morph, baked blush maps `<map>_blush.png` | decal material blended, no shadow, maps clipped |
+| eye manga ×4 ×2 eyes | `Manga_Star_L` … `Manga_Wide_R` deploy morphs | decal material rules |
+| `@_@` spin | nothing - no uv morphs are exported (see below) | `Spin_Speed` (turns/s) + `Spin` offset, a Vector Rotate node |
+| animated tears ×4 cards | `Tear_Stream_L/R`, `Tear_Pool_L/R` deploy morphs | `Tear_Scroll` (sheet frames/s) over the `scroll=` grid, a Mapping node |
+| static tears | `Tear_Static_L`, `Tear_Static_R` | decal material rules |
 | tear-eye highlights | **not in the pmx** (see below) | **in the shader library** + properties |
+
+**The uv-morph stacks are gone** (this session): `Manga_Spin_*_Turn1..7` and `<card>_Sheet1..7` were 42 of a
+character's 249 morphs and nothing in the pipeline could read them - Blender cannot animate a uv layer, which is why
+the add-on drives both effects on the material instead. Character 1001 now exports 207 morphs, all vertex. The cost
+is that plain MMD without the add-on no longer animates those two decals; reasoning and measurements in
+`EXTRA_MORPHS.md` under "Why the export carries no UV morphs".
 
 Advanced morphs have their own opt-out (`Advanced morphs` scene switch, default on) and their own operator,
 `Set Up Advanced Morphs`, which runs the whole step without a Shading pass.
@@ -118,10 +124,12 @@ properties and defaults are readable, **source is not**. The decompile remains t
    `remove_shape_keys`.
 5. **Parked deliberately**: `Shade_Ctrl` (`_faceShadowAlpha`; needs the face-region port to have an input),
    vmd/recording of the advanced morphs (the sampler design is in `EXTRA_MORPHS.md`, judged not worth it yet),
-   eye-highlight UV morphs in the pmx (superseded by the shader route), and **the tear card's roll** - it was
-   built, verified and then taken back out: twelve morphs for one effect, animated only by an addon-side crossfade,
-   so in plain `mmd_tools` it is dead weight. The measurement and the reason are in `EXTRA_MORPHS.md` under
-   "Shelved: exporting the roll"; if it is ever revisited, the carrier to use is bones plus a VMD, not morphs.
+   eye-highlight UV morphs in the pmx (superseded by the shader route), the `@_@` turn and tear-sheet uv morphs
+   (removed this session - the add-on drives both on the material, so they were 42 unused sliders), and **the tear
+   card's roll** - it was built, verified and then taken back out: twelve morphs for one effect, animated only by an
+   addon-side crossfade, so in plain `mmd_tools` it is dead weight. The measurement and the reason are in
+   `EXTRA_MORPHS.md` under "Shelved: exporting the roll"; if it is ever revisited, the carrier to use is bones plus
+   a VMD, not morphs.
 6. **Robustness pass, in progress.** A reviewer's audit of both repositories is in
    `C:\tmp\pipeline_robustness_review.md` (not in the repo - copy it in if it is still wanted after a reboot). What
    it found and what has been fixed since:
@@ -162,10 +170,10 @@ properties and defaults are readable, **source is not**. The decompile remains t
      `setup_advanced_morphs` is untouched, and a Shading run on 1001 still builds spin 2 / tear scroll 16 /
      highlight 3 drivers, 11 deploy rows and 4 tear cards.
    * **still open** - `Alt+D` duplicates share one set of drivers (they share the *material*, which is where the
-     drivers live, so this is inherent rather than a bug - the honest options are a warning or leaving it); the
-     `@_@` spin's absolute direction is unmeasured - the morph stack itself is verified (pure rotations about the uv
-     centre, 45° apart, one direction, both eyes agreeing, every vertex to 0.00°), but which way round the game turns
-     it needs the game side. The static face copy being keyed on the face object's *name* was the other entry here and
+     drivers live, so this is inherent rather than a bug - the honest options are a warning or leaving it). The
+     `@_@` spin's absolute direction is no longer a pmx question at all: with the uv-morph stack removed the turn is
+     entirely the add-on's driver, so if it ever looks like it turns the wrong way, the fix is that driver's sign and
+     nothing in the file. The static face copy being keyed on the face object's *name* was the other entry here and
      is now handled: a copy whose marker names an object that has gone, and whose topology still matches, is re-tagged
      instead of duplicated (A/B measured: one copy before and after a rename).
    * **the pooled tear card "moving forward"** - checked and not reproducible in the data: the card's absolute
@@ -194,7 +202,8 @@ properties and defaults are readable, **source is not**. The decompile remains t
   `Texture2D/` folder and must be **rewritten every export**, or an older bake ships.
 * **`bmesh.ops.duplicate`** with faces+verts+edges in `geom` throws; pass faces only.
 * **mmd_tools and UV morphs**: they import (`mmd_root.uv_morphs`, as vertex groups) and can be viewed/applied by
-  the UV Morph operators, but they never deform on their own — Blender cannot animate a UV layer.
+  the UV Morph operators, but they never deform on their own — Blender cannot animate a UV layer. That is the reason
+  this export carries no uv morphs at all (see "Why the export carries no UV morphs" in `EXTRA_MORPHS.md`).
 
 ## Fast orientation
 
