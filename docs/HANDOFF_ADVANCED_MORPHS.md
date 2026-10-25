@@ -42,6 +42,45 @@ now exports 205 morphs, all vertex: 192 ordinary + 13 deploy.
 Advanced morphs have their own opt-out (`Advanced morphs` scene switch, default on) and their own operator,
 `Set Up Advanced Morphs`, which runs the whole step without a Shading pass.
 
+## Shader animation: nodes or drivers, measured
+
+The eye-highlight motion used to be **drivers on the rotate sockets** (rame * ...), and the user's replacement
+animates it **inside the shader** (Scene Time -> noise -> threshold -> angle). Which is cheaper is a question worth
+answering with numbers, so it was measured on spe_configured.blend (EEVEE, 640x640, 8 samples, warm-up render per
+configuration so lazy shader compilation does not pollute the samples):
+
+| what was measured | result |
+|---|---|
+| 305 drivers on material node trees, frame stepping | **0.27 ms/frame** total (2.11 -> 1.84 without them) |
+| render, highlights animated by Scene Time + noise | 179.7 ms/frame |
+| render, the same two angles driven by `frame * 0.2618` instead | 181.5 ms/frame |
+| render, angles left static | 184.8 ms/frame |
+| 320 px -> 1280 px (16x the pixels) | 176 -> 210 ms/frame |
+| 1 -> 32 samples | 161 -> 250 ms/frame |
+| all 27 materials replaced by one flat emission | 189 -> 130 ms/frame |
+| modifiers off (armature, outline GN shell, data transfer) | 130 -> 91 ms/frame |
+| shape keys removed | 91 -> 88 ms/frame |
+
+**Conclusion: the animation source is not the cost.** Drivers are ~1 us each per frame (they are simple expressions,
+so no Python VM), and the node route moves the same work to the per-pixel path, which is why the two land within
+noise of each other. What the frame actually costs is a per-material, per-frame constant (~2 ms per material) plus
+the modifier stack, and it does *not* scale with resolution - so a framerate problem at 60 fps is materials and
+geometry, not drivers, and converting drivers to nodes buys portability rather than speed. The win that *would*
+count: don't drive the 20 appearance settings every frame (write them when the panel changes), and cut material
+instances.
+
+**Consequences shipped**: the library now animates the highlights itself, so `build_highlights` and its five `Hi_*`
+properties are gone - it had been writing drivers onto the very sockets the graph drives by link, and a linked
+socket ignores its `default_value`, which made both the drivers and the knobs inert. The library blends also moved
+beside their manifests (`operators/shaders/`), read through one resolver, `ShaderManifest.blend_path()`.
+
+**Still open on this front**: the panel does not yet expose the new knobs. A `settings` row addresses a *group
+socket* today; the highlight colours (`Color`/`Color.001`) and the tremble inputs (`NoiseGenerator`
+`TimeScale`/`Gain`/`Offset`, `SmoothThreshold` `Threshold`/`Smothness`) are nodes inside the material, so
+rows need a target like `{"node": ..., "socket": ...}`. The eyebrow "render in front of hair" trick (view-vector
+displacement, `0.05`, `displacement_method = BOTH`, measured to expose 970 brow pixels instead of 106) needs its
+own part role - `brows` -> a `Uma Brows` library material - because the brows currently match the `face` rule
+and the shared `default` template must not displace the whole body.
 ## The highlights: what is settled, what is not
 
 **Settled** (documented in `docs/UMA_EYE_SHADER.md`, which is the document to read first):
@@ -227,3 +266,4 @@ properties and defaults are readable, **source is not**. The decompile remains t
   `BakeBlush`, `BakeHighlight`
 * addon `MorphDrivers.py`: `decal_materials`, `build_spin`, `build_tear_scroll`, `build_highlights`,
   `setup_advanced_morphs`, `report_export`
+
