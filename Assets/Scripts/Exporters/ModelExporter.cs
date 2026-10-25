@@ -1030,11 +1030,12 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// One vertex morph per decal part, carrying the offsets that put the part back where the game has it.
+    /// One vertex morph per decal part, carrying the offsets that put the part back where the game has it - plus the
+    /// clearance that keeps it off the surface it is painted on (`DecalClearanceFraction`).
     ///
-    /// Named for what a user looks for: `@_@_L` … `o_o_R` for the eye manga, `Tear_L`/`Tear_R` for the
-    /// static tears, `Blush` for the blush decal. At weight 0 the part is collapsed away (the model's rest
-    /// state, as in the game); at 1 it is deployed.
+    /// Named for what a user looks for: `Manga_Spin_L` … `Manga_Wide_R` for the eye manga, `Tear_Static_L`/`_R` for the
+    /// static tears, `Tear_Stream_*`/`Tear_Pool_*` for the animated cards, `Cheek_Blush` for the blush. At weight 0 the
+    /// part is collapsed away (the model's rest state, as in the game); at 1 it is deployed.
     /// </summary>
     private static List<Morph> DeployMorphs(UmaContainerCharacter character,
                                             List<(Renderer renderer, int start, int count)> ranges,
