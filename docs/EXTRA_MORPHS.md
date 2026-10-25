@@ -67,8 +67,15 @@ sign the game does *not* use. The tear scroll had this wrong: its base cell sits
 steps of `1/rows` land the uvs at exactly 1.0 - the far edge of the sheet - when stored `+v`, and at **-0.875**,
 off the sheet entirely, when stored `-v`, which is what shipped. A stack that walks the uvs off the sheet cannot
 scroll through it, so the drip was never going to run the right way. The `@_@` rotation writes its deltas the same
-way and has not been re-measured: a mirrored rotation looks plausible on a symmetrical decal, so if the dizzy face
-turns the wrong way, suspect the same thing.
+way, except that a rotation *can't* walk off the sheet - a mirrored one is still a rotation - so its sign cannot be
+caught that way.
+
+**What the spin's morphs actually do (measured on the exported 1001 file).** Every `Manga_Spin_*_TurnN` is a pure
+rotation about the centre of 0..1 uv space, and the stack walks `0, 45, 90, 135, 180, -135, -90, -45` degrees - one
+direction, 45° per step, wrapping through ±180 so that `Turn7` plus one more step is the identity again. Every vertex
+of every morph agrees with that angle to 0.00°, so the cross-fade between neighbours is exact. Left and right carry
+the *same* angles, so the two eyes turn the same way on screen. What is still unmeasured is the absolute direction
+(which way round the game turns it): that needs the game side, because both directions are geometrically valid.
 
 ### The skeleton animates: the card rolls down the cheek and off the chin
 
@@ -236,7 +243,8 @@ blend shapes (`ReadMorph` walks `mesh.blendShapeCount`), so they cannot be "miss
 game's meshes carry is what gets exported.
 
 So the audit finds exactly one true gap in the model data - the tear card's skeleton animation - and one piece of
-data that is exported but unused (the face shadow). The `@_@` spin also carries the V-sign suspicion noted above.
+data that is exported but unused (the face shadow). The `@_@` spin's morph stack is measured to be exact 45° steps in
+one direction, both eyes agreeing; only the absolute direction is still unverified (see "The sign of a UV morph").
 
 
 ## The teary eye highlights

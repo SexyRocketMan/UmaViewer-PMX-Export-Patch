@@ -145,11 +145,27 @@ properties and defaults are readable, **source is not**. The decompile remains t
      the other piece's - so `mesh.separate` carries and re-points driver data correctly on Blender 5.2. The add-on
      keeps a cheap check instead (report any driver that does not resolve, right after the split); a repair was
      written, A/B-tested, found to change nothing, and taken back out.
+   * **fixed** - the exporter wrote coordinates transferred into the model's frame but normals copied raw out of the
+     mesh, so a part whose transform is not the identity had its geometry and its shading in two different frames
+     (invisible while every transform is identity, which is why the reference character looked fine). Both paths now
+     transform the normal the same way the position goes and normalise it - the chain is not scale-free, and without
+     the normalise every normal came out 0.9829 long instead of 1.0000. Skinning can collapse a vertex, and a
+     collapsed normal bakes as zero (24 on 1001), so those fall back to the rest pose's normal. Measured on 1001:
+     only the skinned body changes (2206 of 14492 vertices, every other part byte-identical), and it agrees with its
+     own geometry better than before (mean dot 0.86 → 0.89; 1976 vertices improved against 204 that moved away from
+     the triangle-plane normal at sharp features). A mesh that fails to read no longer advances `baseShift`, so one
+     unreadable part cannot misalign every material after it.
+   * **fixed** - the pre-4.2 driver builder in `MorphDrivers.py` is gone: `build`, `verify`, `build_material_visibility`
+     and `build_cheek` had no callers since the deploy shape keys replaced them, and they were the only code touching
+     `material.blend_method`, which was removed in Blender 4.2 - so they could not have run even if called. Their
+     private helpers, the two bind-type tuples and the three parsers only they used went with them (483 lines).
+     `setup_advanced_morphs` is untouched, and a Shading run on 1001 still builds spin 2 / tear scroll 16 /
+     highlight 3 drivers, 11 deploy rows and 4 tear cards.
    * **still open** - the static face copy is keyed on the face object's *name*, so a rename multiplies copies;
-     `Alt+D` duplicates share one set of drivers; the exporter's
-     unreadable-mesh recovery double-counts `baseShift`; normals are never transformed while coordinates are;
-     `build`/`build_material_visibility`/`build_cheek`/`verify` in `MorphDrivers.py` are dead code (and the only
-     pre-4.2 `material.blend_method` uses); the `@_@` spin's UV-morph V-sign is still unmeasured.
+     `Alt+D` duplicates share one set of drivers (they share the *material*, which is where the drivers live, so this
+     is inherent rather than a bug - the honest options are a warning or leaving it); the `@_@` spin's absolute
+     direction is unmeasured - the morph stack itself is verified (pure rotations about the uv centre, 45° apart, one
+     direction, both eyes agreeing, every vertex to 0.00°), but which way round the game turns it needs the game side.
    * **the pooled tear card "moving forward"** - checked and not reproducible in the data: the card's absolute
      coordinates are identical in every export from `morphs13` (when the tears appeared) through `morphs33`
      (`Y 17.405…17.587`, `Z −0.468…−0.455`), and its drawing state is identical too (BLENDED, no culling, repeat,
