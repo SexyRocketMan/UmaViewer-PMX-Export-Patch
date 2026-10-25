@@ -161,11 +161,13 @@ properties and defaults are readable, **source is not**. The decompile remains t
      private helpers, the two bind-type tuples and the three parsers only they used went with them (483 lines).
      `setup_advanced_morphs` is untouched, and a Shading run on 1001 still builds spin 2 / tear scroll 16 /
      highlight 3 drivers, 11 deploy rows and 4 tear cards.
-   * **still open** - the static face copy is keyed on the face object's *name*, so a rename multiplies copies;
-     `Alt+D` duplicates share one set of drivers (they share the *material*, which is where the drivers live, so this
-     is inherent rather than a bug - the honest options are a warning or leaving it); the `@_@` spin's absolute
-     direction is unmeasured - the morph stack itself is verified (pure rotations about the uv centre, 45° apart, one
-     direction, both eyes agreeing, every vertex to 0.00°), but which way round the game turns it needs the game side.
+   * **still open** - `Alt+D` duplicates share one set of drivers (they share the *material*, which is where the
+     drivers live, so this is inherent rather than a bug - the honest options are a warning or leaving it); the
+     `@_@` spin's absolute direction is unmeasured - the morph stack itself is verified (pure rotations about the uv
+     centre, 45° apart, one direction, both eyes agreeing, every vertex to 0.00°), but which way round the game turns
+     it needs the game side. The static face copy being keyed on the face object's *name* was the other entry here and
+     is now handled: a copy whose marker names an object that has gone, and whose topology still matches, is re-tagged
+     instead of duplicated (A/B measured: one copy before and after a rename).
    * **the pooled tear card "moving forward"** - checked and not reproducible in the data: the card's absolute
      coordinates are identical in every export from `morphs13` (when the tears appeared) through `morphs33`
      (`Y 17.405…17.587`, `Z −0.468…−0.455`), and its drawing state is identical too (BLENDED, no culling, repeat,
