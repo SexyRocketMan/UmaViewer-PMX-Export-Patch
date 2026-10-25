@@ -97,9 +97,11 @@ exactly what a vertex morph can do.
 | `Cheek_Blush` | the cheek blush decal (`mtl_chr1001_00_cheek`) | 54 |
 | `Manga_Spin_L/R`, `Manga_Star_L/R`, `Manga_Shut_L/R`, `Manga_Wide_L/R` | the four eye manga (`mtl_eff_chr_emo_eye_000` … `_003`), one morph per eye and expression | 4 each |
 | `Tear_Static_L/R` | the static tears (`mtl_chr1001_00_tear`) | 15 each |
-| `Tear_Stream_L/R`, `Tear_Pool_L/R` | the animated tears, deduplicated to one morph per distinct card (`tear000` is the tall one, `tear001` the wide one) | 66 / 36 |
+| `Tear_Pool_L/R` | the wide animated tear card (`tear001`), deduplicated to one morph per distinct card | 36 |
 
-These are the *only* morphs the exporter adds, and every one of them is a **vertex** morph. Older exports carried
+These are the *only* morphs the exporter adds, and every one of them is a **vertex** morph. The tall rolling tear
+card (`tear000`) is deliberately not among them: a tear that cannot move reads as a mistake, so it stays collapsed and
+is simply not in the model. Older exports carried
 two more stacks - `Manga_Spin_*_Turn1..7` rotations and `<card>_Sheet1..7` sprite-sheet steps - which were removed:
 nothing in the pipeline can use them (Blender cannot animate a uv layer, so the add-on drives the same two effects
 from the material with the `scroll=`/`Spin_*` route), and they were 42 of a character's 249 morphs. The reasoning and
@@ -150,8 +152,8 @@ MMD material values, vertex morphs, bones and textures.
 
 * The model loads, poses and renders normally.
 * Every vertex morph the PMX can hold is there - eyes, brows, mouth, ears - and the fifteen deploy morphs as
-well: `Cheek_Blush`, the eight eye manga (`Manga_Star_L` … `Manga_Wide_R`), `Tear_Static_L/R` and the four
-animated cards `Tear_Stream_L/R`/`Tear_Pool_L/R` - 207 morphs on character 1001, and no uv morphs at all.
+well: `Cheek_Blush`, the eight eye manga (`Manga_Star_L` … `Manga_Wide_R`), `Tear_Static_L/R` and the wide
+animated card `Tear_Pool_L/R` - 205 morphs on character 1001, and no uv morphs at all.
 * The `@_@` turn and the tear sheet scroll are **not animated** without the add-on: their uv-morph stacks were
   removed on purpose (see "Why the export carries no UV morphs" in `EXTRA_MORPHS.md`), so the two decals sit still
   in plain MMD. Everything else described here is unaffected.

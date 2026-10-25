@@ -23,15 +23,21 @@ head (zero-area triangles, invisible) and one vertex morph per part puts it back
 | cheek blush | `Cheek_Blush` deploy morph, baked blush maps `<map>_blush.png` | decal material blended, no shadow, maps clipped |
 | eye manga ×4 ×2 eyes | `Manga_Star_L` … `Manga_Wide_R` deploy morphs | decal material rules |
 | `@_@` spin | nothing - no uv morphs are exported (see below) | `Spin_Speed` (turns/s) + `Spin` offset, a Vector Rotate node |
-| animated tears ×4 cards | `Tear_Stream_L/R`, `Tear_Pool_L/R` deploy morphs | `Tear_Scroll` (sheet frames/s) over the `scroll=` grid, a Mapping node |
+| animated tears ×2 cards | `Tear_Pool_L/R` deploy morphs | `Tear_Scroll` (sheet frames/s) over the `scroll=` grid, a Mapping node |
 | static tears | `Tear_Static_L`, `Tear_Static_R` | decal material rules |
 | tear-eye highlights | **not in the pmx** (see below) | **in the shader library** + properties |
 
 **The uv-morph stacks are gone** (this session): `Manga_Spin_*_Turn1..7` and `<card>_Sheet1..7` were 42 of a
 character's 249 morphs and nothing in the pipeline could read them - Blender cannot animate a uv layer, which is why
-the add-on drives both effects on the material instead. Character 1001 now exports 207 morphs, all vertex. The cost
-is that plain MMD without the add-on no longer animates those two decals; reasoning and measurements in
-`EXTRA_MORPHS.md` under "Why the export carries no UV morphs".
+the add-on drives both effects on the material instead. The cost is that plain MMD without the add-on no longer
+animates those two decals; reasoning and measurements in `EXTRA_MORPHS.md` under "Why the export carries no UV
+morphs".
+
+**The rolling tear card is not exported either** (`Tear_Stream_L/R`): a tear that cannot roll reads as a mistake, and
+the roll is the one part of the feature still unsolved, so its morph and its `scroll=` token are gone and the card
+stays collapsed - it is simply not in the model. The wide `Tear_Pool_L/R` card stays. Reverting is two small edits
+(`TearMorphs`, `ExtraMorphGrid`), listed in `EXTRA_MORPHS.md` under "The rolling card is not exported". Character 1001
+now exports 205 morphs, all vertex: 192 ordinary + 13 deploy.
 
 Advanced morphs have their own opt-out (`Advanced morphs` scene switch, default on) and their own operator,
 `Set Up Advanced Morphs`, which runs the whole step without a Shading pass.

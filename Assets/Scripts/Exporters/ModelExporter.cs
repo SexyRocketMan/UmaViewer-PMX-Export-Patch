@@ -982,6 +982,9 @@ public class ModelExporter
     /// frame, and those are gone (see `TearMorphs`). A consumer that reads the comment - the Blender add-on - steps
     /// the texture itself over this grid, which is what a sprite sheet scroll is. The grid is the prefab's, not the
     /// material's: `texture_width`/`_height` and the part size come from the tear object's own asset table.
+    ///
+    /// Only the pool card gets the token: the rolling card is not exported, so a scroll aimed at it would animate a
+    /// decal that is not in the model (see `TearMorphs`).
     /// </summary>
     private static string ExtraMorphGrid(UmaContainerCharacter character, Renderer renderer)
     {
@@ -990,7 +993,7 @@ public class ModelExporter
         foreach (TearController tear in character.TearControllers)
         {
             if (tear == null) continue;
-            foreach (GameObject tearObject in new GameObject[] { tear.TearObject_0, tear.TearObject_1 })
+            foreach (GameObject tearObject in new GameObject[] { tear.TearObject_1 })
             {
                 if (tearObject == null) continue;
                 if (!renderer.transform.IsChildOf(tearObject.transform)) continue;
@@ -1161,64 +1164,59 @@ public class ModelExporter
         var rangeOf = new Dictionary<Renderer, (int start, int count)>();
         foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
 
-        // cards already written, by kind + side + geometry, so a controller that duplicates another one's card is
-        // skipped instead of shipped twice
+        // cards already written, by side + geometry, so a controller that duplicates another one's card is skipped
+        // instead of shipped twice
         var seenCards = new HashSet<string>();
 
-        for (int i = 0; i < character.TearControllers.Count; i++)
+        foreach (TearController tear in character.TearControllers)
         {
-            TearController tear = character.TearControllers[i];
             if (tear == null) continue;
-            for (int variant = 0; variant < 2; variant++)
+            // `tear001`, the wide card. `tear000` - the tall stream that rolls from the eye corner to the chin - is
+            // deliberately not exported; the comment above says why and how to bring it back.
+            GameObject part = tear.TearObject_1;
+            if (part == null) continue;
+
+            var indices = new List<int>();
+            Vector3 sum = Vector3.zero;
+            int placed = 0;
+            foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
             {
-                GameObject part = variant == 0 ? tear.TearObject_0 : tear.TearObject_1;
-                if (part == null) continue;
-                var indices = new List<int>();
-                Vector3 sum = Vector3.zero;
-                int placed = 0;
-                foreach (Renderer renderer in part.GetComponentsInChildren<Renderer>(true))
+                if (renderer == null || !restInvisible.Contains(renderer)) continue;
+                if (!rangeOf.TryGetValue(renderer, out var range)) continue;
+                for (int v = range.start; v < range.start + range.count; v++)
                 {
-                    if (renderer == null || !restInvisible.Contains(renderer)) continue;
-                    if (!rangeOf.TryGetValue(renderer, out var range)) continue;
-                    for (int v = range.start; v < range.start + range.count; v++)
-                    {
-                        if (!deployed.ContainsKey(v)) continue;
-                        indices.Add(v);
-                        sum += deployed[v];
-                        placed++;
-                    }
+                    if (!deployed.ContainsKey(v)) continue;
+                    indices.Add(v);
+                    sum += deployed[v];
+                    placed++;
                 }
-                if (indices.Count == 0) continue;
-                Vector3 centre = placed > 0 ? sum / placed : part.transform.position;
-                string side = SideOf(character, centre);
-                // `tear000` is the tall card that rolls; `tear001` is the wide one. Named for what they are rather
-                // than for which controller instantiated them.
-                string kind = variant == 0 ? "Stream" : "Pool";
-                string name = "Tear_" + kind + "_" + side;
-
-                // The four controllers are not four positions: `SetDir` puts both of a controller's prefabs on one
-                // eye, and what separates them in the game is `TearSide`, a position-Y offset the face clips drive
-                // and this viewer never does. So controllers 1 and 3 hold the *same* card in the same place, as do
-                // 2 and 4 - writing a deploy morph for each shipped four redundant morphs and drew the decal
-                // twice. The signature is the placed geometry itself, so a model whose controllers genuinely
-                // differ keeps them.
-                string signature = kind + "|" + side + "|" + CardSignature(indices, deployed);
-                if (!seenCards.Add(signature)) continue;
-
-                var data = new List<Morph.MorphData>();
-                foreach (int v in indices)
-                {
-                    data.Add(new Morph.VertexMorphData { VertexIndex = v, Offset = deployed[v] - collapsePoint });
-                }
-                morphs.Add(new Morph
-                {
-                    Name = name,
-                    NameEn = name,
-                    Category = Morph.MorphCategory.MorphCatOther,
-                    Type = Morph.MorphType.MorphTypeVertex,
-                    MorphDatas = data.ToArray()
-                });
             }
+            if (indices.Count == 0) continue;
+            Vector3 centre = placed > 0 ? sum / placed : part.transform.position;
+            string side = SideOf(character, centre);
+            string name = "Tear_Pool_" + side;
+
+            // The four controllers are not four positions: `SetDir` puts both of a controller's prefabs on one eye,
+            // and what separates them in the game is `TearSide`, a position-Y offset the face clips drive and this
+            // viewer never does. So controllers 1 and 3 hold the *same* card in the same place, as do 2 and 4 -
+            // writing a deploy morph for each shipped four redundant morphs and drew the decal twice. The signature
+            // is the placed geometry itself, so a model whose controllers genuinely differ keeps them.
+            string signature = side + "|" + CardSignature(indices, deployed);
+            if (!seenCards.Add(signature)) continue;
+
+            var data = new List<Morph.MorphData>();
+            foreach (int v in indices)
+            {
+                data.Add(new Morph.VertexMorphData { VertexIndex = v, Offset = deployed[v] - collapsePoint });
+            }
+            morphs.Add(new Morph
+            {
+                Name = name,
+                NameEn = name,
+                Category = Morph.MorphCategory.MorphCatOther,
+                Type = Morph.MorphType.MorphTypeVertex,
+                MorphDatas = data.ToArray()
+            });
         }
         return morphs;
     }

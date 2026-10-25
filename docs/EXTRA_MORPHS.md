@@ -12,7 +12,7 @@ inventory of those, read from the code (`Assets/Scripts/umamusume/Gallop/FacialM
 | `Shade_Ctrl` | locator scale X | `Shader` bind `_faceShadowAlpha` on the face material | nothing yet - an MMD material has no such field; the addon would have to drive the uma shader's face region |
 | `Manga_Ctrl` | locator scale Y (select), scale X (enable) | `EyeSelect` + `Enable` over four manga prefabs, once per eye | **eight deploy morphs**, one per eye and expression (below) |
 | `StaticTear_Ctrl` | locator position X (L), Y (R) | `Enable` on `tearmesh_l` / `tearmesh_r`, drawn with `tex_chr_tear00` | **deploy morphs `Tear_Static_L`, `Tear_Static_R`** |
-| `Tear0_Ctrl` … `Tear3_Ctrl` | scale X (`TearWeight`), position Y (`TearSide`), scale Y (`TearSelect`), scale Z (`TearSpeed`) | the animated tears - see below | **deploy morphs `Tear_Stream_*` / `Tear_Pool_*`** (deduplicated, one per distinct card) plus the `scroll=<cols>x<rows>` grid in the material comment (left side: the viewer never places the right one); the control tokens stay in the model comment |
+| `Tear0_Ctrl` … `Tear3_Ctrl` | scale X (`TearWeight`), position Y (`TearSide`), scale Y (`TearSelect`), scale Z (`TearSpeed`) | the animated tears - see below | **deploy morphs `Tear_Pool_L/R`** (deduplicated, one per distinct card) plus the `scroll=<cols>x<rows>` grid in the material comment; **the rolling `Tear_Stream_*` card is not exported** (see "The rolling card is not exported") |
 
 ## The eye manga
 
@@ -50,12 +50,27 @@ frame, capped at 8 steps); that stack was removed - what carries the scroll now 
 the material comment, which the add-on steps a Mapping node over, so a running tear is the deploy morph at 1 with its
 texture walking the sheet. The stencil has no counterpart and is not needed: the tear is its own decal
 geometry, drawn in front of the eye by the same deploy clearance every decal gets (a fixed fraction of the part's
-distance from the head bone, along its own normal - see "The deploy lift is a normal, not a radius" below). Both sides
-are in the export: the four
-controllers are not all on the same eye - the cards come out as `Tear_Stream_L/R` and `Tear_Pool_L/R` because the
-viewer places each controller on the side its own `SetDir` chose, and the four controllers deduplicate onto those
-four cards. A controller that is mirrored at runtime rather than placed would need its right-side instance created
-at export time.
+distance from the head bone, along its own normal - see "The deploy lift is a normal, not a radius" below).
+
+Only the **wide** card is exported. Both sides are in the file: the four controllers are not all on the same eye, and
+the cards come out as `Tear_Pool_L/R` because the viewer places each controller on the side its own `SetDir` chose,
+with the four controllers deduplicating onto those two. The tall rolling card is a separate decision, below.
+
+### The rolling card is not exported
+
+`TearObject_0` - the tall `tear000` stream that rolls from the eye corner down the cheek and off the chin, the card
+whose skeleton animation is described in the next section - gets **no deploy morph** and **no scroll token**. Its
+vertices stay on the collapse point, so it is simply not in the model.
+
+It is not that it could not be shown: at weight 1 it would stand at the eye corner, where the game has it at t=0.
+It is that a tear which does not move is worse than no tear. The whole effect is the roll, the roll lives in the
+card's skeleton animation, and exporting that is the one part of this feature still unsolved (`Shelved: exporting the
+roll` below: twelve morphs, an add-on-side cross-fade, driven by hand, and it still looked rough). Parked rather than
+abandoned, so it comes back as a static tear at the eye corner by running `TearMorphs` over `TearObject_0` as well and
+allowing `tear.TearObject_0` in `ExtraMorphGrid`.
+
+What is left of the tear system in the pmx is therefore: a deploy morph each for `Tear_Pool_L/R` and
+`Tear_Static_L/R`, the `scroll=` grid on the pool card's materials, and the tear control tokens in the model comment.
 
 The sprite sheets themselves are inside the tear prefabs' asset tables, not in `Persistent/textures`, which is
 why the viewer has never listed them.
@@ -111,6 +126,9 @@ come out depended on the part's angle rather than being a constant:
 | `Tear_Stream_*` | 0.0585 | 0.0715 |
 | `Tear_Pool_*` | 0.0625 | 0.0509 |
 
+(The `Tear_Stream_*` rows are measured while that card was still exported; it is not any more, see "The rolling card is
+not exported".)
+
 Now the offset is along each part's own normal (taken from the mesh, flipped to point away from the head bone so a
 mirrored instance cannot invert it), and the clearance is `0.046 × the part's mean distance from the head bone`:
 
@@ -119,7 +137,6 @@ mirrored instance cannot invert it), and the clearance is `0.046 × the part's m
 | `Cheek_Blush` | 0.0612 | 0.000000 |
 | `Manga_*` | 0.0686 … 0.0703 | 0.000000 |
 | `Tear_Static_*` | 0.0641 | 0.000000 |
-| `Tear_Stream_*` | 0.0711 | 0.000000 |
 | `Tear_Pool_*` | 0.0622 | 0.000000 |
 
 **It has to stay a fraction.** The export has no physical unit: the coordinates are the character container's, and
@@ -229,9 +246,9 @@ Worth knowing before reading the morph list. `SetDir` puts *both* of a controlle
 the game comes from `TearSide`, a position-Y offset that the face clips drive. Nothing drives it by default, so
 controllers 1 and 3 land on the left eye at the same place and 2 and 4 on the right: measured, the controller-1 and
 controller-3 cards hold **identical** offsets (same shape, same position, different vertices), as do the two on the
-right. That is why the exporter deduplicates them on the placed geometry and writes four cards
-(`Tear_Stream_L/R`, `Tear_Pool_L/R`) instead of eight. Two stacked decals are the price of exporting the viewer's
-default placement rather than the game's runtime one.
+right. That is why the exporter deduplicates them on the placed geometry and writes one morph per distinct card -
+now `Tear_Pool_L/R`, since the rolling card is not exported. Two stacked decals are the price of exporting the
+viewer's default placement rather than the game's runtime one.
 
 ## The teary-eye effect that the viewer cannot show
 
@@ -253,13 +270,13 @@ shader set the viewer knows, but the probe is the evidence, not the absence.
 ## What the export carries today
 
 Every advanced morph is named `<feature>_<what it does>_<side>`, so the set groups together in a morph list:
-`Cheek_Blush`, `Manga_Spin_L`, `Tear_Static_L`, `Tear_Stream_L`. Before 2.34 the names were the game's own
+`Cheek_Blush`, `Manga_Spin_L`, `Tear_Static_L`, `Tear_Pool_L`. Before 2.34 the names were the game's own
 spelling - the emoticons `@_@_L`, `✦_✦_L`, `>_<_L`, `o_o_L`, then `Tear_L`/`Tear_R` and `TearDrop1_L` … `TearDrop4b_R`
 - and models exported then keep working: the add-on matches both spellings everywhere.
 
 * `Cheek_Blush`, `Tear_Static_L`, `Tear_Static_R` - one deploy morph per static decal part.
-* `Tear_Stream_L/R` and `Tear_Pool_L/R` - one deploy morph per *distinct* animated tear card. Two kinds because
-  there are two prefabs: `tear000` is the tall card that rolls down the cheek, `tear001` the wide one.
+* `Tear_Pool_L/R` - one deploy morph per *distinct* wide card (`tear001`). The tall rolling `tear000` card is not
+  exported at all; see "The rolling card is not exported".
 * The four controllers used to produce four cards a side - controllers 1 and 3 carry the same card. They are
   deduplicated on the placed geometry now, because the four controllers differ only by `TearSide`, a position offset
   the face clips drive and this viewer never does. That removed two deploy morphs, and stopped the decal being drawn
@@ -270,15 +287,17 @@ spelling - the emoticons `@_@_L`, `✦_✦_L`, `>_<_L`, `o_o_L`, then `Tear_L`/`
 * `Texture2D/tex_chr1001_00_cheek0_blush.png` and `…cheek1_blush.png` - the blush baked for alpha blending,
   beside the game's own maps.
 
-**There are no UV morphs any more**, and character 1001 exports 207 morphs, all of them vertex morphs. Two stacks
-used to ride along - 14 rotation steps for the `@_@` turn and 28 sprite-sheet steps for the tear scroll, 42 of the
-249 morphs - and both were removed on purpose, see "Why the export carries no UV morphs" above.
+**There are no UV morphs any more**, and character 1001 exports **205** morphs, all of them vertex morphs: 192
+ordinary facial ones and 13 deploy morphs. Two uv-morph stacks used to ride along - 14 rotation steps for the `@_@` turn
+and 28 sprite-sheet steps for the tear scroll, 42 of what were then 249 morphs - and both were removed on purpose (see
+"Why the export carries no UV morphs" above); the rolling tear card's deploy morphs went with them (see "The rolling
+card is not exported"), which took the deploy count from 15 to 13.
 
 The deploy-morph mechanism is described in `PMX_EXTENSIONS.md`; the game-side inventory is `MORPHS.md`.
 
 ### The audit: every extra morph, and where it stands
 
-Re-counted against the current export of `1001` (207 morphs, **all vertex**) and against
+Re-counted against the current export of `1001` (205 morphs, **all vertex**: 192 ordinary + 13 deploy) and against
 `FaceDrivenKeyTarget.InitializeExtra`, which is the complete list of what the game builds:
 
 | game morph (`OtherMorphs`, 8 for 1001) | mechanism | in the pmx today | addon today |
@@ -287,15 +306,16 @@ Re-counted against the current export of `1001` (207 morphs, **all vertex**) and
 | `Shade_Ctrl` | shader `_faceShadowAlpha` | **yes, as data only** - `morph=Shade_Ctrl:Shader:ScaX:_faceShadowAlpha` on the face material; no geometry, so no morph | **no** - parked, waiting for the face-region port to have an input |
 | `Manga_Ctrl` | EyeSelect + Enable over 8 prefabs | **yes** - `Manga_*_L/R` deploy morphs, and the turn is the add-on's driver (no uv morphs) | yes |
 | `StaticTear_Ctrl` | Enable over `tearmesh_l/r` | **yes** - `Tear_Static_L/R` | yes |
-| `Tear0_Ctrl`…`Tear3_Ctrl` | TearWeight/Side/Select/Speed on a `TearController` | **partly** - 4 deploy morphs + `scroll=<cols>x<rows>` (the sheet uv morphs are gone); **the skeleton animation is not exported** | yes for the scroll, no for the roll |
+| `Tear0_Ctrl`…`Tear3_Ctrl` | TearWeight/Side/Select/Speed on a `TearController` | **partly** - 2 deploy morphs (`Tear_Pool_L/R`) + `scroll=<cols>x<rows>` (the sheet uv morphs are gone, and so is the rolling card); **the skeleton animation is not exported** | yes for the scroll, no for the roll |
 
 The 192 remaining morphs are the ordinary facial ones (eye, brow, mouth, ear). Those come from the meshes' own
 blend shapes (`ReadMorph` walks `mesh.blendShapeCount`), so they cannot be "missed" - whatever shape keys the
 game's meshes carry is what gets exported.
 
-So the audit finds exactly one true gap in the model data - the tear card's skeleton animation - and one piece of
-data that is exported but unused (the face shadow). Everything else the game builds is either a deploy morph or a
-slot the add-on drives from the comment tokens; no uv morphs are needed for any of it.
+So the audit finds exactly one true gap in the model data - the tear card's skeleton animation, which is also why the
+rolling card is currently not exported at all - and one piece of data that is exported but unused (the face shadow).
+Everything else the game builds is either a deploy morph or a slot the add-on drives from the comment tokens; no uv
+morphs are needed for any of it.
 
 
 ## The teary eye highlights
@@ -333,7 +353,7 @@ builds one driver per morph name from the character's `FaceDrivenKeyTarget` morp
 (`MorphDriver.RecordMorph`, line 1659) and drops frames that do not change (`DisableIntron`, line 1612).
 
 What is missing is the other half of this document - the deploy morphs (`Cheek_Blush`, the eight eye manga,
-`Tear_Static_*`, `Tear_Stream_*`/`Tear_Pool_*`). They have no `FacialMorph` to read: the game shows those parts by
+`Tear_Static_*`, `Tear_Pool_*`). They have no `FacialMorph` to read: the game shows those parts by
 moving a locator and enabling an object, so nothing in the sampled data is named `Cheek_Blush`. The design that fits
 the existing code:
 
