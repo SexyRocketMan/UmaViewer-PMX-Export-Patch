@@ -355,6 +355,40 @@ so a *vertex* colour layer (`UMA_Blush`, white = none) is too coarse to carry a 
 real bake pass (and a texture per character) rather than an attribute write. Alignment is not the problem in either
 case - it is solved by projection - the resolution is.
 
+### A. The blush into the face texture - what to build, in order
+
+Decided: the blush stays a *separate layer* (so the morph can still turn it off), the texture is baked **exporter
+side**, and the face material multiplies it in. Two halves.
+
+**Unity side (`ModelExporter`/`TextureExporter`)** - needs a build, so it is written down rather than guessed at:
+
+1. a `TextureExporter.BakeFaceBlush(...)` that renders the **deployed** cheek geometry into a texture the size of the
+   face atlas and returns it, plus a `FaceBlushName(sourceName)` next to the existing `BlushName`. The algorithm is the
+   one `Tools/bake_blush_vertices.py` validated, at texel resolution instead of vertex resolution: for every texel of
+   the face atlas, take the face surface point it belongs to (walk the face polygons, interpolate position from the
+   UVs), project it onto the cheek quad, and if it lands inside, write the blush sample into that texel; white (=
+   multiply by 1) everywhere else. The paired data is exactly what `Tools/fit_blush_uv.py` collects, and that tool's
+   failure is why this is a *bake* and not a UV transform: no single affine map relates the two UV spaces (residual
+   ~42 UV units on a 0-1 map).
+2. it has to be written into `Texture2D/` and **rewritten on every export** (the stale-bake trap: an older bake
+   silently shipping is already a known failure mode for `<map>_blush`/`<map>_mask`).
+3. the face material's own texture must stay the thing the pmx points at; the blush is an extra file the add-on binds.
+
+**Add-on side (`Uma Face`)** - not built yet, and it is the half that can be verified here:
+
+1. a library material `Uma Face` = a copy of `Uma Shader` with one `Image Texture` node (name `face_blush`, unbound) and
+   a `MixRGB` set to MULTIPLY inserted between the diffuse texture node and the group socket it feeds;
+2. `materials.face` + a `parts` rule bump (`face` -> `face`) so the face slot takes that material instead of `default`,
+   `textures.face` = the `default` recipe plus the `face_blush` rule (bound from the model's folder, `optional: true`
+   so a model without a bake still shades);
+3. the multiply's **factor driven from the `Cheek_Blush` shape key** - `SINGLE_PROP` on the key's `value`, exactly like
+   the face donor's eyelid keys - so the morph slider still controls the blush while the drawing is the face
+   material's own multiply, and no decal quad is needed for the cheek;
+4. rows for the blush tint/strength if the factor turns out to want a manual override.
+
+Until the bake exists, the cheek keeps the `[decal]` quad, so nothing here is a regression: the manifest role can be
+added and left unused, or not added at all.
+
 ## Decisions still owed by the user
 
 Everything decided at the start of this session is now **shipped and verified**: brows, the eye knobs, Spork's eye,
