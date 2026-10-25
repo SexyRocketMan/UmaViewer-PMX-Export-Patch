@@ -256,11 +256,19 @@ public class ModelExporter
         // is. This is the idiom MMD models use for a hidden accessory: Appearance Miku hides two eye highlights
         // with `HL消1`/`HL消2`, which move 58 and 116 vertices onto a single point each.
         //
-        // The deployed position is nudged outward from the head along its own radius: the parts were drawn at
-        // the surface they sit on, so at the old position a deployed decal is coplanar with the face - the eye
-        // manga disappear behind the eye the moment an eye-hide morph moves it, and the blush z-fights the
-        // cheek it is painted on, which a renderer shows as shadow acne across the face. Offsetting the deploy
-        // target rather than the rest position keeps the rest state exactly as hidden as before.
+        // The deployed position is nudged clear of the surface it is painted on: the parts were drawn *at* the
+        // surface, so at their original position a deployed decal is coplanar with the face - the eye manga
+        // disappear behind the eye the moment an eye-hide morph moves it, and the blush z-fights the cheek it is
+        // painted on, which a renderer shows as shadow acne across the face. Offsetting the deploy target rather
+        // than the rest position keeps the rest state exactly as hidden as before.
+        //
+        // The offset is that clearance along the decal's own normal, which is the one direction in which an offset
+        // *is* clearance. It used to be `6% of the distance from the head bone`, along the radius from that bone, and
+        // measured per decal that was wrong twice over: the radius is not the surface normal (the eye manga sat 25
+        // degrees off theirs, the left static tear 48), so most of the offset slid the decal *across* the face
+        // instead of off it - 0.061 of sideways travel on the manga, 0.074 on the left static tear - and the
+        // clearance that did result came out as anything from 0.039 to 0.063 depending on the part's angle. Same
+        // clearance for every part now, and no sideways travel.
         var deployed = new Dictionary<int, Vector3>();
         Vector3 collapsePoint = Vector3.zero;
         if (morphParts.Count > 0)
@@ -274,15 +282,47 @@ public class ModelExporter
             foreach (var range in vertexRanges)
             {
                 if (!restInvisible.Contains(range.renderer)) continue;
-                for (int i = range.start; i < range.start + range.count && i < model.Vertices.Length; i++)
+                int end = Mathf.Min(range.start + range.count, model.Vertices.Length);
+                if (end <= range.start) continue;
+
+                // the part's outward direction, from its own normals: a decal is a picture painted on a surface, so
+                // its normal is what "off the face" means. Oriented away from the head bone, because a mirrored
+                // instance carries mirrored normals and those point *into* the head.
+                Vector3 partNormal = Vector3.zero;
+                Vector3 partCentre = Vector3.zero;
+                for (int i = range.start; i < end; i++)
+                {
+                    partNormal += model.Vertices[i].Normal;
+                    partCentre += model.Vertices[i].Coordinate;
+                }
+                partCentre /= (end - range.start);
+                if (partNormal.sqrMagnitude < 1e-12f) partNormal = partCentre - collapsePoint;
+                if (Vector3.Dot(partNormal, partCentre - collapsePoint) < 0f) partNormal = -partNormal;
+                partNormal.Normalize();
+
+                // The clearance has to be scale-free: these coordinates are the character container's, not a
+                // physical length, and the pmx round trip multiplies them again (measured: the head bone reads
+                // 1.34 here and 16.79 in the file, 12.5x). A constant length here would therefore be a different
+                // physical distance in every export, which is how a "0.063" became 0.79 in the file and pushed
+                // every decal almost 0.8 clear of the face. The part's distance from the head bone is the scale
+                // the old code used and the only one available, so keep the fraction - and change only what was
+                // actually wrong, the direction.
+                float radius = 0f;
+                for (int i = range.start; i < end; i++)
+                {
+                    radius += (model.Vertices[i].Coordinate - collapsePoint).magnitude;
+                }
+                radius /= (end - range.start);
+                float clearance = DecalClearanceFraction * radius;
+
+                for (int i = range.start; i < end; i++)
                 {
                     Vector3 where = model.Vertices[i].Coordinate;
-                    Vector3 outward = where - collapsePoint;
-                    if (outward.sqrMagnitude > 1e-8f)
-                    {
-                        where += outward * DecalLift;
-                    }
-                    deployed[i] = where;
+                    Vector3 normal = model.Vertices[i].Normal;
+                    if (Vector3.Dot(normal, partNormal) < 0f) normal = -normal;
+                    if (normal.sqrMagnitude < 1e-8f) normal = partNormal;
+                    else normal.Normalize();
+                    deployed[i] = where + normal * clearance;
                     model.Vertices[i].Coordinate = collapsePoint;
                 }
             }
@@ -1079,12 +1119,16 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// How far a deployed decal is lifted off the surface it was painted on, as a fraction of its distance from
-    /// the head bone - 2% of the radius, a couple of millimetres on a real head. A fraction rather than an
-    /// absolute length because the export is not in one unit system: the same decal is a few units from the head
-    /// bone in file space and a few centimetres in the viewer's, and only the ratio means the same thing in both.
+    /// How far a deployed decal sits off the surface it was painted on, as a fraction of the part's distance from
+    /// the head bone.
+    ///
+    /// A fraction rather than a length, because the export has no physical unit: the coordinates come from the
+    /// character container and the pmx round trip scales them again (measured, the head bone reads 1.34 here and
+    /// 16.79 in the file), so only a ratio means the same distance on any character. 0.046 is what reproduces the
+    /// clearance the eye manga and the tear cards came out with before - about 0.062 to 0.072 in the file's own
+    /// units, enough to beat z-fighting without looking like the decal is floating.
     /// </summary>
-    private const float DecalLift = 0.06f;
+    private const float DecalClearanceFraction = 0.046f;
 
     /// <summary>
     /// The animated tears: one deploy morph per tear object.

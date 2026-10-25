@@ -108,7 +108,14 @@ what it costs are in `EXTRA_MORPHS.md` under "Why the export carries no UV morph
 A pmx is read with every morph at 0, so the state the model must *rest* in is the collapsed one: every vertex
 of a decal part is written on a single point inside the head, which makes it a handful of zero-area triangles -
 invisible, and drawn nowhere - wherever that point is. Each deploy morph carries the offsets that put its part
-back where the game draws it. At weight 1 the part is exactly the decal the game shows; at 0 it is gone.
+back. At weight 1 the part is the decal the game shows, moved a hair off the surface it is painted on; at 0 it is
+gone.
+
+That hair matters: at the game's own position a deployed decal is exactly coplanar with the face, and a renderer
+answers with z-fighting (the blush) or by hiding the decal behind the eye (the manga, as soon as an eye-hide morph
+moves it). So the deploy target is offset along the decal's own normal by a fixed fraction of the part's distance
+from the head bone - a fraction, not a length, because the file has no physical unit - which measures out at
+`0.061 … 0.071` in the file's own units across every decal on 1001.
 
 This is the idiom MMD models use for a hidden accessory: the reference model `Appearance Miku_BDEF_mod-v03`
 hides two eye highlights with `HL消1` and `HL消2`, which move 58 and 116 vertices onto a single point each.

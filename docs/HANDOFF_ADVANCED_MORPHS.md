@@ -176,13 +176,19 @@ properties and defaults are readable, **source is not**. The decompile remains t
      nothing in the file. The static face copy being keyed on the face object's *name* was the other entry here and
      is now handled: a copy whose marker names an object that has gone, and whose topology still matches, is re-tagged
      instead of duplicated (A/B measured: one copy before and after a rename).
-   * **the pooled tear card "moving forward"** - checked and not reproducible in the data: the card's absolute
-     coordinates are identical in every export from `morphs13` (when the tears appeared) through `morphs33`
+   * **the pooled tear card "moving forward"** - not reproducible in the *coordinates*: the card's absolute position is
+     identical in every export from `morphs13` (when the tears appeared) through `morphs33`
      (`Y 17.405…17.587`, `Z −0.468…−0.455`), and its drawing state is identical too (BLENDED, no culling, repeat,
-     same texture). `DecalLift = 0.06` is proportional to the distance from the head bone, but the pool card gets
-     0.086 of it against the manga's 0.097 - it is not the outlier. The card that used to be weighted to bone 0 now
-     follows the head, so a decal that was previously stuck in the wrong place is visible where it belongs; that is
-     the most likely explanation for the change in appearance.
+     same texture). The card that used to be weighted to bone 0 now follows the head, so a decal that was previously
+     stuck in the wrong place is visible where it belongs - that is the most likely explanation for the change in
+     appearance. **But the lift itself was wrong, and is now fixed**: it moved every decal along the *radius from the
+     head bone* rather than off its own surface, so each part was slid sideways across the face (up to 0.092 in the
+     file's units) and got a clearance that depended on its angle instead of a constant one. Measured before and
+     after on the same model: clearance was `0.039 … 0.063` per part, with sideways travel `0.040 … 0.092`; it is now
+     `0.061 … 0.071` for every part with sideways travel `0.000001`. The lesson worth keeping: an offset is only
+     clearance along the normal, and it must be a *fraction* of something (the export has no physical unit - the head
+     bone reads 1.34 in the exporter and 16.79 in the file, 12.5x), which is why an absolute "0.063" pushed every
+     decal 0.79 clear of the face on the first attempt.
 7. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
    file sets in the fork (rain/wet look, VMD loop lead-in) belong to the user.
 

@@ -49,7 +49,9 @@ MMD cannot hold the scroll or the stencil. The scroll used to become a stack of 
 frame, capped at 8 steps); that stack was removed - what carries the scroll now is the `scroll=<cols>x<rows>` grid in
 the material comment, which the add-on steps a Mapping node over, so a running tear is the deploy morph at 1 with its
 texture walking the sheet. The stencil has no counterpart and is not needed: the tear is its own decal
-geometry, drawn in front of the eye by the same deploy lift every decal gets. Both sides are in the export: the four
+geometry, drawn in front of the eye by the same deploy clearance every decal gets (a fixed fraction of the part's
+distance from the head bone, along its own normal - see "The deploy lift is a normal, not a radius" below). Both sides
+are in the export: the four
 controllers are not all on the same eye - the cards come out as `Tear_Stream_L/R` and `Tear_Pool_L/R` because the
 viewer places each controller on the side its own `SetDir` chose, and the four controllers deduplicate onto those
 four cards. A controller that is mirrored at runtime rather than placed would need its right-side instance created
@@ -92,6 +94,39 @@ of 0..1 uv space, walking `0, 45, 90, 135, 180, -135, -90, -45` degrees - one di
 through ±180 so that `Turn7` plus one more step returned to the identity, every vertex agreeing to 0.00°, and both
 eyes carrying the same angles. The turn is now whatever the add-on's driver does, in one direction only; the
 `Spin_Speed` knob scales it and 0 stops it.
+
+### The deploy lift is a normal, not a radius
+
+An offset is only *clearance* along the normal of the surface a decal is painted on. The export used to move every
+decal along the **radius from the head bone** instead, by 6% of its distance from that bone, and measured per decal
+that was wrong twice over. The radius is not the surface normal - the eye manga sat 25° off their own normal, the left
+static tear 48° - so most of the offset slid the decal *across* the face instead of off it, and the clearance that did
+come out depended on the part's angle rather than being a constant:
+
+| decal | clearance before | sideways travel before |
+|---|---|---|
+| `Cheek_Blush` | 0.0618 | 0.0300 |
+| `Manga_*` | 0.0629 | 0.0610 |
+| `Tear_Static_L` / `_R` | 0.0389 / 0.0599 | 0.0737 / 0.0579 |
+| `Tear_Stream_*` | 0.0585 | 0.0715 |
+| `Tear_Pool_*` | 0.0625 | 0.0509 |
+
+Now the offset is along each part's own normal (taken from the mesh, flipped to point away from the head bone so a
+mirrored instance cannot invert it), and the clearance is `0.046 × the part's mean distance from the head bone`:
+
+| decal | clearance now | sideways travel now |
+|---|---|---|
+| `Cheek_Blush` | 0.0612 | 0.000000 |
+| `Manga_*` | 0.0686 … 0.0703 | 0.000000 |
+| `Tear_Static_*` | 0.0641 | 0.000000 |
+| `Tear_Stream_*` | 0.0711 | 0.000000 |
+| `Tear_Pool_*` | 0.0622 | 0.000000 |
+
+**It has to stay a fraction.** The export has no physical unit: the coordinates are the character container's, and
+the pmx round trip multiplies them again - the head bone reads `1.34` inside the exporter and `16.79` in the file,
+12.5×. An absolute clearance is therefore a different physical distance in every export, which is exactly what the
+first attempt got wrong: a "constant" `0.063` came out as `0.79` in the file and lifted every decal most of a unit
+clear of the face. The old code's doc comment said this, and it was right.
 
 ### The skeleton animates: the card rolls down the cheek and off the chin
 
