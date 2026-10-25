@@ -227,20 +227,19 @@ public class TextureExporter
                             // a multiply decal also gets the bake that lets an MMD material draw it (see
                             // BakeBlush); written beside the original, which stays for anyone who wants the
                             // game's own map
-                            // the eye highlight maps are colour-masked in the game's shader, not alpha-masked:
-                            // they need the baked copy that carries the mask as alpha, or the layer paints black
-                            if (tex_name.IndexOf("eyehi", System.StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                Texture2D highlight = BakeHighlight(mat_texture);
-                                if (highlight != null)
-                                {
-                                    string highlightPath = savePath + highlight.name + ".png";
-                                    string highlightDep = "Texture2D/" + highlight.name + ".png";
-                                    if (!textureNames.Contains(highlightDep)) textureNames.Add(highlightDep);
-                                    File.WriteAllBytes(highlightPath, highlight.EncodeToPNG());
-                                }
-                            }
-                            if (IsMultiply(mat))
+                            // A texture with no name bakes to "_mask.png"/"_blush.png" - artifacts beside every export
+                            // that nothing references (measured: 3 unreferenced files in a 40-file folder, two of them
+                            // these). Skip the bake instead of naming it after nothing.
+                            bool named = !string.IsNullOrWhiteSpace(tex_name);
+                            // **The highlight mask bake is gone** (2.34), after measuring what wanted it. It wrote
+                            // `eyehi00_mask.png` and its siblings for a consumer that thresholds *outside* a shader,
+                            // so a plain MMD material could draw the game's colour-masked highlights without painting
+                            // black over the eye. On an export of 1001: no material names any `_mask` file in any
+                            // slot (`tex` = 10 = `eye0`, `sphere` -1, `toon` -1), and the add-on does not want them
+                            // either - it binds the raw `eyehi00`/`01`/`02` and thresholds in `Uma Eyes` with its two
+                            // `SmoothThreshold` groups. They were in the pmx's texture table only because this block
+                            // registered them as dependencies. A dead end: kept in history, not in every user's folder.
+                            if (named && IsMultiply(mat))
                             {
                                 Texture2D blush = BakeBlush(mat_texture);
                                 if (blush != null)
