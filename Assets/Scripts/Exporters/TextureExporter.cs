@@ -285,6 +285,85 @@ public class TextureExporter
         return Color.Lerp(Color.Lerp(a, b, fx), Color.Lerp(c, d, fx), fy);
     }
 
+    /// <summary>
+    /// The glue `BakeFaceBlush` needs: find the face renderer and the cheek renderer(s) among the character's, pull
+    /// their mesh data into one space, and bake.
+    ///
+    /// The face is the renderer with a material that says "face" and is not a multiply decal (the cheek material also
+    /// mentions the face in the game's naming, which is why `IsMultiply` excludes it); the cheeks are every submesh
+    /// whose material is a multiply one - `MorphPartRenderers` already hands those over, so `extra` is where they come
+    /// from in practice. Positions are taken in world space through each renderer's own transform, which is the one
+    /// space both sides share while the rig is at rest.
+    ///
+    /// Returns null - rather than throwing - for a character with no cheek decal, no face mesh, or a mesh without
+    /// UVs, because a model that cannot be baked is not an export failure: the cheek keeps shipping as its own part.
+    /// </summary>
+    static Texture2D BakeFaceBlushLayer(GameObject gameobj, IEnumerable<Renderer> extra, string savePath)
+    {
+        if (gameobj == null) return null;
+        List<Renderer> renderers = new List<Renderer>(gameobj.transform.GetComponentsInChildren<Renderer>());
+        if (extra != null) renderers.AddRange(extra);
+
+        Renderer faceRenderer = null;
+        Mesh faceMesh = null;
+        Material faceMaterial = null;
+        int faceSubmesh = 0;
+        foreach (Renderer renderer in renderers)
+        {
+            MeshFilter filter = renderer.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null) continue;
+            Material[] materials = renderer.sharedMaterials;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                if (materials[i] == null || IsMultiply(materials[i])) continue;
+                if ((materials[i].name ?? string.Empty).IndexOf("face", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                faceRenderer = renderer;
+                faceMesh = filter.sharedMesh;
+                faceMaterial = materials[i];
+                faceSubmesh = i;              // the face is one submesh of its renderer, not necessarily submesh 0
+                break;
+            }
+            if (faceRenderer != null) break;
+        }
+        if (faceRenderer == null || faceMesh == null || faceMaterial == null) return null;
+        if (faceMesh.uv == null || faceMesh.uv.Length != faceMesh.vertexCount || faceMesh.subMeshCount < 1) return null;
+        Texture2D faceAtlas = faceMaterial.mainTexture as Texture2D;
+        if (faceAtlas == null) return null;
+        int[] faceTriangles = faceMesh.GetTriangles(faceSubmesh);
+        if (faceTriangles.Length < 3) return null;
+
+        List<Vector3> blushPoints = new List<Vector3>();
+        List<Vector2> blushUvs = new List<Vector2>();
+        List<int> blushTriangles = new List<int>();
+        Texture2D blushMap = null;
+        foreach (Renderer renderer in renderers)
+        {
+            MeshFilter filter = renderer.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null) continue;
+            Mesh mesh = filter.sharedMesh;
+            if (mesh.uv == null || mesh.uv.Length != mesh.vertexCount) continue;
+            Material[] materials = renderer.sharedMaterials;
+            for (int submesh = 0; submesh < mesh.subMeshCount && submesh < materials.Length; submesh++)
+            {
+                if (!IsMultiply(materials[submesh])) continue;
+                int offset = blushPoints.Count;
+                Vector3[] vertices = mesh.vertices;
+                for (int i = 0; i < vertices.Length; i++) blushPoints.Add(renderer.transform.TransformPoint(vertices[i]));
+                blushUvs.AddRange(mesh.uv);
+                foreach (int index in mesh.GetTriangles(submesh)) blushTriangles.Add(offset + index);
+                if (blushMap == null) blushMap = materials[submesh].mainTexture as Texture2D;
+            }
+        }
+        if (blushMap == null || blushTriangles.Count < 3) return null;
+
+        Vector3[] facePoints = new Vector3[faceMesh.vertexCount];
+        Vector3[] source = faceMesh.vertices;
+        for (int i = 0; i < facePoints.Length; i++) facePoints[i] = faceRenderer.transform.TransformPoint(source[i]);
+
+        return BakeFaceBlush(faceAtlas, facePoints, faceMesh.uv, faceTriangles,
+                             blushPoints.ToArray(), blushUvs.ToArray(), blushTriangles.ToArray(), blushMap);
+    }
+
     static public Texture2D duplicateTexture(Texture2D source)
     {
         RenderTexture renderTex = RenderTexture.GetTemporary(
@@ -402,6 +481,25 @@ public class TextureExporter
                     }
                 }
             }
+        }
+
+        // the cheek blush baked into the face atlas's own UV space, so a face material can multiply it in with a Mix
+        // Color node instead of a decal quad over the face (`BakeFaceBlush` has the reasoning). Written last, because
+        // it needs the face's exported texture and the cheek renderers, and both are known by here.
+        try
+        {
+            Texture2D faceBlush = BakeFaceBlushLayer(gameobj, extra, savePath);
+            if (faceBlush != null)
+            {
+                string faceBlushDep = "Texture2D/" + faceBlush.name + ".png";
+                if (!textureNames.Contains(faceBlushDep)) textureNames.Add(faceBlushDep);
+                File.WriteAllBytes(savePath + faceBlush.name + ".png", faceBlush.EncodeToPNG());
+            }
+        }
+        catch (Exception error)
+        {
+            Debug.LogWarning("[exporter] the face-blush layer was not baked (" + error.GetType().Name + ": "
+                             + error.Message + "); the cheek decal still ships as its own part");
         }
 
         foreach (Renderer renderer in gameobj.transform.GetComponentsInChildren<Renderer>())
