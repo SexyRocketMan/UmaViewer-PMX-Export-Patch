@@ -256,6 +256,11 @@ properties and defaults are readable, **source is not**. The decompile remains t
   the UV Morph operators, but they never deform on their own — Blender cannot animate a UV layer. That is the reason
   this export carries no uv morphs at all (see "Why the export carries no UV morphs" in `EXTRA_MORPHS.md`).
 
+## Shader library side
+
+The shading work has its own handoff: `docs/HANDOFF_SHADER_LIBRARY.md` - the library blends now sit beside their
+manifests, the eye-highlight motion animates inside the library, and it records the nodes-vs-drivers measurements, the
+open items (brows role, panel rows, Spork's new version, decal lighting, the face donor) and the pending decisions.
 ## Fast orientation
 
 * `docs/EXTRA_MORPHS.md` — the game-side inventory, the deploy-morph idiom, the tear scroll, the open questions
@@ -266,4 +271,5 @@ properties and defaults are readable, **source is not**. The decompile remains t
   `BakeBlush`, `BakeHighlight`
 * addon `MorphDrivers.py`: `decal_materials`, `build_spin`, `build_tear_scroll`, `build_highlights`,
   `setup_advanced_morphs`, `report_export`
+
 
