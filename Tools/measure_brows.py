@@ -32,6 +32,9 @@ from mathutils import Vector
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
 out = argv[0]
 pmx = argv[1] if len(argv) > 1 else r"C:\Users\user\Documents\umaviewer_exports\morphs\1001_nostream.pmx"
+#: Which shader the run shades with - the scene's own choice, so the same measurement works for any library that
+#: carries a `Uma Brows` (`umashader-0.2.6` by default, `spork-1.0` for his).
+shader_id = argv[2] if len(argv) > 2 else ""
 png_dir = out.rsplit("\\", 1)[0]
 
 RESOLUTION = 640
@@ -91,6 +94,9 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.preferences.addon_enable(module="bl_ext.blender_org.mmd_tools")
 bpy.ops.preferences.addon_enable(module="bl_ext.user_default.uma_addon")
 bpy.ops.mmd_tools.import_model(filepath=pmx)
+if shader_id:
+    bpy.context.scene.uma_scene.shader = shader_id
+    say("shading with %s" % shader_id)
 
 meshes = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
 mesh = max(meshes, key=lambda item: len(item.data.vertices))

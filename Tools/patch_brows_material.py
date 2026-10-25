@@ -27,17 +27,26 @@ to the apply step.
 Run by hand, like `patch_eye_masters.py`: it edits the library, so every copy shaded afterwards inherits it. Backs
 the library up as `.bak` and re-asserts the graph on a library that already has it (idempotent, so a re-run after a
 shader update puts it back).
+
+Which library and which material to copy from is a command-line choice, because every shader needs its own brows: Looper
+copies `Uma Shader`, Spork copies `Spork Shader` (his template wrapper, which is what his manifest's `default` role
+names). The displacement, the frame and the name are the same in both.
+
+    blender --background --python Tools/patch_brows_material.py -- [<library.blend> [<source material>]]
 """
 import os
 import shutil
+import sys
 
 import bpy
 
 BASE = r"C:\Users\user\AppData\Roaming\Blender Foundation\Blender\5.2\extensions\user_default\uma_addon\uma_addon\addons\uma_addon\operators\shaders"
 
+argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
+
 #: The library to patch, the master the brows copy, and the name the manifest's `brows` role will name.
-LIBRARY = "Umashaders-0.2.6.blend"
-SOURCE = "Uma Shader"
+LIBRARY = argv[0] if argv else "Umashaders-0.2.6.blend"
+SOURCE = argv[1] if len(argv) > 1 else "Uma Shader"
 TARGET = "Uma Brows"
 
 #: How far along the view vector a brow vertex is pushed, in the file's own units. The user's number, unchanged: the

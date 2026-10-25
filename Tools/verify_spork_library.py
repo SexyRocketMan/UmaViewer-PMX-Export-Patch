@@ -68,6 +68,14 @@ check("textures.eye addresses our node names",
       "%s" % (eye_rules,))
 check("group_hints is still just his shader", manifest["group_hints"] == ["Simple Diff + Shaded"],
       "%s" % (manifest["group_hints"],))
+say()
+say("   the brows, which his shader did not have")
+check("declares a 'brows' role", (manifest.get("materials") or {}).get("brows") == "Uma Brows",
+      repr((manifest.get("materials") or {}).get("brows")))
+order = [rule.get("id") for rule in manifest["parts"]]
+check("a 'brows' rule for mayu, before 'face'",
+      "brows" in order and order.index("brows") < order.index("face"), "%s" % (order,))
+check("has a 'brows' texture recipe", "brows" in (manifest.get("textures") or {}))
 
 say()
 say("2. the library file")
@@ -94,6 +102,24 @@ check("his own eye was kept, not thrown away", kept is not None,
 slots = [slot.material.name if slot.material else None
          for obj in bpy.data.objects if obj.type == 'MESH' for slot in obj.material_slots]
 check("the carrier sphere points at it", "Spork Eye" in slots, "%s" % (slots,))
+
+brows = bpy.data.materials.get("Uma Brows")
+if check("Uma Brows is in his library", brows is not None and brows.node_tree is not None):
+    output = next((node for node in brows.node_tree.nodes
+                   if node.bl_idname == "ShaderNodeOutputMaterial"), None)
+    scale = brows.node_tree.nodes.get("Vector Math")
+    check("it displaces the brows in front", bool(output.inputs["Displacement"].links)
+          and scale is not None and abs(scale.inputs["Scale"].default_value - 0.05) < 1e-6,
+          "%s from %s" % (["Vector Math" if scale is None else "Vector Math at %r"
+                           % scale.inputs["Scale"].default_value],
+                          [link.from_node.name for link in output.inputs["Displacement"].links]))
+    check("displacement_method is BOTH", brows.displacement_method == 'BOTH', brows.displacement_method)
+    check("it is a copy of his own shader, not of Looper's",
+          any(node.type == 'GROUP' and node.node_tree is not None
+              and node.node_tree.name.startswith("Simple Diff + Shaded") for node in brows.node_tree.nodes))
+    check("and it has a slot on the carrier", any(slot.material is brows for slot in
+                                                  next(obj for obj in bpy.data.objects if obj.type == 'MESH'
+                                                       and obj.name.startswith("Icosphere")).material_slots))
 
 say()
 say("3. the hint matcher (the trap)")
@@ -148,6 +174,22 @@ if check("an [eye] copy exists", copy is not None, copy.name if copy else "none"
           "%s" % [entry["missing"] for entry in report["characters"] if entry["missing"]][:2])
     check("verify() is clean", report["verified"]["wrong_count"] == 0,
           "%d wrong of %d checked" % (report["verified"]["wrong_count"], report["verified"]["checked"]))
+
+say()
+say("   the brow slot under his shader")
+brow_copy = next((slot.material for slot in mesh.material_slots
+                  if slot.material and slot.material.name.endswith("[brows]")), None)
+if check("the brow slot is [brows]", brow_copy is not None, brow_copy.name if brow_copy else "none"):
+    output = next((node for node in brow_copy.node_tree.nodes
+                   if node.bl_idname == "ShaderNodeOutputMaterial"), None)
+    check("its displacement is linked", bool(output.inputs["Displacement"].links),
+          "%s" % [link.from_node.name for link in output.inputs["Displacement"].links])
+    check("with method BOTH", brow_copy.displacement_method == 'BOTH', brow_copy.displacement_method)
+    images = {node.name: (node.image.name if node.image else None)
+              for node in brow_copy.node_tree.nodes if node.type == 'TEX_IMAGE'}
+    say("     bound images: %s" % images)
+    check("it binds the face atlas", (images.get("mmd_base_tex") or "").endswith("face_diff.png"),
+          images.get("mmd_base_tex"))
 
 say()
 say("RESULT: %s" % ("all checks passed" if not failures else "FAILED - " + "; ".join(failures)))
