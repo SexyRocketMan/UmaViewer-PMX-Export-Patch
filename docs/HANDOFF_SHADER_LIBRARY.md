@@ -308,10 +308,20 @@ and ruled out or confirmed:
   blended materials do alpha blending only (`surface_render_method` has `DITHERED`/`BLENDED` and no additive mode), so
   the switch was reverted rather than shipped reading "additive" and behaving opaque.
 
-  **The fix that remains, and has not been built**: a *black key* on the decal maps. The sprites are art on black, and
-  16-56% of each manga map is not transparent, so the background blends in as haze; making the effective alpha
-  `alpha x max(r, g, b)` turns the black to transparency and leaves the art, which is the visible half of what
-  additive would have bought. It is a node in `Uma Decal` (two nodes and one linkage) and a measurement away.
+  **Shipped instead: the black key** (`a7916e2`). `Uma Decal` keys the drawn alpha by the map's own brightest channel -
+  `alpha = map.alpha x lerp(1, max(r, g, b), key) x opacity` - so a sprite's black background contributes nothing and
+  the art is left alone, with `Key out black` as a row in the Decals section for a decal whose own art is dark enough
+  that keying would thin it. Measured on 1001 (`Tools/measure_decal_key.py`, the cheek blush): the painted area falls
+  **2981 -> 2784** pixels (the background it dropped), the worst darkening of any pixel falls **0.0614 -> 0.0405**, and
+  the darkened-pixel count falls with it. Two wiring mistakes were caught by measuring rather than by reading the graph:
+  `ShaderNodeMix` indexes its sockets across *all* data types (0 is the float factor, 2 the float A, 3 the float B), so
+  linking A at index 0 put the map where the knob goes and key 0/key 1 rendered identically; and A/B the other way
+  round made the knob do the opposite of its name.
+
+  **Still open on this front**: the backdrop problem proper is the manga and the tears, and they cannot be measured from
+  a front camera until the winding defect below is fixed - they deploy onto the face piece and are then drawn *behind*
+  the eyeball. `Manga_Wide_R` being darker and vanishing in edit mode is that same defect, so the black key and the
+  winding fix are one piece of work from the user's point of view.
 
 ## Decisions still owed by the user
 
