@@ -269,6 +269,39 @@ Convert `Spin` (Vector Rotate angle) and `Tear_Scroll` (Mapping location) to `Sc
 animates itself, and stop driving the 20 appearance settings every frame (write them when the panel changes; keep
 drivers only while a knob is being animated). Self-containment, not speed.
 
+## Reports from the user, with what has been measured
+
+Four things came back after all five items shipped. Two are measured; two need a file or a decision.
+
+**A. Three donor objects after shading two models in one file, one a copy of a whole mesh.** Not reproducible here
+(there is no two-model file on this machine) so this is the one that needs the file. Two leads worth checking first:
+`FaceNormals.faces_in` accepts an object as a face when *all* its polygons are face materials or when its **name**
+says face, and the static copy carries every material slot of the piece it copies - so a whole-mesh copy means a
+whole mesh answered "yes, I am the face". `find_copy` is supposed to prevent a second copy per face; the marker it
+looks for is `COPY_MARKER` on the object.
+
+**B. `Manga_Wide_R` darker than the left one, and it disappears in edit mode.** Measured, and it is a data defect in
+the export: on 1001 the **right-eye instances of two of the four manga prefabs** (`mtl_eff_chr_emo_eye_002.001` =
+Shut, `mtl_eff_chr_emo_eye_003.001` = **Wide**) and **one tear sheet** (`mtl_chr_tear001.001`) have their polygons
+facing **into** the head - average normal · outward = **−0.705** and **−0.793**, where their left twins read **+0.705**
+and **+0.793**. The exporter lifts every decal off the face *along its own normal*, so those parts were lifted
+**behind** the face instead of off it, which is both the "darker" and the "vanishes in edit mode" (solid shading does
+not draw a face whose normal points away). Also measured: `mtl_chr_tear001.002`/`.003` read 0.000 because they are
+still collapsed - those are the rolling cards that were deliberately left out of the export.
+(`Tools/probe_decal_normals.py`.)
+
+**C. The brows' render-in-front is not in Spork's shader.** Shipped (`2548f6a`): `Uma Brows` in `SporkShaders.blend`
+from his own `Spork Shader`, the `brows` role and rule and texture recipe in `spork-1.0`, measured at the same
+261 → 1657 pixels as under Looper.
+
+**D. Tears leak their background over the manga faces.** Not fixed yet, and the geometry says the user's first idea
+cannot work as-is: the four eye manga are **2 polygons / 4 vertices** each, the static tears 16/15 and the sheets
+48/36 (`Tools/probe_decal_geometry.py`), and the brow trick is *vertex* displacement - it was measured doing nothing at
+all on a 4-vertex plane. So "render in front" needs either more vertices on those parts or a different mechanism. The
+likelier fix for a sprite whose black background is showing is the **blend**: `Uma Decal` alpha-blends, and the maps
+are not fully transparent outside the art (manga 44-84% of the map is transparent, so 16-56% is not), so an additive
+or multiply mix would make the sprite's background contribute nothing. That is a decision, not a measurement.
+
 ## Decisions still owed by the user
 
 Everything decided at the start of this session is now **shipped and verified**: brows, the eye knobs, Spork's eye,
