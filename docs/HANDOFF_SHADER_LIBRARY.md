@@ -30,6 +30,10 @@ side: what shipped, what to build next, and the measurements that keep the next 
 | `d45443e` | export | `Tools/verify_eye_controls.py` (11 drivers on the eye, 298 in the scene, knobs move sockets, bake/re-hook) and `Tools/verify_eye_panel.py` (the panel draws all five rows, checked by recording layout calls) |
 | `40c9105` | add-on | **Spork**: his `Spork Eye` is Looper's `Uma Eyes` graph (his own kept as `Spork Eye (Spork's own)`), `textures.eye` rewritten to our node names, five `spork_eye_*` rows, and `_hint_matches` made **exact** so `Simple Diff + Shaded FACE` stops counting as a shader group |
 | `8d79fac` | export | `Tools/port_spork_eye.py` (the port, idempotent) and `Tools/verify_spork_library.py` (library + a character shaded with his manifest) |
+| `22b7fc4` | add-on | **unlit decals**: `Uma Decal` in the library, `materials.decal` + `textures.decal` + two rows (`Decal opacity`, `Decal tint`), and `Umashader.apply_decal_material` copying it per decal slot, keeping the name and the mmd comment |
+| `73e8aec` | export | `Tools/patch_decal_material.py`, `Tools/verify_decals.py` (a two-run lamp comparison), the two decal probes - and the two tests whose row/driver counts were literals now derive them from the manifest |
+| `d7712db` | add-on | **face donor**: the static copy keeps `Eye_EyeHideA_L/_R`, driven from the face's own `Key` datablock; `copy_topology_mismatch` allows them; `refresh_copy_data` re-asserts |
+| `3f642cb` | export | `Tools/verify_face_donor.py` - the donor moves by the face's own offsets (0.07479, exact to 0.0000000) and by nothing else |
 
 ## What shipped before it (the session this handoff continues from)
 
@@ -200,29 +204,64 @@ all five rows resolving, **11 drivers on the eye**, nothing missing, `verify()` 
 this machine** (his project file is a `.blend`, and no export names 1063), so that last half ran on the reference
 export with his manifest - the apply path is what it tests, and the images were 1001's.
 
-### 4. Decal morphs react to world light (decided: unlit `Uma Decal`, not built yet)
+### 4. DONE — the decals are painted, not lit
 
-Decals keep mmd_tools' `MMDShaderDev`, which lights from the **scene's lights**, while Looper lights from the
-`Uma Sun` empty with a threshold mask — different lighting models, so decals always look darker than the face under
-them. The user picked option 1: a library **`Uma Decal`** material — texture × alpha into emission, alpha-blended, no
-lighting (what the game does, and it gives honest tint/opacity knobs). `decal_materials()` already knows exactly which
-materials are decals, so the work is a library material plus the decal pass replacing each decal's material with a
-copy of it, and the two rejected options stay rejected: flattening the MMD material has no knobs, and shading decals
-with the face's shader is the route that wrapped manga in outlines.
+**Shipped**: a library `Uma Decal` (10 nodes - map × `UMA Decal Tint`, alpha × `UMA Decal Opacity`, Transparent/Emission
+mixed by that alpha, `BLENDED`), `materials.decal` + `textures.decal`, two settings rows, and
+`Umashader.apply_decal_material`, which copies it per decal slot, binds that slot's own map, keeps the decal's **name**
+and its `mmd_material.comment` (the tear scroll and the @_@ spin read the comment, and they run *after* this), tags the
+copy `uma_shader_role = "decal"`, and is idempotent. 15 decal copies on 1001, 5 drivers each (4 tint + 1 opacity).
 
-### 5. Static face donor and `Eye_EyeHideA_*` (confirmed, not built yet)
+**Measured before designing it, and one measurement was thrown away**: `image.pixels[:4000]` is the top few rows of a
+256×256 map - transparent margin for every decal - so it reports "alpha is zero everywhere" about maps that are
+43-84% transparent. Whole-image: cheek 76% transparent / mean alpha 0.06, tear sheet 50% / 0.14, manga 44-84% /
+0.15-0.56, all 32-bit, and `mmd_material.alpha` 1.0 on every one. Transparency is per pixel and comes from the map.
 
-The user's proposal is the design we parked earlier: keep **only** `Eye_EyeHideA_L/_R` on the static copy, prune the
-rest, and drive those two from the main face's keys — then the donor deforms like the surface its normals are
-transferred onto. Agreed. Notes:
+**The measurement is a two-run comparison, because a single run cannot answer it.** An alpha-blended decal is
+`decal*alpha + face*(1-alpha)`, so it inherits whatever the face underneath does - changing the body's lighting moved
+the decal *pixels* more than the rest of the frame, which is a true reading of a composite and a false reading of the
+decal. So: the same scene shaded once **with** the `decal` role and once **without** it, and a real 20 W sun lamp
+switched on in both. Without the role the lamp changes the decal pixels by **0.03286**; with it, **0.00000**. The lamp
+has to be real: relocating the `Uma Sun` empty 1.5 units behind the head changed **not a single pixel**, so that empty
+is not how this shader's direction is taken (which also means the "tilt the sun" idea for the unlit proof would have
+measured nothing at all and been believed).
 
-- drive via `SINGLE_PROP` variables targeting the **main face's Key datablock** (`key_blocks["…"].value`), not by
-  copying values — measured earlier that this mechanism works across `mesh.separate`
-- the donor must keep the same rest topology the Data Transfer pairs against; the keys are identical offsets, so the
-  lid deformation matches
-- re-assert the prune on every run (a re-shading must not leave a second key behind)
-- verify with a measurement, not by eye: angle between the transferred normal and the donor's deformed normal at the
-  eye region with the morph at 1
+Traps this cost: `to_mesh()` on these shaded meshes reports **one** `material_index` for every polygon (measured: 17718
+polygons, one index), so material lookup has to read `obj.data.polygons`; the brows - and the decal faces - live on the
+**separated face** object, not on the mesh the operator was handed; and the average normal of a whole face mesh points
+*into* the head (+Y where the brows read −Y), which puts a camera behind the character and renders two identical empty
+frames.
+
+### 5. DONE — the static face donor follows the eyelid
+
+**Shipped as designed**: the copy keeps `Eye_EyeHideA_L/_R` and nothing else, and the two are driven from the main
+face's own `Key` datablock (`SINGLE_PROP` at `key_blocks["…"].value`), so the donor deforms like the surface its
+normals are transferred onto. `FaceNormals.keep_face_keys` does the pruning and the driving; `refresh_copy_data`
+re-asserts it, because a refresh brings the face's whole key set back with the mesh data.
+
+Three things it cost, two of them wrong on the first attempt:
+
+- **the variable's id type must be set before its id.** Assigning a Key datablock to a target still typed `OBJECT` is
+  refused, `target.id` stays `None`, and a variable with no target evaluates to 0 - so the keys were kept, driven and
+  never followed (measured: the copy read 0.0000 while the face was at 1). There is a fallback that reads through the
+  face object for a Blender that refuses the `KEY` type;
+- **`copy_topology_mismatch` treated any shape key on the copy as a topology mismatch**, so a copy that keeps two on
+  purpose would have been rebuilt on every run. It now allows `Basis` plus the kept two - and its own membership test
+  had a case bug (`{"Basis"}` compared against lowercased names);
+- the verification cannot compare evaluated *meshes* vertex for vertex: the face piece carries the `Uma Outlines`
+  geometry-nodes shell and a data transfer, so its evaluated mesh is not a match for the plain copy (measured: the
+  comparison ran off the end). Comparing the **key offsets** is both simpler and stricter, and the depsgraph
+  comparison against the copy's own rest shape still shows the deformation happening.
+
+**Measured** (`Tools/verify_face_donor.py`, freshly shaded 1001): the copy ends with exactly `Basis`,
+`Eye_EyeHideA_R`, `Eye_EyeHideA_L`; each has one driver reading `Key.001` at the same key; with the face's key at 1 the
+copy's own value reads **1.0000** and its eyelid moves **0.07479**; it holds the face's offsets **exactly**
+(0.0000000 over 1468 vertices); `Mouth_WaraiA` at 1 moves the face and leaves the copy at **0.0000000**; a second run
+leaves one copy, two keys, one driver each, no mismatch, transfer intact.
+
+The deeper check the plan asked for - the angle between the transferred normal and the donor's *deformed* normal at the
+eye region - is still not automated: the offset identity plus the driven deformation establish that the donor's lid is
+the face's lid, but nothing yet measures the shading that comes out the other end.
 
 ### 6. Optional, from the measurements
 
@@ -232,16 +271,18 @@ drivers only while a knob is being animated). Self-containment, not speed.
 
 ## Decisions still owed by the user
 
-Decided by the user at the start of this session, and worked in this order: **brows → panel rows → Spork**, all three
-now shipped and verified.
+Everything decided at the start of this session is now **shipped and verified**: brows, the eye knobs, Spork's eye,
+the unlit decals and the face donor. What is left:
 
-- decals: **unlit `Uma Decal` library material** — decided, **not built** (item 4)
-- donor: **confirmed**, drive `Eye_EyeHideA_L/_R` on the static copy from the main face's keys — **not built** (item 5)
-- tremble knobs: **rate + amount only** plus `CrySwitch` and the two colours — shipped
 - **new, from item 3**: port Spork's *new* 51-node `Simple Diff + Shaded` (8 sockets, 4 of them new) into the library,
-  or leave the 26-node one? Needs a measurement first: which of the new sockets are fed by a link in his materials
-  (those cannot be panel rows, the same reason `Diffuse`/`Shaded` are not)
-- still undecided: whether `Spin`/`Tear_Scroll` should become node-driven (item 6, deliberately last)
+  or leave the 26-node one? Measure first: which of the new sockets are fed by a *link* in his materials (those cannot
+  be panel rows, the same reason `Diffuse`/`Shaded` are not).
+- whether `Spin`/`Tear_Scroll` should become node-driven (item 6, deliberately last).
+- the release: `blender_manifest.toml` still says **2.33.16** while the manifest notes describe 2.34, and five features
+  have landed since. The version bump and the release note are the user's call.
+- the eyes' shading path after the port: `Spork Eye` is now our graph, so a Spork character's eyes animate themselves
+  but no longer carry his own eye's `mmd_tex_uv`/AOV setup. Nobody has looked at a shaded Spork character yet - there
+  is no Spork `.pmx` on this machine - so the first person who shades one should compare it against his render.
 
 ## Traps that cost time
 
