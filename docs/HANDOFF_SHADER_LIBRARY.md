@@ -323,6 +323,26 @@ and ruled out or confirmed:
   the eyeball. `Manga_Wide_R` being darker and vanishing in edit mode is that same defect, so the black key and the
   winding fix are one piece of work from the user's point of view.
 
+**E. The black key blanked the eye manga** (reported right after it shipped, fixed in `69342f4`). The manga's art *is*
+black line work, so keying the black out deletes the drawing and leaves the light background: the wide-eye sprite came
+out pure white with its rim gone. The key is still in `Uma Decal` - it is right for a sprite whose art sits on a black
+*background* - but its default is now **0**, it is a manual knob, and its description says in the panel what it does to
+black art. **The verification is what failed here, not the idea**: it measured the cheek blush, whose art is
+red-on-transparent (where keying only thins the haze), and the one decal class the key breaks - the manga - was the one
+the measurement could not see, because they draw behind the eyeball from a front camera (defect B).
+
+**F. A Shading run prepares the faces of *every* character in the file, not just the selected one.** Reported as
+unexpected and it is by design, not an accident: `apply_face_normals` calls `faces_in(context)` with no `objects`, so
+every mesh with face polygons is a target - which is what made the second character's face piece and donor on the first
+run. Whether that is the *right* design is a decision: scoping it to the run's own character means passing the run's
+meshes (`character_meshes` in `Umashader._apply`, which is already computed there) instead of `None`, and a second
+character then keeps its face on the body until it is shaded itself.
+
+**G. The tear and cheek morphs stay on the body after the face is separated.** Their geometry moves into the face piece,
+the shape keys do not follow, so moving `Cheek_Blush` / `Tear_*` after a Shading run does nothing visible. The split
+copies every key onto both pieces and `prune_split_morphs` prunes per piece, so the next step is a measurement of which
+keys ended up with no offsets on the piece that holds their polygons - not a guess at the prune's logic.
+
 ## Decisions still owed by the user
 
 Everything decided at the start of this session is now **shipped and verified**: brows, the eye knobs, Spork's eye,
