@@ -135,13 +135,25 @@ properties and defaults are readable, **source is not**. The decompile remains t
      bytes; `FindHeadBone` matches loosely and warns; a failed export puts the model back (try/finally); a Shading
      run covers every mesh of the character, skips a bad slot instead of aborting mid-way, and re-verifies the
      shader control afterwards.
-   * **still open** - shape-key drivers do not follow a face separation (the separated piece gets a copy of the
-     Key datablock); the static face copy is keyed on the face object's *name*, so a rename multiplies copies;
+   * **investigated, not a bug on 5.2** - "a driven shape key loses its driver when the face is separated". Measured
+     two ways: a plain `frame * 0.01` driver on an eye key survives the split and still evaluates (0.370 at frame
+     37, before and after), and a driver whose variable reads a key of its *own* Key follows the *piece's* key, not
+     the other piece's - so `mesh.separate` carries and re-points driver data correctly on Blender 5.2. The add-on
+     keeps a cheap check instead (report any driver that does not resolve, right after the split); a repair was
+     written, A/B-tested, found to change nothing, and taken back out.
+   * **still open** - the static face copy is keyed on the face object's *name*, so a rename multiplies copies;
      `Alt+D` duplicates share one set of drivers; tears are injected regardless of `PmxExtraMorphs`;
      `blend=`/`scroll=`/`morph=` are gated on `PmxUmaMaterialFields` while `object morphs:` is not; the exporter's
      unreadable-mesh recovery double-counts `baseShift`; normals are never transformed while coordinates are;
      `build`/`build_material_visibility`/`build_cheek`/`verify` in `MorphDrivers.py` are dead code (and the only
      pre-4.2 `material.blend_method` uses); the `@_@` spin's UV-morph V-sign is still unmeasured.
+   * **the pooled tear card "moving forward"** - checked and not reproducible in the data: the card's absolute
+     coordinates are identical in every export from `morphs13` (when the tears appeared) through `morphs33`
+     (`Y 17.405…17.587`, `Z −0.468…−0.455`), and its drawing state is identical too (BLENDED, no culling, repeat,
+     same texture). `DecalLift = 0.06` is proportional to the distance from the head bone, but the pool card gets
+     0.086 of it against the manga's 0.097 - it is not the outlier. The card that used to be weighted to bone 0 now
+     follows the head, so a decal that was previously stuck in the wrong place is visible where it belongs; that is
+     the most likely explanation for the change in appearance.
 7. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
    file sets in the fork (rain/wet look, VMD loop lead-in) belong to the user.
 
