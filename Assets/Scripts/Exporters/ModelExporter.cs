@@ -32,39 +32,50 @@ public class ModelExporter
         container.UmaAnimator?.Rebind();
         container.EnableEyeTracking = false;
         container.FaceDrivenKeyTarget?.FacialResetAll();
-        AddBlendShape(container);
-        BuildBillboard(container);
 
-        var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject,
-                                                       MorphPartRenderers(container),
-                                                       MorphPartTextures(container));
-        RawMMDModel model;
-        // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
-        // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
-        using (UmaAPose.Enter(container))
+        // Everything the export adds to the character comes back off in the `finally`.
+        //
+        // `AddBlendShape` bakes the facial frames onto the character's *shared* mesh, and the billboard adds objects
+        // under it; both were cleaned up only on the success path. Any throw in between - a mesh that is not
+        // readable, a texture that will not encode, the writer - left the model double-deforming for the rest of the
+        // session: the baked frames and the live `FaceDrivenKeyTarget` both moved the face, and the next export
+        // appended the frames a second time. An export that fails should leave the model exactly as it found it.
+        try
         {
-            model = ReadPMXModel(container, textures, container.CharaEntry);
+            AddBlendShape(container);
+            BuildBillboard(container);
+
+            var textures = TextureExporter.ExportAllTexture(Path.GetDirectoryName(path), container.gameObject,
+                                                           MorphPartRenderers(container),
+                                                           MorphPartTextures(container));
+            RawMMDModel model;
+            // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
+            // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
+            using (UmaAPose.Enter(container))
+            {
+                model = ReadPMXModel(container, textures, container.CharaEntry);
+            }
+
+            if (FbxExporter.IsFbxPath(path))
+            {
+                WriteFbx(path, model);
+                return;
+            }
+
+            using (FileStream fileStream = new FileStream(path, FileMode.Create))
+            using (BinaryWriter writer = new BinaryWriter(fileStream))
+            {
+                var config = new ModelConfig() { GlobalToonPath = "Toon" };
+                PMXWriter.Write(writer, model, config, PmxConfigFor(model));
+            }
+
+            UmaViewerUI.Instance.ShowMessage($"PMX Save at {path}", UIMessageType.Success);
         }
-
-        if (FbxExporter.IsFbxPath(path))
+        finally
         {
-            WriteFbx(path, model);
             RemoveBillboard(container);
             ClearBlendShape(container);
-            return;
         }
-
-        FileStream fileStream = new FileStream(path, FileMode.Create);
-        BinaryWriter writer = new BinaryWriter(fileStream);
-        var config = new ModelConfig() { GlobalToonPath = "Toon" };
-        PMXWriter.Write(writer, model, config, PmxConfigFor(model));
-
-        writer.Close();
-        fileStream.Close();
-
-        RemoveBillboard(container);
-        ClearBlendShape(container);
-        UmaViewerUI.Instance.ShowMessage($"PMX Save at {path}", UIMessageType.Success);
     }
 
     /// <summary>
