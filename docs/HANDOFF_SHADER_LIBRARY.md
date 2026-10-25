@@ -343,6 +343,18 @@ the shape keys do not follow, so moving `Cheek_Blush` / `Tear_*` after a Shading
 copies every key onto both pieces and `prune_split_morphs` prunes per piece, so the next step is a measurement of which
 keys ended up with no offsets on the piece that holds their polygons - not a guess at the prune's logic.
 
+**H. The blush into the face material: the projection works, vertex colours are too coarse** (user's idea, then
+approved: *"add the blush to the face texture with a mix color node"*). A mix node in the face material can only read
+the face mesh's own UVs, and the blush map is in its own UV square, so there is no UV mapping to pick between them -
+any offset would be right for one character and wrong for the next. The mapping that is right by construction is
+**geometry**, and `Tools/bake_blush_vertices.py` measures it: project every mesh vertex onto the deployed blush
+triangle, check the barycentric, sample the blush map. Measured on 1001: **255 of 14492 vertices land on the blush**
+(map alpha 0.000-0.552, mean 0.146), but only **30 of the face material's 1328 vertices** fall inside its silhouette -
+so a *vertex* colour layer (`UMA_Blush`, white = none) is too coarse to carry a soft blush: it would come out blocky at
+30 points. The route that matches the wanted quality is a **texture bake onto the face atlas's UV layout**, which is a
+real bake pass (and a texture per character) rather than an attribute write. Alignment is not the problem in either
+case - it is solved by projection - the resolution is.
+
 ## Decisions still owed by the user
 
 Everything decided at the start of this session is now **shipped and verified**: brows, the eye knobs, Spork's eye,
