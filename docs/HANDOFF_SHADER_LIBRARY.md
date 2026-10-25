@@ -24,6 +24,13 @@ side: what shipped, what to build next, and the measurements that keep the next 
 
 | commit | repo | what |
 |---|---|---|
+| `df8fac2` | add-on | **brows**: `Uma Brows` in `Umashaders-0.2.6.blend` (the user's view-vector displacement, 0.05, `BOTH`) + manifest `materials.brows`, `parts.brows` (`mayu`, **before** `face`), `textures.brows`, `part_inputs.brows` |
+| `1d3b896` | export | `Tools/patch_brows_material.py` (adds/re-asserts it in a library), `Tools/verify_brows.py` (structural proof through a real `uma.apply_shader`), `Tools/measure_brows.py` (the pixel measurement) |
+
+## What shipped before it (the session this handoff continues from)
+
+| commit | repo | what |
+|---|---|---|
 | `257ca7b` | add-on | **looper lib**: `Uma Eyes` carries the wet-eye highlight system; `build_highlights`, its five `Hi_*` properties, its call, the highlight block inside `build_tear_scroll` and the panel's "Eye highlights" box are removed |
 | `e82b79a` | add-on | `CrySwitch` 1 → 0, so a fresh file rests **not** crying |
 | `908ab68` | add-on | library blends moved beside their manifests, read through `ShaderManifest.blend_path()` (also `Motion`/`Properties`, which read `Umashaders.blend` for the action library) |
@@ -72,18 +79,55 @@ run reports "Uma shader applied".
 
 ## Next work, in the order I'd take it
 
-### 1. `Uma Brows` + the `brows` role (the user's brow fix did not appear — this is why)
+### 1. DONE — `Uma Brows` + the `brows` role
 
-The trick lives only in their character file. The brows currently match the `face` rule → the shared `default`
-template (`Uma Shader`), so putting the displacement there would push the whole body toward the camera. Do:
+**Shipped as described below, and it is the user's own fix read out of their file rather than remembered.** Their
+brow material (`spe_configured.blend`, `mtl_chr1001_00_mayu [face]`, 23 nodes) is `Geometry.Incoming → Vector Math
+(SCALE, 0.05) → Material Output.Displacement` with `displacement_method = BOTH`, in a frame labelled `Eyebrows in
+front`. Two details the plan below did not have:
 
-- in `shaders/Umashaders-0.2.6.blend`: new material `Uma Brows` = a copy of `Uma Shader`'s tree plus
-  `Geometry.Incoming → Vector Math (SCALE 0.05) → Material Output.Displacement`, `displacement_method = BOTH`
-- manifest `umashader-0.2.6`: `materials.brows`, a `parts` rule `{"id": "brows", "match": ["mayu"], "material":
-  "brows"}` placed **before** the `face` rule (first substring wins), and `textures.brows` copied from `default`
-- verify by measurement, not by eye: shade a fresh character, flatten every material (brows red, rest opaque black),
-  count red pixels with and without the displacement link (`Render Result.save_render`; the Synth Data add-on
-  hijacks `scene.render.filepath`)
+- it is **`Incoming`**, not `Normal` - verified from the link itself (`('Geometry', 'Incoming', 'Vector')`). `Normal`
+  pushes the brows out along the face and does not move them against the hair;
+- the brow slot also carries the face's **`Toggle If Face` = 1.0** (measured beside `_face` = 1.0 and `_hair` = 0.0),
+  so the brows stay a *face* part; the port adds a `part_inputs` row for it, or the brows would silently shade as a
+  non-face surface.
+
+The rest as planned, and both halves of it were checked rather than assumed: `mtl_chr1001_00_mayu` is the only
+`mayu` material on 1001 (there is no `mayu` texture anywhere - the brows bind the **face** atlas
+`tex_chr1001_00_face_diff/ctrl/shad_c/base`, which is why `textures.brows` is the `default` recipe rule for rule),
+and the `face` rule lists `mayu` itself, so `brows` has to come first in `parts`.
+
+`Uma Brows` is a copy of `Uma Shader` plus the two nodes and the frame, in a slot on the carrier sphere
+(`library_masters` reads roles from those slots), with no images and no `uma_shader_source`. `Tools/patch_brows_material.py`
+adds it and re-asserts the graph, so a shader update is repaired by re-running it.
+
+**Verified two ways, on a freshly shaded 1001 (`Tools/verify_brows.py`, `Tools/measure_brows.py`):**
+
+- structurally, through the real `uma.apply_shader`: the brow slot becomes `mtl_chr1001_00_mayu [brows]` with 23
+  nodes, displacement linked at 0.050, `BOTH`, the face atlas bound, `Toggle If Face` 1, the shader tag intact, and
+  every other slot unchanged (17 checks, all pass);
+- by measurement: brows flattened red, everything else black, camera on the brow faces along their own average
+  normal, 640² EEVEE, two warm-up renders per configuration - **261 brow pixels without the displacement, 1657
+  with it (+535%)**. The user's own file measured 106 → 970 (+815%); the absolute numbers differ because the framing
+  differs, the direction does not.
+
+**Two traps met on the way**, both worth not repeating:
+
+- the test has to run the *real* operator: `uma.apply_shader` polls on exactly one selected mesh, and its face step
+  **separates the face into its own object**, so the brow slot afterwards belongs to `..._mesh_face`, not to the mesh
+  the operator was handed (the first measurement failed with "the brow slot has no faces" for exactly that reason);
+- Blender 5.2's engine id is `BLENDER_EEVEE` again, not `BLENDER_EEVEE_NEXT` (that was 4.2-4.4), so a timing or
+  render script should pick the id from `scene.render.bl_rna.properties["engine"].enum_items`.
+
+**Why it needed a material of its own** (the reasoning that shaped the change, as it was put before the work): the
+brows matched the `face` rule and so wore the shared `default` template - `Uma Shader`, the material every body, hair
+and tail slot wears - so putting the displacement there would push the whole character towards the camera.
+
+The checklist it shipped as: `Uma Brows` in `shaders/Umashaders-0.2.6.blend` (a copy of `Uma Shader`'s tree plus
+`Geometry.Incoming → Vector Math (SCALE 0.05) → Material Output.Displacement`, `displacement_method = BOTH`);
+`materials.brows`, a `parts` rule for `mayu` placed **before** `face` (first substring wins), `textures.brows` copied
+from `default`, and `part_inputs.brows` for the face's `Toggle If Face`; verified by measurement with
+`Render Result.save_render` (the Synth Data add-on hijacks `scene.render.filepath`).
 
 ### 2. Panel rows for the highlight controls (user said go)
 
@@ -160,10 +204,13 @@ drivers only while a knob is being animated). Self-containment, not speed.
 
 ## Decisions still owed by the user
 
-- decal direction: unlit `Uma Decal` vs flattening the MMD material
-- donor: confirm drive-from-the-face
-- tremble knobs: rate + amount only (my proposal), or the whole set
-- whether `Spin`/`Tear_Scroll` should become node-driven
+Decided by the user at the start of this session, and being worked in this order: **brows → panel rows → Spork**.
+
+- decals: **unlit `Uma Decal` library material** (texture × alpha into emission, alpha-blended) - still to build
+- donor: **confirmed**, drive `Eye_EyeHideA_L/_R` on the static copy from the main face's keys
+- tremble knobs: **rate + amount only** (`NoiseGenerator.TimeScale`, `Gain`) plus `CrySwitch` and the two colours;
+  `Offset`, both thresholds and `Smothness` stay internal
+- still undecided: whether `Spin`/`Tear_Scroll` should become node-driven (item 6, deliberately last)
 
 ## Traps that cost time
 
@@ -172,6 +219,10 @@ drivers only while a knob is being animated). Self-containment, not speed.
   multi-line replacements
 - the Synth Data add-on overrides the render output path; save through `bpy.data.images["Render Result"].save_render`
 - a python reference to a link/node goes stale across a render — look it up again before removing it
+- a `bpy_struct` **comparison** (`node is other_node`) is not an identity test: Blender hands back a fresh Python
+  wrapper per lookup, so a check written that way fails on a node that is present. Compare `name`s.
+- Blender 5.2's EEVEE is `BLENDER_EEVEE` again (`BLENDER_EEVEE_NEXT` was 4.2-4.4), so a script that sets the engine
+  by name has to pick it from `scene.render.bl_rna.properties["engine"].enum_items`
 - `bpy.data.libraries.load` appending a material does bring its node groups (verified), but the **material** keeps
   `uma_shader_source` and bound images: strip both for a library
 - EEVEE timings need a warm-up render per configuration
