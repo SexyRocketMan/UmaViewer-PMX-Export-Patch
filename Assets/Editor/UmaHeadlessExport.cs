@@ -147,6 +147,8 @@ public static class UmaHeadlessExport
         public int MorphNameMode = -1;
         public bool APoseRestPose;
         public bool PlainMaterials;
+        // the other opt-out: no deploy/tear morphs and none of the tokens that explain them
+        public bool NoExtraMorphs;
         public string RecordVmd = "";
         public int RecordFps = 30;
         public int RecordReduction = 0;
@@ -236,6 +238,7 @@ public static class UmaHeadlessExport
                     case "-umaMorphNameMode": options.MorphNameMode = int.Parse(Next()); break;
                     case "-umaAPose": options.APoseRestPose = true; break;
                     case "-umaPlainMaterials": options.PlainMaterials = true; break;
+                    case "-umaNoExtraMorphs": options.NoExtraMorphs = true; break;
                     case "-umaRecordVmd": options.RecordVmd = Next(); break;
                     case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
                     case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
@@ -424,6 +427,13 @@ public static class UmaHeadlessExport
                         Config.Instance.PmxUmaMaterialFields = false;
                         Debug.Log($"{Tag} exporting plain MMD materials: no uma shader settings in the material "
                                   + "comment, and the plain diffuse/specular/outline values");
+                    }
+
+                    if (options.NoExtraMorphs)
+                    {
+                        Config.Instance.PmxExtraMorphs = false;
+                        Debug.Log($"{Tag} exporting without the extra morphs: no deploy or tear morphs, and none "
+                                  + "of the morph tokens that describe them");
                     }
 
                     if (options.Refine >= 0)

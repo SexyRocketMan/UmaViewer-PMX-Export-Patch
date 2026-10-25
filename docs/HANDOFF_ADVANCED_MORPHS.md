@@ -125,6 +125,10 @@ properties and defaults are readable, **source is not**. The decompile remains t
 6. **Robustness pass, in progress.** A reviewer's audit of both repositories is in
    `C:\tmp\pipeline_robustness_review.md` (not in the repo - copy it in if it is still wanted after a reboot). What
    it found and what has been fixed since:
+   * **fixed** - the two export switches now each govern their own feature: `PmxExtraMorphs = false` stops the tears
+     being written at all (they used to ship collapsed and undeployable) and `PmxUmaMaterialFields = false` no longer
+     drops the `morph=`/`blend=`/`scroll=` tokens, which belong to the morphs and not to the shader values;
+     `-NoExtraMorphs` exposes the switch in the headless runner;
    * **fixed** - decals did not follow the head at all (a decal is a *child* of a bone, so `bones.IndexOf(...)` was
      -1, and the tear card's joints are not pmx bones so its skin indices resolved to 0); morphs renamed
      `<feature>_<what it does>_<side>` with the old spelling still accepted; duplicate tear cards deduplicated on
@@ -142,8 +146,7 @@ properties and defaults are readable, **source is not**. The decompile remains t
      keeps a cheap check instead (report any driver that does not resolve, right after the split); a repair was
      written, A/B-tested, found to change nothing, and taken back out.
    * **still open** - the static face copy is keyed on the face object's *name*, so a rename multiplies copies;
-     `Alt+D` duplicates share one set of drivers; tears are injected regardless of `PmxExtraMorphs`;
-     `blend=`/`scroll=`/`morph=` are gated on `PmxUmaMaterialFields` while `object morphs:` is not; the exporter's
+     `Alt+D` duplicates share one set of drivers; the exporter's
      unreadable-mesh recovery double-counts `baseShift`; normals are never transformed while coordinates are;
      `build`/`build_material_visibility`/`build_cheek`/`verify` in `MorphDrivers.py` are dead code (and the only
      pre-4.2 `material.blend_method` uses); the `@_@` spin's UV-morph V-sign is still unmeasured.

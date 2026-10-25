@@ -221,6 +221,7 @@ colours them at runtime - so showing untextured there is expected, not a bug.
 | `-MorphNameMode 0\|1\|2\|3` | Morph and shape-key spelling: `0` tagged (`Eye_20_R(XRange)[M_Face]`, what the **stock** Blender addon matches), `1` short (`Eye_20_R`), `2` both, `3` unified (`Eye_XRange_R`) - the default, and what the patched addon in this fork resolves. Models and motions must use the same mode or the motion's morph tracks land on nothing. |
 | `-APose` | Exports the model with both upper arms rotated 38.5° into the A-pose that recorded motions are relative to, so a model and a motion line up in Blender without posing anything by hand. **Off by default** - rigging and retargeting tools expect a T-pose rest. |
 | `-PlainMaterials` | Writes plain MMD materials: no uma shader settings in the material comment, plain diffuse/specular/outline values. Use it for a model meant to be used *without* the uma addon. |
+| `-NoExtraMorphs` | Writes no advanced morphs at all: no deploy or tear morphs, and none of the `morph=` / `blend=` / `scroll=` tokens that describe them. The morph *parts* then stay wherever the game draws them, so the decals are permanently visible - that is what `Config.PmxExtraMorphs = false` does, and it is the opposite of `-PlainMaterials`, which keeps the morphs and drops the shader values. |
 | `-DumpMaterials` | Before exporting, logs what every material resolved to - textureless slots, missing shaders, and every property of every shader the model uses. Use it when a model comes out white or oddly shaded. |
 
 ### 8. Voices, and what they say
@@ -299,6 +300,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-MorphNameMode -1\|0\|1\|2\|3` | -1 (use `Config.json`, i.e. unified) | Morph-name spelling, see [above](#7-change-what-the-exported-file-contains) |
 | `-APose` | off | Export the A-pose rest pose |
 | `-PlainMaterials` | off | Export plain MMD materials |
+| `-NoExtraMorphs` | off | Export without the advanced morphs and their tokens |
 | `-PlaySeconds <s>` | 0 | Let the motion play this long (wall clock) before exporting/recording |
 | `-ExtraFrames <n>` | 30 | Frames to let the model settle before the export or recording starts |
 | `-DumpMaterials` | off | Log material and shader diagnostics first |
@@ -418,6 +420,7 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-Char` / `-Costume` / `-Prop` / `-Motion` / `-Scene` / `-Variant` | `-umaChar` / `-umaCostume` / `-umaProp` / `-umaMotion` / `-umaScene` / `-umaVariant` |
 | `-Out` / `-RecordVmd` / `-Screenshot` | `-umaOut` / `-umaRecordVmd` / `-umaScreenshot` |
 | `-MorphNameMode` / `-APose` / `-PlainMaterials` | `-umaMorphNameMode` / `-umaAPose` / `-umaPlainMaterials` |
+| `-NoExtraMorphs` | `-umaNoExtraMorphs` |
 | `-RecordFps` / `-RecordReduction` / `-RecordMode` | `-umaRecordFps` / `-umaRecordReduction` / `-umaRecordMode` |
 | `-PlaySeconds` / `-ExtraFrames` / `-Timeout` | `-umaPlaySeconds` / `-umaExtraFrames` / `-umaTimeout` |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | `-umaListChars` / `-umaListCostumes` / `-umaListProps [filter]` |

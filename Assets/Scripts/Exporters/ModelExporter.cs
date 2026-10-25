@@ -219,8 +219,14 @@ public class ModelExporter
         // The animated tears are runtime instances, switched off until a tear controller raises their weight, so
         // the walk above misses them exactly like the eye manga. They are hidden the same way as the other
         // decals: collapsed at rest, deployed by a morph of their own.
+        //
+        // This follows `PmxExtraMorphs` like every other part of the feature. It used to be unconditional, which
+        // defeated the switch in the worst way: with the morphs off the cards still came in, collapsed onto the
+        // head with no deploy morph to show them - and the tokens that explain them were dropped, so nothing in the
+        // file said what they were.
         var tearObjects = new List<GameObject>();
-        if (character != null && character.TearControllers != null)
+        bool extraMorphs = Config.Instance == null || Config.Instance.PmxExtraMorphs;
+        if (extraMorphs && character != null && character.TearControllers != null)
         {
             foreach (TearController tear in character.TearControllers)
             {
@@ -942,6 +948,7 @@ public class ModelExporter
     /// </summary>
     private static string ExtraMorphGrid(UmaContainerCharacter character, Renderer renderer)
     {
+        if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return string.Empty;
         if (character == null || renderer == null || character.TearControllers == null) return string.Empty;
         foreach (TearController tear in character.TearControllers)
         {
@@ -978,6 +985,7 @@ public class ModelExporter
     /// </summary>
     private static string ExtraMorphBlend(Material material)
     {
+        if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return string.Empty;
         if (material == null || material.shader == null) return string.Empty;
         string shader = material.shader.name ?? string.Empty;
         if (shader.IndexOf("Multiply", System.StringComparison.OrdinalIgnoreCase) >= 0) return " blend=multiply";
@@ -1686,14 +1694,20 @@ public class ModelExporter
                                      + "the surface will not look right (see UmaEnvTextureSet for environment scenes)");
                     mat.Texture = model.TextureList[0];
                 }
+                // The morph tokens belong to the extra-morphs feature, not to the uma-material one, so they are
+                // collected outside the `PmxUmaMaterialFields` branch: a model exported with plain MMD materials and
+                // the advanced morphs on still needs `morph=`/`blend=`/`scroll=` to explain the shape keys it
+                // carries and how its decals are drawn. Each function gates itself on `PmxExtraMorphs`, so with
+                // that switch off this is the empty string.
+                string morphTokens = ExtraMorphComment(character, material)
+                                   + ExtraMorphBlend(material)
+                                   + ExtraMorphGrid(character, renderer);
+
                 // Opt out for models that are meant to be used without the Blender addon: the plain MMD
                 // material values set above are then left alone, which is what an unadorned export looks like
                 if (Config.Instance == null || Config.Instance.PmxUmaMaterialFields)
                 {
-                    mat.MetaInfo = UmaMaterialComment(material, model)
-                                 + ExtraMorphComment(character, material)
-                                 + ExtraMorphBlend(material)
-                                 + ExtraMorphGrid(character, renderer);
+                    mat.MetaInfo = UmaMaterialComment(material, model) + morphTokens;
 
                     // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
                     //
@@ -1724,6 +1738,12 @@ public class ModelExporter
                         mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
                         mat.DrawEdge = mat.EdgeSize > 0f;
                     }
+                }
+                else
+                {
+                    // plain MMD materials, but the advanced morphs are still on: the tokens that explain them
+                    // survive, the shader values do not
+                    mat.MetaInfo = morphTokens;
                 }
                 part.BaseShift = baseShift + mesh.GetSubMesh(i).indexStart;
                 part.TriangleIndexNum = mesh.GetSubMesh(i).indexCount;
