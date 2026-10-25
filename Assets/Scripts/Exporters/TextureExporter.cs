@@ -325,10 +325,22 @@ public class TextureExporter
             }
             if (faceRenderer != null) break;
         }
-        if (faceRenderer == null || faceMesh == null || faceMaterial == null) return null;
+        if (faceRenderer == null || faceMesh == null || faceMaterial == null)
+        {
+            // said out loud: a silent null looks exactly like a bake that worked until the folder has no file in it,
+            // which is how this cost a round trip
+            Debug.Log("[exporter] face-blush layer skipped: no face material among " + renderers.Count
+                      + " renderer(s) - looking for a material whose name contains 'face' and is not a multiply decal");
+            return null;
+        }
         if (faceMesh.uv == null || faceMesh.uv.Length != faceMesh.vertexCount || faceMesh.subMeshCount < 1) return null;
         Texture2D faceAtlas = faceMaterial.mainTexture as Texture2D;
-        if (faceAtlas == null) return null;
+        if (faceAtlas == null)
+        {
+            Debug.Log("[exporter] face-blush layer skipped: " + faceMaterial.name
+                      + " has no main texture to size the layer against");
+            return null;
+        }
         int[] faceTriangles = faceMesh.GetTriangles(faceSubmesh);
         if (faceTriangles.Length < 3) return null;
 
