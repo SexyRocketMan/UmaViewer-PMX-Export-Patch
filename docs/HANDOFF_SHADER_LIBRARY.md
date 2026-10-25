@@ -294,13 +294,24 @@ still collapsed - those are the rolling cards that were deliberately left out of
 from his own `Spork Shader`, the `brows` role and rule and texture recipe in `spork-1.0`, measured at the same
 261 → 1657 pixels as under Looper.
 
-**D. Tears leak their background over the manga faces.** Not fixed yet, and the geometry says the user's first idea
-cannot work as-is: the four eye manga are **2 polygons / 4 vertices** each, the static tears 16/15 and the sheets
-48/36 (`Tools/probe_decal_geometry.py`), and the brow trick is *vertex* displacement - it was measured doing nothing at
-all on a 4-vertex plane. So "render in front" needs either more vertices on those parts or a different mechanism. The
-likelier fix for a sprite whose black background is showing is the **blend**: `Uma Decal` alpha-blends, and the maps
-are not fully transparent outside the art (manga 44-84% of the map is transparent, so 16-56% is not), so an additive
-or multiply mix would make the sprite's background contribute nothing. That is a decision, not a measurement.
+**D. Tears leak their background over the manga faces.** Not fixed, and two candidate fixes have each been checked
+and ruled out or confirmed:
+
+- **the render-in-front trick cannot work on them as they are**: the four eye manga are **2 polygons / 4 vertices**
+  each, the static tears 16/15 and the sheets 48/36 (`Tools/probe_decal_geometry.py`), and the brow trick is *vertex*
+  displacement - measured doing nothing at all on a 4-vertex plane. It would need subdivided decal quads, which would
+  also change the mesh topology the normal transfer pairs against.
+- **additive blending is not available in EEVEE Next**, which the user asked for and which has now been measured:
+  `Uma Decal` was rebuilt with a soft/additive switch (`Add Shader(Emission x alpha, Transparent)` behind a `Mix
+  Shader`), and on a 1001 with the manga deployed **1937 of 1937** decal pixels came out *darker* than with the decal
+  hidden - because an Emission closure carries alpha 1, so `Add Shader` occludes instead of adding. EEVEE Next's
+  blended materials do alpha blending only (`surface_render_method` has `DITHERED`/`BLENDED` and no additive mode), so
+  the switch was reverted rather than shipped reading "additive" and behaving opaque.
+
+  **The fix that remains, and has not been built**: a *black key* on the decal maps. The sprites are art on black, and
+  16-56% of each manga map is not transparent, so the background blends in as haze; making the effective alpha
+  `alpha x max(r, g, b)` turns the black to transparency and leaves the art, which is the visible half of what
+  additive would have bought. It is a node in `Uma Decal` (two nodes and one linkage) and a measurement away.
 
 ## Decisions still owed by the user
 
