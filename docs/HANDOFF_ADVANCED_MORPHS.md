@@ -122,7 +122,27 @@ properties and defaults are readable, **source is not**. The decompile remains t
    built, verified and then taken back out: twelve morphs for one effect, animated only by an addon-side crossfade,
    so in plain `mmd_tools` it is dead weight. The measurement and the reason are in `EXTRA_MORPHS.md` under
    "Shelved: exporting the roll"; if it is ever revisited, the carrier to use is bones plus a VMD, not morphs.
-6. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
+6. **Robustness pass, in progress.** A reviewer's audit of both repositories is in
+   `C:\tmp\pipeline_robustness_review.md` (not in the repo - copy it in if it is still wanted after a reboot). What
+   it found and what has been fixed since:
+   * **fixed** - decals did not follow the head at all (a decal is a *child* of a bone, so `bones.IndexOf(...)` was
+     -1, and the tear card's joints are not pmx bones so its skin indices resolved to 0); morphs renamed
+     `<feature>_<what it does>_<side>` with the old spelling still accepted; duplicate tear cards deduplicated on
+     geometry; the panel finds the character from any selected part (root, mesh, armature, the separated face);
+     `report_export` and the deploy rows look at every mesh rather than the first; the advanced-morph step runs
+     *after* the materials exist, so eye highlights work on the first Shading run; each character's drivers are
+     scoped to her own materials and claimed once; the pmx index widths are computed instead of hardcoded to 2
+     bytes; `FindHeadBone` matches loosely and warns; a failed export puts the model back (try/finally); a Shading
+     run covers every mesh of the character, skips a bad slot instead of aborting mid-way, and re-verifies the
+     shader control afterwards.
+   * **still open** - shape-key drivers do not follow a face separation (the separated piece gets a copy of the
+     Key datablock); the static face copy is keyed on the face object's *name*, so a rename multiplies copies;
+     `Alt+D` duplicates share one set of drivers; tears are injected regardless of `PmxExtraMorphs`;
+     `blend=`/`scroll=`/`morph=` are gated on `PmxUmaMaterialFields` while `object morphs:` is not; the exporter's
+     unreadable-mesh recovery double-counts `baseShift`; normals are never transformed while coordinates are;
+     `build`/`build_material_visibility`/`build_cheek`/`verify` in `MorphDrivers.py` are dead code (and the only
+     pre-4.2 `material.blend_method` uses); the `@_@` spin's UV-morph V-sign is still unmeasured.
+7. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
    file sets in the fork (rain/wet look, VMD loop lead-in) belong to the user.
 
 ## Pitfalls that cost time this session
