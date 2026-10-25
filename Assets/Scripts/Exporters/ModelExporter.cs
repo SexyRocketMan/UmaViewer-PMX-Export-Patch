@@ -1614,15 +1614,13 @@ public class ModelExporter
                 catch
                 {
                     UmaViewerUI.Instance.ShowMessage($"Skipping material for non-readable mesh: {mesh.name}", UIMessageType.Warning);
-                    // Still need to advance baseShift!
-                    baseShift += mesh.triangles.Length; // BUT: this mesh.triangles may fail too!
-                    // Better: get triangle count safely
-                    int triCount = 0;
-                    if (renderer is MeshRenderer mrr)
-                        triCount = mrr.GetComponent<MeshFilter>().sharedMesh.triangles.Length;
-                    else
-                        triCount = ((SkinnedMeshRenderer)renderer).sharedMesh.triangles.Length;
-                    baseShift += triCount;
+                    // Nothing to advance, and nothing to count.
+                    //
+                    // `ReadVerticesAndTriangles` skips this renderer the same way when it cannot copy it, so its
+                    // triangles are not in the model and its materials must not claim a range in it. The old code
+                    // tried to advance by `mesh.triangles.Length` - reading the very array that had just thrown -
+                    // and then added the count a second time on top, so it either re-threw out of its own handler
+                    // or shifted every later material's triangle range by triangles that were never written.
                     continue;
                 }
             }
@@ -1802,7 +1800,15 @@ public class ModelExporter
                 {
                     Vertex vertex = new Vertex();
                     vertex.Coordinate = renderer.transform.TransformPoint(vertices[i]);
-                    vertex.Normal = normals[i];
+                    // the normal goes through the same transform as the position. It used to be copied raw, so a
+                    // model whose part is rotated relative to the model wrote positions in one frame and normals in
+                    // another - invisible while every transform is identity, which is why it never showed on the
+                    // reference character, and wrong shade boundaries the moment one is not.
+                    //
+                    // `.normalized` because the transform chain is not scale-free: the part sits under a container
+                    // whose scale is not 1, and transforming a direction by it shortens the vector (measured: every
+                    // normal came out 0.9829 long against the 1.0000 the file had before).
+                    vertex.Normal = renderer.transform.TransformDirection(normals[i]).normalized;
                     vertex.UvCoordinate = new Vector2(uv[i].x, 1 - uv[i].y);
 
                     vertex.ExtraUvCoordinate = new Vector4[3]
@@ -1868,8 +1874,19 @@ public class ModelExporter
                 for (int i = 0; i < vertices.Length; i++)
                 {
                     Vertex vertex = new Vertex();
-                    vertex.Coordinate = root.InverseTransformPoint(smr.transform.TransformPoint(bakemesh.vertices[i])); 
-                    vertex.Normal = normals[i];
+                    vertex.Coordinate = root.InverseTransformPoint(smr.transform.TransformPoint(bakemesh.vertices[i]));
+                    // the same chain as the position, so the normal lands in the space the position is in: the baked
+                    // mesh carries skinned normals in the renderer's own frame, and they used to be written without
+                    // the renderer's rotation at all - positions in the root's frame, normals in the part's
+                    // `.normalized` because InverseTransformDirection divides by the root's scale, which is not 1:
+                    // without it every normal in the file came out 0.9829 long instead of 1.0000.
+                    Vector3 skinnedNormal = root.InverseTransformDirection(
+                        smr.transform.TransformDirection(bakemesh.normals[i]));
+                    // skinning can collapse a vertex to a point, and a collapsed normal bakes as zero (24 of them
+                    // on 1001). A zero normal in the file shades as black, so fall back to the rest pose's own
+                    // normal - which is exactly what these vertices were written with before.
+                    if (skinnedNormal.sqrMagnitude < 1e-12f) skinnedNormal = normals[i];
+                    vertex.Normal = skinnedNormal.normalized;
                     vertex.UvCoordinate = new Vector2(uv[i].x, 1 - uv[i].y);
                     // the head-local height goes in the spare .z of the second extra uv, which mmd_tools
                     // reads as `_UV2`; nothing else in the file uses that component
