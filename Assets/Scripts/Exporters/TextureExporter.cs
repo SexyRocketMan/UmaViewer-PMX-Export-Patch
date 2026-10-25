@@ -302,6 +302,7 @@ public class TextureExporter
     {
         if (gameobj == null) return null;
         List<Renderer> renderers = new List<Renderer>(gameobj.transform.GetComponentsInChildren<Renderer>());
+        Debug.Log("[exporter] face-blush: " + renderers.Count + " renderer(s) to look at on " + gameobj.name);
         if (extra != null) renderers.AddRange(extra);
 
         Renderer faceRenderer = null;
@@ -310,15 +311,15 @@ public class TextureExporter
         int faceSubmesh = 0;
         foreach (Renderer renderer in renderers)
         {
-            MeshFilter filter = renderer.GetComponent<MeshFilter>();
-            if (filter == null || filter.sharedMesh == null) continue;
+            Mesh meshOfRenderer = MeshOf(renderer);
+            if (meshOfRenderer == null) continue;
             Material[] materials = renderer.sharedMaterials;
             for (int i = 0; i < materials.Length; i++)
             {
                 if (materials[i] == null || IsMultiply(materials[i])) continue;
                 if ((materials[i].name ?? string.Empty).IndexOf("face", StringComparison.OrdinalIgnoreCase) < 0) continue;
                 faceRenderer = renderer;
-                faceMesh = filter.sharedMesh;
+                faceMesh = meshOfRenderer;
                 faceMaterial = materials[i];
                 faceSubmesh = i;              // the face is one submesh of its renderer, not necessarily submesh 0
                 break;
@@ -350,14 +351,20 @@ public class TextureExporter
         Texture2D blushMap = null;
         foreach (Renderer renderer in renderers)
         {
-            MeshFilter filter = renderer.GetComponent<MeshFilter>();
-            if (filter == null || filter.sharedMesh == null) continue;
-            Mesh mesh = filter.sharedMesh;
+            Mesh mesh = MeshOf(renderer);
+            if (mesh == null) continue;
             if (mesh.uv == null || mesh.uv.Length != mesh.vertexCount) continue;
             Material[] materials = renderer.sharedMaterials;
             for (int submesh = 0; submesh < mesh.subMeshCount && submesh < materials.Length; submesh++)
             {
-                if (!IsMultiply(materials[submesh])) continue;
+                if (materials[submesh] == null || !IsMultiply(materials[submesh]))
+                {
+                    if (materials[submesh] != null)
+                        Debug.Log("[exporter] face-blush: " + renderer.name + " submesh " + submesh + " has "
+                                  + materials[submesh].name + " on shader "
+                                  + (materials[submesh].shader != null ? materials[submesh].shader.name : "null"));
+                    continue;
+                }
                 int offset = blushPoints.Count;
                 Vector3[] vertices = mesh.vertices;
                 for (int i = 0; i < vertices.Length; i++) blushPoints.Add(renderer.transform.TransformPoint(vertices[i]));
@@ -366,6 +373,9 @@ public class TextureExporter
                 if (blushMap == null) blushMap = materials[submesh].mainTexture as Texture2D;
             }
         }
+        Debug.Log("[exporter] face-blush: face " + faceMaterial.name + " (" + faceAtlas.width + "x" + faceAtlas.height
+                  + "), " + faceTriangles.Length / 3 + " face triangle(s); " + blushTriangles.Count / 3
+                  + " multiply cheek triangle(s), map " + (blushMap != null ? blushMap.name : "NONE"));
         if (blushMap == null || blushTriangles.Count < 3) return null;
 
         Vector3[] facePoints = new Vector3[faceMesh.vertexCount];
@@ -374,6 +384,16 @@ public class TextureExporter
 
         return BakeFaceBlush(faceAtlas, facePoints, faceMesh.uv, faceTriangles,
                              blushPoints.ToArray(), blushUvs.ToArray(), blushTriangles.ToArray(), blushMap);
+    }
+
+    /// <summary>The mesh behind a renderer: a `SkinnedMeshRenderer` keeps it itself, a `MeshRenderer` on a filter.</summary>
+    static Mesh MeshOf(Renderer renderer)
+    {
+        if (renderer == null) return null;
+        SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
+        if (skinned != null) return skinned.sharedMesh;
+        MeshFilter filter = renderer.GetComponent<MeshFilter>();
+        return filter != null ? filter.sharedMesh : null;
     }
 
     static public Texture2D duplicateTexture(Texture2D source)
