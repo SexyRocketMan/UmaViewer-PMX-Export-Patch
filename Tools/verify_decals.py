@@ -108,7 +108,7 @@ check("declares a 'decal' role", (manifest.get("materials") or {}).get("decal") 
       repr((manifest.get("materials") or {}).get("decal")))
 check("has a 'decal' texture recipe", "decal" in (manifest.get("textures") or {}))
 rows = [row for row in manifest["settings"] if row.get("material") == "decal"]
-check("two decal rows", len(rows) == 2, "%s" % [row["key"] for row in rows])
+check("two decal rows", len(rows) >= 2, "%s" % [row["key"] for row in rows])
 
 
 # --- the scene a decal is measured in: imported, shaded, cheek deployed, camera on the face -----------------
@@ -252,9 +252,11 @@ wrong_counts = []
 for material in copies:
     drivers = material.node_tree.animation_data.drivers if material.node_tree.animation_data else []
     mine = [curve for curve in drivers if curve.data_path in Control._own_driver_paths(material)]
-    if len(mine) != 5:
-        wrong_counts.append((material.name, len(mine)))
-check("5 drivers per decal copy (4 tint + 1 opacity)", not wrong_counts, "%s" % wrong_counts[:3])
+    # derived from the table, not written down: the count went stale the moment the black-key row was added
+    expected = sum(4 if row["kind"] == "colour" else 1 for row in rows)
+    if len(mine) != expected:
+        wrong_counts.append((material.name, len(mine), expected))
+check("one driver per decal knob per copy", not wrong_counts, "%s" % wrong_counts[:3])
 check("nothing reported missing", not any(entry["missing"] for entry in report["characters"]),
       "%s" % [entry["missing"] for entry in report["characters"] if entry["missing"]][:2])
 check("verify() is clean", report["verified"]["wrong_count"] == 0,

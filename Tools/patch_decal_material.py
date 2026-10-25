@@ -69,12 +69,29 @@ def patch(path):
     tint = _node(tree, "ShaderNodeRGB", "UMA Decal Tint", (-480, 160), "UMA Decal Tint")
     alpha = _node(tree, "ShaderNodeMath", "UMA Decal Alpha", (-240, -40), "Map alpha x opacity")
     opacity = _node(tree, "ShaderNodeValue", "UMA Decal Opacity", (-480, -120), "UMA Decal Opacity")
-    image = _node(tree, "ShaderNodeTexImage", "Image Texture", (-700, 120), "Image Texture")
-    uv = _node(tree, "ShaderNodeUVMap", "UV Map", (-900, 120), "UV Map")
+    # the black key: a sprite is art on black, and the black is often *not* transparent in the map (16-56% of each
+    # manga map is opaque), so alpha-blending paints it over whatever is behind it. Keying the alpha by the map's own
+    # brightest channel makes black contribute nothing and leaves the art - the visible half of what additive blending
+    # would have bought, and additive is not available here: measured, an Emission closure carries alpha 1, so
+    # `Add Shader` occludes instead of adding.
+    separate = _node(tree, "ShaderNodeSeparateColor", "UMA Decal Map Channels", (-960, -160), "Map channels")
+    brightest_rg = _node(tree, "ShaderNodeMath", "UMA Decal Brightest RG", (-760, -260), "max(red, green)")
+    brightest = _node(tree, "ShaderNodeMath", "UMA Decal Brightest", (-580, -260), "max(.., blue)")
+    key = _node(tree, "ShaderNodeValue", "UMA Decal Key", (-700, -340), "UMA Decal Key")
+    strength = _node(tree, "ShaderNodeMix", "UMA Decal Key Strength", (-420, -240), "Key strength")
+    keyed = _node(tree, "ShaderNodeMath", "UMA Decal Keyed Alpha", (-240, -160), "Map alpha x key")
+    image = _node(tree, "ShaderNodeTexImage", "Image Texture", (-1180, 120), "Image Texture")
+    uv = _node(tree, "ShaderNodeUVMap", "UV Map", (-1380, 120), "UV Map")
 
     multiply.blend_type = 'MULTIPLY'
     multiply.inputs["Fac"].default_value = 1.0
     alpha.operation = 'MULTIPLY'
+    keyed.operation = 'MULTIPLY'
+    brightest_rg.operation = 'MAXIMUM'
+    brightest.operation = 'MAXIMUM'
+    # on by default; `UMA Decal Key` at 0 restores the plain alpha blend, for a decal whose own art is dark enough that
+    # keying would thin it
+    key.outputs[0].default_value = 1.0
     tint.outputs[0].default_value = (1.0, 1.0, 1.0, 1.0)
     opacity.outputs[0].default_value = 1.0
     emission.inputs["Strength"].default_value = 1.0
@@ -91,7 +108,24 @@ def patch(path):
     tree.links.new(image.outputs["Color"], multiply.inputs["Color1"])
     tree.links.new(tint.outputs[0], multiply.inputs["Color2"])
     tree.links.new(multiply.outputs["Color"], emission.inputs["Color"])
-    tree.links.new(image.outputs["Alpha"], alpha.inputs[0])
+    # alpha_effective = map.alpha x lerp(max(r, g, b), 1, 1 - key) x opacity
+    tree.links.new(image.outputs["Color"], separate.inputs["Color"])
+    tree.links.new(separate.outputs["Red"], brightest_rg.inputs[0])
+    tree.links.new(separate.outputs["Green"], brightest_rg.inputs[1])
+    tree.links.new(brightest_rg.outputs[0], brightest.inputs[0])
+    tree.links.new(separate.outputs["Blue"], brightest.inputs[1])
+    strength.data_type = 'FLOAT'
+    # `ShaderNodeMix` is `A*(1-Factor) + B*Factor`, and its sockets are indexed across every data type: 0 is the float
+    # factor, 2 the float A, 3 the float B. So A is the 1 that means "no keying" and B is the map's brightest channel,
+    # with the knob as the factor - key 1 keys the black out, key 0 leaves the map's alpha alone. (Both this order and
+    # the index were wrong first time round: linking A at index 0 put the map where the knob goes, and with A/B the
+    # other way round the knob did the opposite of what its name says.)
+    tree.links.new(key.outputs[0], strength.inputs[0])
+    strength.inputs[2].default_value = 1.0
+    tree.links.new(brightest.outputs[0], strength.inputs[3])          # float "B": lerp towards 1, so key 0 is the plain alpha
+    tree.links.new(image.outputs["Alpha"], keyed.inputs[0])
+    tree.links.new(strength.outputs[0], keyed.inputs[1])
+    tree.links.new(keyed.outputs[0], alpha.inputs[0])
     tree.links.new(opacity.outputs[0], alpha.inputs[1])
     tree.links.new(alpha.outputs[0], mix_shader.inputs["Fac"])
     tree.links.new(transparent.outputs[0], mix_shader.inputs[1])
