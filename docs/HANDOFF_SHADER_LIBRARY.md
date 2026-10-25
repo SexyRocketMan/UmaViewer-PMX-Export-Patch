@@ -26,6 +26,10 @@ side: what shipped, what to build next, and the measurements that keep the next 
 |---|---|---|
 | `df8fac2` | add-on | **brows**: `Uma Brows` in `Umashaders-0.2.6.blend` (the user's view-vector displacement, 0.05, `BOTH`) + manifest `materials.brows`, `parts.brows` (`mayu`, **before** `face`), `textures.brows`, `part_inputs.brows` |
 | `1d3b896` | export | `Tools/patch_brows_material.py` (adds/re-asserts it in a library), `Tools/verify_brows.py` (structural proof through a real `uma.apply_shader`), `Tools/measure_brows.py` (the pixel measurement) |
+| `6ad6c4e` | add-on | **eye knobs**: a settings row may name a node *inside* a material (`target`), the five highlight rows, `uma_shader_role` written on every copy, and `character_materials` counting tagged copies | 
+| `d45443e` | export | `Tools/verify_eye_controls.py` (11 drivers on the eye, 298 in the scene, knobs move sockets, bake/re-hook) and `Tools/verify_eye_panel.py` (the panel draws all five rows, checked by recording layout calls) |
+| `40c9105` | add-on | **Spork**: his `Spork Eye` is Looper's `Uma Eyes` graph (his own kept as `Spork Eye (Spork's own)`), `textures.eye` rewritten to our node names, five `spork_eye_*` rows, and `_hint_matches` made **exact** so `Simple Diff + Shaded FACE` stops counting as a shader group |
+| `8d79fac` | export | `Tools/port_spork_eye.py` (the port, idempotent) and `Tools/verify_spork_library.py` (library + a character shaded with his manifest) |
 
 ## What shipped before it (the session this handoff continues from)
 
@@ -129,60 +133,84 @@ The checklist it shipped as: `Uma Brows` in `shaders/Umashaders-0.2.6.blend` (a 
 from `default`, and `part_inputs.brows` for the face's `Toggle If Face`; verified by measurement with
 `Render Result.save_render` (the Synth Data add-on hijacks `scene.render.filepath`).
 
-### 2. Panel rows for the highlight controls (user said go)
+### 2. DONE — panel rows for the highlight controls
 
-A `settings` row addresses a **group socket** today (`_sockets_for` matches `node.inputs[i].name`). The knobs needed
-are nodes *inside* the material, so extend the row schema:
+**Shipped**, with the schema exactly as sketched, plus the five rows: `Crying` (the library's `CrySwitch`),
+`Tremble rate` (`NoiseGenerator` `TimeScale`), `Tremble amount` (`Gain`), `Highlight colour` (`Color`) and `Second
+highlight colour` (`Color.001`), under one new section, `Eye highlights`. `Offset`, both thresholds and `Smothness`
+stay internal, as you decided. The table is 25 rows now.
 
-```json
-{"key": "uma_shader_cry", "kind": "number", "material": "eye",
- "target": {"node": "Value", "socket": "Value"}, "default": 0.0, ...}
-```
+Four things the sketch did not know, all of them load-bearing:
 
-Rows wanted: `CrySwitch` (0/1 crying), `NoiseGenerator.TimeScale` (tremble rate), `NoiseGenerator.Gain` (amount),
-`Color` and `Color.001` (colours). Deliberately *not* exposed: `Offset`, the thresholds, `Smothness`.
+- **a `Value` or `RGB` node is driven through its output**, not an input - `nodes["Value"].outputs[0].default_value`.
+  `CrySwitch` and both highlight colours are those node types, so an input-only resolver would have found nothing;
+- **groups are addressed by their node tree**, `{"group": "NoiseGenerator"}`, because the library calls its group
+  nodes `Group`, `Group.001`, `Group.002` - positional, and they would move under any node added above them;
+- **the eye copy was invisible to the control.** `character_materials` asked for a shader *group* node, and `Uma
+  Eyes` has no `Uma Shader` group - it is an Emission graph with its own subgroups. So no driver, no verification and
+  a `status()` that said "baked" while the graph animated itself. It now counts a copy that wears the shader by its
+  tag, which is why `Shading` writes `uma_shader_role` (`eye`, `default`, `brows`, ...) onto every copy - and writes
+  it on the *reuse* path too, so a copy shaded before the tag existed picks it up on its next run;
+- **a targeted row applies to its own role only**, or the control would report the design as 20 missing settings on
+  every eye and 5 missing ones on every body copy.
 
-Touch points: `_sockets_for()` (return `(path, index)` pairs, not socket indices), `_own_driver_paths()`,
-`hook()`, `status()`, the property operators (`INHERIT` seeding/clearing), and the panel loop that draws rows from
-`KEYS`/`SECTION_ORDER`/`NUMERIC_KEYS`/`COLOUR_KEYS`. Keep `{"input": …}` working as the shorthand for group sockets.
+`setting_targets(material, setting)` is now the one place that knows where a row's value lives; `hook`, `verify`,
+`bake`, `_own_driver_paths` and `seed_global` all read it, so they cannot disagree. `seed_global` also seeds per
+shader across *all* of a character's copies now, so an eye knob is seeded from the eye.
 
-### 3. Spork's new version
+**Measured** (`Tools/verify_eye_controls.py`, `Tools/verify_eye_panel.py`), on a freshly shaded 1001: the five rows
+resolve to `nodes["Value"].outputs[0]`, `nodes["Group"].inputs[0]`, `nodes["Group"].inputs[1]`,
+`nodes["Color"].outputs[0]`, `nodes["Color.001"].outputs[0]`; **11 drivers on the eye** (1+1+1+4+4) and
+**298 in the scene over 8 copies** (41 per body copy, as measured before, unchanged); 0 rows reported missing;
+global `Crying` 1 reaches the socket, `Tremble rate` 5 reaches `TimeScale`, a colour reaches the RGB node, a
+character override beats the global and inheriting returns to it; `verify()` 0 of 145 wrong; `bake()` writes 145
+sockets in and removes 298 drivers, and re-hooking restores them. The panel draws all five rows in the global block
+and in a character's own block - checked by recording the layout calls, because a background Blender has no UI.
 
-His file is `C:\Users\user\Downloads\SporksShader.blend` — a **character** file (Ikuno Dictus, 1063), not a library.
-What matters in it:
+### 3. DONE — Spork's eye, and the `group_hints` trap
 
-- `Simple Diff + Shaded` (51 nodes) and **`Simple Diff + Shaded FACE` (34 nodes, new)**; dependencies
-  `ProjectOnPlane`, `Dot Creation`, `Mask for Face`
-- new material `mtl_chr1063_00_hair_Alpha0` (transparent hair variant)
-- **his eye material `mtl_chr1063_00_eye` is 18 nodes, Emission-only, with exactly our four image node names** — the
-  same structure we had before the highlight port, which is why our graph can be dropped in unchanged (user's plan:
-  "he uses the same shader for the eyes, so we can copy ours with the new highlight system")
+**The eye is ported**: `SporkShaders.blend`'s `Spork Eye` is now Looper's `Uma Eyes` graph, 39 nodes, with the
+`NoiseGenerator` and two `SmoothThreshold` groups travelling with it; `CrySwitch` 0, no images, no shader tag, and the
+carrier sphere's slot points at it. His own eye is kept as `Spork Eye (Spork's own)` (22 nodes, `mmd_tex_uv` + two
+`AOV Output`s that our Emission graph does not have) **with a fake user** - moving the sphere's slot takes away its
+last real user, and Blender drops a zero-user datablock on save (measured: the first run left it in the session and
+not in the file).
 
-Port: append our highlight eye material (`NoiseGenerator`/`SmoothThreshold` come with it) into `SporkShaders.blend`,
-rename it to what the manifest names for `eye`, unbind its four images, `CrySwitch` 0; point `materials.eye` at it;
-`textures.eye` already matches node-for-node.
+**The plan was wrong in one place, and measuring caught it:** `textures.eye` did *not* already match node for node.
+His recipe bound the **main** eye texture to `mmd_base_tex` and the first highlight to `Image Texture`; ours are
+`Image Texture` and `.001`-`.003`. Dropping the graph in unchanged would have bound the eye texture into the first
+*highlight* slot. Rewritten, and the five `spork_eye_*` rows added - the same five nodes, because it is the same graph.
 
-**Trap first:** `spork-1.0`'s `group_hints` is `["Simple Diff + Shaded"]` and shader discovery is a *substring* match,
-so `Simple Diff + Shaded FACE` also matches and the panel would drive `Shadow Softness`/`Emission Strength` into a
-group that may not have them (the same shape as the 0.2.6 outline-socket bug: it reports, so nothing looks broken).
-Make the hint exact, or list the FACE variant explicitly once its sockets are measured.
+**The trap, settled by measuring before deciding.** `Simple Diff + Shaded FACE` (34 nodes, new in his project file)
+offers `Diffuse`, `Shaded`, **`Shadow Softness`**, **`Emission Strength`**, `Light Intensity`, `Colored Light` - so it
+*does* have both sockets the panel drives, which means the substring match would have failed **silently** (the same
+shape as the 0.2.6 outline bug). `_hint_matches` is now exact: a name, or that name plus a Blender `.001` suffix (the
+case the substring test existed for, since appending a second library renames a node group the way it renames a
+material). The hint list stays `["Simple Diff + Shaded"]`; the FACE variant is deliberately not listed.
 
-### 4. Decal morphs react to world light (needs the user's decision)
+**Not done, and now a decision of its own:** his *new* `Simple Diff + Shaded` is **51 nodes with 8 sockets** -
+`Base`, `Highlight Color`, `Light Intensity`, `Colored Light` are the four the library's 26-node/4-socket copy does
+not have. Porting it means rebuilding the library from his file and re-measuring which new sockets are worth rows
+(the same test that kept `Diffuse`/`Shaded` out: is the socket fed by a *link* in his materials?).
+
+**Verified** (`Tools/port_spork_eye.py`, `Tools/verify_spork_library.py`): the library checks above, the matcher
+accepts `Simple Diff + Shaded`/`.001` and rejects `Simple Diff + Shaded FACE`, and a character shaded with
+`spork-1.0` gets an `[eye]` copy of the ported master with `eye0` on the main node and `eyehi00-02` on `.001`-`.003`,
+all five rows resolving, **11 drivers on the eye**, nothing missing, `verify()` clean. **No Spork `.pmx` exists on
+this machine** (his project file is a `.blend`, and no export names 1063), so that last half ran on the reference
+export with his manifest - the apply path is what it tests, and the images were 1001's.
+
+### 4. Decal morphs react to world light (decided: unlit `Uma Decal`, not built yet)
 
 Decals keep mmd_tools' `MMDShaderDev`, which lights from the **scene's lights**, while Looper lights from the
 `Uma Sun` empty with a threshold mask — different lighting models, so decals always look darker than the face under
-them. Options put to the user:
+them. The user picked option 1: a library **`Uma Decal`** material — texture × alpha into emission, alpha-blended, no
+lighting (what the game does, and it gives honest tint/opacity knobs). `decal_materials()` already knows exactly which
+materials are decals, so the work is a library material plus the decal pass replacing each decal's material with a
+copy of it, and the two rejected options stay rejected: flattening the MMD material has no knobs, and shading decals
+with the face's shader is the route that wrapped manga in outlines.
 
-1. **Unlit decals (recommended)** — a library `Uma Decal` material: texture × alpha into emission, alpha-blended, no
-   lighting. Also what the game does (decals are painted overlays). Gives honest tint/opacity knobs.
-2. **Stopgap, no new material** — flatten the decal MMD material in the decal pass (diffuse white, ambient 1, sphere
-   off). Looks close to 1, one line of code, no knobs.
-3. Shade decals with the face's shader — rejected: it is the route that wrapped manga in outlines (the outline shell
-   is a modifier on the mesh, so a decal cannot be excluded per material).
-
-Waiting on the user's pick; `decal_materials()` already knows exactly which materials are decals.
-
-### 5. Static face donor and `Eye_EyeHideA_*` (needs the user's confirmation)
+### 5. Static face donor and `Eye_EyeHideA_*` (confirmed, not built yet)
 
 The user's proposal is the design we parked earlier: keep **only** `Eye_EyeHideA_L/_R` on the static copy, prune the
 rest, and drive those two from the main face's keys — then the donor deforms like the surface its normals are
@@ -204,12 +232,15 @@ drivers only while a knob is being animated). Self-containment, not speed.
 
 ## Decisions still owed by the user
 
-Decided by the user at the start of this session, and being worked in this order: **brows → panel rows → Spork**.
+Decided by the user at the start of this session, and worked in this order: **brows → panel rows → Spork**, all three
+now shipped and verified.
 
-- decals: **unlit `Uma Decal` library material** (texture × alpha into emission, alpha-blended) - still to build
-- donor: **confirmed**, drive `Eye_EyeHideA_L/_R` on the static copy from the main face's keys
-- tremble knobs: **rate + amount only** (`NoiseGenerator.TimeScale`, `Gain`) plus `CrySwitch` and the two colours;
-  `Offset`, both thresholds and `Smothness` stay internal
+- decals: **unlit `Uma Decal` library material** — decided, **not built** (item 4)
+- donor: **confirmed**, drive `Eye_EyeHideA_L/_R` on the static copy from the main face's keys — **not built** (item 5)
+- tremble knobs: **rate + amount only** plus `CrySwitch` and the two colours — shipped
+- **new, from item 3**: port Spork's *new* 51-node `Simple Diff + Shaded` (8 sockets, 4 of them new) into the library,
+  or leave the 26-node one? Needs a measurement first: which of the new sockets are fed by a link in his materials
+  (those cannot be panel rows, the same reason `Diffuse`/`Shaded` are not)
 - still undecided: whether `Spin`/`Tear_Scroll` should become node-driven (item 6, deliberately last)
 
 ## Traps that cost time
