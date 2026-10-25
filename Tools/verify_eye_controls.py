@@ -57,9 +57,13 @@ say("=" * 100)
 say("1. the manifest")
 check("loads with no problems", not problems, "; ".join(problems) or "clean")
 targeted = [row for row in manifest["settings"] if row.get("target")]
-check("has five targeted rows", len(targeted) == 5, "%d" % len(targeted))
-check("25 rows in total", len(manifest["settings"]) == 25, "%d" % len(manifest["settings"]))
-check("the new section is last", Control.SECTION_ORDER[-1] == "Eye highlights",
+eye_keys = ("uma_shader_eye_cry", "uma_shader_eye_tremble_rate", "uma_shader_eye_tremble_amount",
+            "uma_shader_eye_color_hi0", "uma_shader_eye_color_hi1")
+check("has the five eye rows", all(Control.SETTING_BY_KEY.get(key) for key in eye_keys),
+      "%s" % [key for key in eye_keys if not Control.SETTING_BY_KEY.get(key)])
+check("all five are targeted rows",
+      all(Control.SETTING_BY_KEY[key].get("target") for key in eye_keys))
+check("the eye section is in the table", "Eye highlights" in Control.SECTION_ORDER,
       "%s" % (Control.SECTION_ORDER,))
 for row in targeted:
     say("     %-28s %-8s %r" % (row["key"], row["kind"], row.get("target")))
@@ -114,6 +118,20 @@ check("_should_report is quiet about the body's eye rows",
 
 say()
 say("4. hook the drivers up")
+
+
+def expected_drivers(materials):
+    """What `hook` should make, derived from the table rather than written down: one curve per number target and four
+    per colour target, over every row each copy actually owns. A literal here went stale the moment the decal rows
+    were added, which is exactly what a test must not do."""
+    total = 0
+    for material in materials:
+        for setting in Control.SETTINGS:
+            total += len(Control.setting_targets(material, setting)) * (4 if setting["kind"] == "colour" else 1)
+    return total
+
+
+expected = expected_drivers(materials)
 report = Control.hook(context)
 say("     %d driver(s) over %d cop(y/ies)" % (report["drivers"], report["copies"]))
 say("     notes: %s" % (report["notes"] or "none",))
@@ -127,7 +145,7 @@ tree = eye.node_tree
 drivers = list(tree.animation_data.drivers) if tree.animation_data else []
 mine = [curve for curve in drivers if curve.data_path in Control._own_driver_paths(eye)]
 check("11 drivers on the eye (1 + 1 + 1 + 4 + 4)", len(mine) == 11, "%d" % len(mine))
-check("298 in the scene (41 per body copy + the eye's 11)", report["drivers"] == 298, "%d" % report["drivers"])
+check("the driver total is what the table implies", report["drivers"] == expected, "%d, expected %d" % (report["drivers"], expected))
 check("hook's own verification is clean", report["verified"]["wrong_count"] == 0,
       "%d wrong of %d checked" % (report["verified"]["wrong_count"], report["verified"]["checked"]))
 
@@ -176,7 +194,7 @@ check("the value survived the bake", abs(float(value_node.outputs[0].default_val
       "%.4f" % value_node.outputs[0].default_value)
 check("status() says baked", Control.status(context)[0] == "baked", Control.status(context)[0])
 again = Control.hook(context)
-check("re-hooking restores 298 drivers", again["drivers"] == 298, "%d" % again["drivers"])
+check("re-hooking restores the same total", again["drivers"] == expected, "%d, expected %d" % (again["drivers"], expected))
 check("status() says driven again", Control.status(context)[0] == "driven", Control.status(context)[0])
 
 say()

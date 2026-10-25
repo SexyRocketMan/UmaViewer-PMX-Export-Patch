@@ -108,7 +108,7 @@ say("global block: %d call(s), %d label/prop text(s)" % (len(log), len(labels)))
 for want in ("Crying", "Tremble rate", "Tremble amount", "Highlight colour", "Second highlight colour"):
     check("draws %r" % want, want in labels)
 check("also draws the old rows", "Diffuse Intensity" in labels and "Emission Intensity" in labels)
-check("shows the row count of the table", any("25 setting(s)" in (text or "") for _kind, text, _d in log),
+check("shows the row count of the table", any(("%d setting(s)" % len(Control.SETTINGS)) in (text or "") for _kind, text, _d in log),
       "%s" % [text for _kind, text, _d in log if text and "setting" in str(text)][:3])
 check("no empty label was drawn", "" not in [text for kind, text, _d in log if kind in ("prop", "label")])
 
@@ -127,7 +127,7 @@ say("  mentions: %s" % [text for text in texts if "shading for" in str(text).low
 check("draws her own Crying row", "Crying" in texts)
 check("and her other own rows", "Second highlight colour" in texts)
 check("says how many of her settings she has set",
-      any("of 25 set" in str(text) for text in texts), "%s" % [t for t in texts if "set" in str(t)][:3])
+      any(("of %d set" % len(Control.KEYS)) in str(text) for text in texts), "%s" % [t for t in texts if "set" in str(t)][:3])
 
 say()
 say("RESULT: %s" % ("all checks passed" if not failures else "FAILED - " + "; ".join(failures)))
