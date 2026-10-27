@@ -161,18 +161,12 @@ public class UISettingsAnimation : MonoBehaviour
     }
 
     /// <summary>
-    /// Bone names keep a switch of their own: nothing else governs them, and it is what keeps a recorded
-    /// vmd in step with an exported model. Morph names deliberately do not have one any more - they follow
-    /// <see cref="Config.PmxMorphNameMode"/> and the model tab's naming row, because a motion and its model
-    /// selecting their spellings independently is how they silently stopped matching.
+    /// There is deliberately no naming switch here any more, for bones or for morphs: a recorded vmd
+    /// carries the model's own names - the rig's for bones, <see cref="Config.PmxMorphNameMode"/> for
+    /// morphs - because a motion spelled differently from its model is silently useless. Both switches
+    /// that used to allow exactly that are gone: japanese bone names named bones no exported pmx has, and
+    /// japanese morph names had no complete table to draw on.
     /// </summary>
-    public void EnableEnglishVmdBoneNames(bool enable)
-    {
-        Config.Instance.VmdUseEnglishBoneNames = enable;
-        Debug.Log($"{(enable ? "English" : "Japanese")} bone names will be used for exported vmds now");
-        Config.Instance.UpdateConfig(false);
-    }
-
     public static string ToFrameFormat(float time, float frameRate)
     {
         int frames = Mathf.FloorToInt(time % 1 * frameRate);

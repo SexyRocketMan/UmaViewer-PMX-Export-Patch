@@ -63,9 +63,27 @@ What changed in code:
 - **`VmdUseEnglishMorphNames` is deleted** (`Config.cs`) and with it
   `UISettingsAnimation.EnableEnglishVmdMorphNames`, the recorder's Japanese branch and its warning. A motion
   and its model can no longer be spelled differently: `ConvertMorphName` always calls
-  `MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode)`. `VmdUseEnglishBoneNames` **stays**
-  (nothing else governs bone names) and its tip is now the `Bone names: English` label text.
+  `MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode)`.
   **This is also what orphaned `VmdMorphConvertSetting`** — that Japanese branch was its only reader.
+- **`VmdUseEnglishBoneNames` is deleted too, later in the same session** — the previous handoff said to keep
+  it; the user overruled that after seeing the argument below. `UISettingsAnimation.EnableEnglishVmdBoneNames`
+  goes with it, `GetBoneNameForExport` loses its japanese branch (and the `センター`/`グルーブ` naming
+  substitution, which only applied to japanese names; `UseCenterAsParentOfAll` stays, it also drives the IK
+  recording maths), and the two `const`s it used are gone. A missing map entry is now a `LogError` rather than
+  a silent japanese name — the table is complete (52 of 52 recordable bones), so it should be unreachable.
+
+  Why this is *not* the same argument as the morph one, which matters for anyone tempted to re-litigate:
+  the bone side is complete. `BoneNames` is the full MMD standard set and `EnglishBoneNameMap` maps every
+  member. The argument is divergence, not data: `ModelExporter.cs:581` writes
+  `pmxbone.Name = pmxbone.NameEn = bone.name` — the rig's english names, with no option for anything else — so
+  a japanese-spelled vmd could not drive any pmx this project exports. It was the last remaining way to
+  produce the silently-useless motion we had just removed from morphs.
+
+  **The one thing lost:** a recorded motion can no longer be played on a *stock* MMD model (Miku and friends),
+  which is what the japanese names were for. If that ever comes back, the honest fix is japanese bone names on
+  the **model** side too — PMX carries a display name and an english name per bone, so the exporter could
+  write `Name` japanese and `NameEn` english and the japanese path would drive our own pmx. Do not resurrect a
+  vmd-only switch; that is the bug, not the feature.
 - **The mode-0 warning survives** at record time (`MorphNaming.ModelAndMotionNamesAgree`), which the old
   queue said to delete along with the toggle path. Kept deliberately: it is the one place that tells a user,
   at the moment they waste an hour, that a mode-0 model cannot be driven. Delete it if you disagree.
@@ -88,6 +106,7 @@ What changed in code:
 | `-MorphNameMode 3` | exit 1: `FAILED: -umaMorphNameMode takes 0 (tagged), 1 (short english) or 2 (unified), not 3` |
 | `-MorphNameMode 0` (`C:\tmp\mode0`) | 253 morphs, tagged spelling (`EyeBrow_1_R(WaraiA)[M_Face]`), and the inspector flags 240 of them as >15 bytes — model-only, exactly as documented |
 | after the scene edit | 5,798,573 B, byte-identical to the pre-edit default run; log has no `Failed to call`, no `NullReference`, no exception |
+| bone-switch retirement | `dotnet build` 0 errors; a parse of the file confirms `EnglishBoneNameMap` covers **52 of 52** recordable `BoneNames` members (only `None` is unmapped, and it never reaches the recorder), so the new `LogError` fallback is unreachable. No reference to the switch survives in any `.cs` |
 
 **`_blush.png` is gone and the bakes are named**: both bakes are on disk as
 `tex_chr1001_00_cheek0_blush.png` / `…cheek1_blush.png` and both are named by the pmx's texture table. A
@@ -201,6 +220,7 @@ texture table; `Tools\probe_decal_normals.py` measures which way each decal part
 Advanced morphs on/off must be testable from the panel; decals stay on the body; the blush is shelved; the
 black key is gone; masks are gone; morph naming is **one dropdown with three modes** (`Both` retired,
 `Unified` in slot 2); a japanese mode is **dropped, not deferred** — the table stays but nothing reads it,
-and it comes back only if a real schema appears; vmd and pmx naming must not be independently selectable;
-booleans stay checkboxes unless they grow variants; enum renumbering needs no `Config.json` migration because
-each build carries its own.
+and it comes back only if a real schema appears; **naming is english-only on both sides — the bone-names
+switch is retired too**, accepting that a recorded motion no longer plays on a stock MMD model; vmd and pmx
+naming must not be independently selectable; booleans stay checkboxes unless they grow variants; enum
+renumbering needs no `Config.json` migration because each build carries its own.

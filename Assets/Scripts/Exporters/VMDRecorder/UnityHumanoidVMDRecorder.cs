@@ -33,8 +33,6 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public int FrameNumber { get; private set; } = 0;
     int frameNumberSaved = 0;
     const float FPSs = 0.03333f;
-    const string CenterNameString = "センター";
-    const string GrooveNameString = "グルーブ";
 
     public enum BoneNames
     {
@@ -104,32 +102,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         { BoneNames.右足ＩＫ, "Ankle_R_IK" }
     };
 
+    /// <summary>
+    /// The name a bone gets in the vmd: the rig's own name, which is also the name
+    /// <see cref="ModelExporter"/> writes into the pmx (it sets each bone's display and english field to
+    /// <c>bone.name</c>). The japanese standard names this recorder was originally written against - the
+    /// ones <see cref="BoneNames"/> spells - do not exist in any pmx this project exports, so a vmd
+    /// spelled that way could not drive its own model: the keyframes would be dropped on import with
+    /// nothing said. That is why there is no longer a switch here at all.
+    /// </summary>
     private string GetBoneNameForExport(BoneNames boneName)
     {
-        // Check if we should use English names
-        if (Config.Instance.VmdUseEnglishBoneNames)
-        {
-            if (EnglishBoneNameMap.TryGetValue(boneName, out string englishName))
-            {
-                return englishName;
-            }
-            else
-            {
-            Debug.LogWarning($"Bone name lookup failed for {boneName}");
-        }
-        }
-        
-        // Default: Use Japanese names (original behavior)
-        string boneNameString = boneName.ToString();
-        if (boneName == BoneNames.全ての親 && UseCenterAsParentOfAll)
-    {
-            boneNameString = CenterNameString;
-        }
-        if (boneName == BoneNames.センター && UseCenterAsParentOfAll)
-        {
-            boneNameString = GrooveNameString;
-        }
-        return boneNameString;
+        if (EnglishBoneNameMap.TryGetValue(boneName, out string englishName)) return englishName;
+
+        // every bone the recorder records has an entry, so reaching this is a bug in the table rather
+        // than a mode the user chose. Say it loudly instead of quietly writing a name nothing drives.
+        Debug.LogError($"[VMD] no english name for {boneName}: the vmd will carry '{boneName}' and no "
+                       + "exported model will answer to it");
+        return boneName.ToString();
     }
 
     //コンストラクタにて初期化

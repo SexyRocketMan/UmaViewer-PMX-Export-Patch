@@ -8,23 +8,25 @@ is left is scene work in `Assets/Scenes/Version2.unity`.
 
 | Feature | Wired through |
 |---|---|
-| `Bone names: English` in vmds | `UISettingsAnimation.EnableEnglishVmdBoneNames` (already called by a scene toggle; the row's label wants renaming, see below) |
 | `Record VMD` recording one clean loop | the existing button calls `UmaViewerUI.AutoRecordVMD` |
 | Texture set rows for props/scenes | built in code by `UISettingsModel.LoadTextureSetPanel` from `UmaViewerUI.UmaContainerTogglePrefab`, then cleared again on unload. No scene object needed - only keep `UISettingsModel.MaterialsList` assigned. |
 
-## Two scene edits the naming change needs
+## One scene edit the naming change needs
 
-Both are in `Assets/Scenes/Version2.unity`, so they are editor work like the rows further down.
+In `Assets/Scenes/Version2.unity`, so editor work like the rows further down.
 
-1. **Delete the "English morph names" toggle.** Its callback was
-   `UISettingsAnimation.EnableEnglishVmdMorphNames`, which no longer exists: morph names now follow the
-   model tab's naming dropdown, because a motion and its model choosing their spellings independently is
-   how they silently stopped matching. The row's `onValueChanged` reference is now dangling - Unity logs
-   `Failed to call function EnableEnglishVmdMorphNames` when the toggle is clicked - so clear that call
-   list or delete the row. Nothing in `Config.json` depends on it any more (`VmdUseEnglishMorphNames` is
-   gone; a stale key in an old `Config.json` is simply ignored).
-2. **Relabel the bone-names toggle** to `Bone names: English`. That switch stays - it is what keeps a
-   vmd's bone names in step with the pmx, and nothing else governs them.
+**Delete the "English morph names" toggle.** Its callback was
+`UISettingsAnimation.EnableEnglishVmdMorphNames`, which no longer exists: morph names now follow the
+model tab's naming dropdown, because a motion and its model choosing their spellings independently is
+how they silently stopped matching. The row's `onValueChanged` reference is now dangling - Unity logs
+`Failed to call function EnableEnglishVmdMorphNames` when the toggle is clicked - so clear that call
+list or delete the row. Nothing in `Config.json` depends on it any more (`VmdUseEnglishMorphNames` is
+gone; a stale key in an old `Config.json` is simply ignored).
+
+The **bone-names switch went the same way**, and its row is already deleted from the scene: there is no
+`VmdUseEnglishBoneNames`, no `EnableEnglishVmdBoneNames`, and a recorded vmd always carries the rig's own
+bone names. Nothing to do, but do not go looking for a missing row.
+
 
 ## The rows to add
 
@@ -104,10 +106,10 @@ actually in the corresponding `.pmx`.
 ## Step by step (by duplicating an existing row)
 
 1. Open `Assets/Scenes/Version2.unity`.
-2. Find the settings panel that owns `UISettingsModel`: select any scene toggle that is already wired, e.g.
-   the bone-names one, whose `onValueChanged` calls `EnableEnglishVmdBoneNames`, and look at the **target** of
-   that call - that object is the `UISettingsAnimation` object. The `UISettingsModel` object is found the same
-   way through one of its own toggles (the "Open with T-Pose" row).
+2. Find the settings panel that owns `UISettingsModel`: select any scene control that is already wired, e.g.
+   the A-pose toggle, whose `onValueChanged` calls `EnableAPoseRestPose`, and look at the **target** of that
+   call - that object is the `UISettingsModel` object. The `UISettingsAnimation` object is found the same way
+   through the key-reduction slider.
 3. Duplicate that row (`Ctrl+D`), rename the GameObject, change its label text, and clear the duplicated
    toggle's `onValueChanged` list before adding your own.
 4. On the new control, add the callback: `onValueChanged` (`+`) → drag the `UISettingsModel` /
