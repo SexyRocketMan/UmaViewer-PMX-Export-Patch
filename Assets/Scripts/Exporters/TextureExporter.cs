@@ -31,9 +31,23 @@ public class TextureExporter
     //: how the drop maps onto alpha; below 1 the faint outer edge of the blush reaches further
     const float BlushCurve = 0.7f;
 
-    static public Texture2D BakeBlush(Texture2D source)
+    /// <summary>
+    /// The bake: the game's multiply cheek map turned into the alpha-blended rose an MMD material can draw
+    /// (the numbers behind it, and why they are conversion choices rather than game data, are documented on
+    /// <see cref="BlushTint"/> above).
+    ///
+    /// <paramref name="name"/> overrides what the bake is called. Pass the name the export already writes the
+    /// source under: a texture object can reach a call site unnamed - <see cref="duplicateTexture"/> copies
+    /// the source's name, and the source may have none to copy - and naming the bake after that produces
+    /// `_blush.png`, a file the pmx then lists under a name that says nothing about what it is. That is the
+    /// defect this parameter fixes. When neither name is usable the bake is skipped rather than written: an
+    /// unnamed artifact is worse than no artifact, which is why the highlight bake is gone from the export.
+    /// </summary>
+    static public Texture2D BakeBlush(Texture2D source, string name = null)
     {
         if (source == null) return null;
+        string sourceName = !string.IsNullOrWhiteSpace(name) ? name : source.name;
+        if (string.IsNullOrWhiteSpace(sourceName)) return null;
         Texture2D readable = duplicateTexture(source);
         Color[] pixels = readable.GetPixels();
 
@@ -87,7 +101,7 @@ public class TextureExporter
             pixels[i] = new Color(BlushTint.r, BlushTint.g, BlushTint.b, alpha);
         }
         Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
-        baked.name = BlushName(source.name);
+        baked.name = BlushName(sourceName);
         baked.SetPixels(pixels);
         baked.Apply();
         return baked;
@@ -241,7 +255,9 @@ public class TextureExporter
                             // registered them as dependencies. A dead end: kept in history, not in every user's folder.
                             if (named && IsMultiply(mat))
                             {
-                                Texture2D blush = BakeBlush(mat_texture);
+                                // named after `tex_name`, not after the texture object: the bake used to name
+                                // itself from its source, which is empty often enough to have shipped `_blush.png`
+                                Texture2D blush = BakeBlush(mat_texture, tex_name);
                                 if (blush != null)
                                 {
                                     string blushPath = savePath + blush.name + ".png";
@@ -288,7 +304,7 @@ public class TextureExporter
                 // the cheek pair is a multiply map either way, so both get the MMD bake
                 if (tex_name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    Texture2D blush = BakeBlush(texture);
+                    Texture2D blush = BakeBlush(texture, tex_name);
                     if (blush != null)
                     {
                         string blushPath = savePath + blush.name + ".png";

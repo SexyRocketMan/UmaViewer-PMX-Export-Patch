@@ -18,10 +18,11 @@ public class UISettingsModel : MonoBehaviour
     [SerializeField] private Slider _outlineWidthSlider;
 
     /// <summary>
-    /// Export options. Both are optional: an unassigned control only means the row is not in the scene,
+    /// Export options. All are optional: an unassigned control only means the row is not in the scene,
     /// <see cref="Config.json"/> still works and the exporter still follows it.
     /// </summary>
     [SerializeField] private Toggle _aPoseRestPose;
+    [SerializeField] private Toggle _extraMorphs;
     [SerializeField] private TMP_Dropdown _morphNameMode;
 
     /// <summary>
@@ -126,6 +127,7 @@ public class UISettingsModel : MonoBehaviour
     public void ApplySettings()
     {
         if (_aPoseRestPose != null) _aPoseRestPose.SetIsOnWithoutNotify(Config.Instance.PmxAPoseRestPose);
+        if (_extraMorphs != null) _extraMorphs.SetIsOnWithoutNotify(Config.Instance.PmxExtraMorphs);
         if (_morphNameMode != null) _morphNameMode.SetValueWithoutNotify((int)Config.Instance.PmxMorphNameMode);
         if (_morphNameModeText != null) _morphNameModeText.text = MorphNameModeLabel(Config.Instance.PmxMorphNameMode);
     }
@@ -143,8 +145,27 @@ public class UISettingsModel : MonoBehaviour
     }
 
     /// <summary>
-    /// Naming of morphs in exported models and motions. Dropdown order matches
-    /// <see cref="PmxMorphNameMode"/>: 0 tagged (Blender addon), 1 short english, 2 both, 3 unified.
+    /// Export the facial morphs an MMD morph cannot express as extra vertex morphs instead of losing
+    /// them - the cheek blush, the eye manga expressions, the tears. What each one is called, which
+    /// decals stay out and what a morph cannot carry at all is written up in the
+    /// <see cref="Config.PmxExtraMorphsTip"/> row of <see cref="Config.json"/> and in
+    /// docs/PMX_EXTENSIONS.md.
+    ///
+    /// This row is the on/off test for the whole feature: the option existed in Config.json and on the
+    /// command line (-umaNoExtraMorphs) before it had a control, so comparing the two exports meant
+    /// editing Config.json by hand.
+    /// </summary>
+    public void EnablePmxExtraMorphs(bool enable)
+    {
+        if (Config.Instance.PmxExtraMorphs == enable) return;
+        Config.Instance.PmxExtraMorphs = enable;
+        Debug.Log($"[Export] advanced morphs are {(enable ? "on, decals export as vertex morphs" : "off, decals stay where the game draws them")}");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    /// <summary>
+    /// Naming of morphs in exported models and recorded motions. Dropdown order matches
+    /// <see cref="PmxMorphNameMode"/>: 0 tagged (Blender addon), 1 short english, 2 unified.
     /// </summary>
     public void ChangeMorphNameMode(int mode)
     {
@@ -160,7 +181,7 @@ public class UISettingsModel : MonoBehaviour
     /// <summary>
     /// What each naming mode does, spelled out on one morph - the smiling right eyebrow of a character
     /// ("EyeBrow_1_R(WaraiA)[M_Face]"). Every morph follows the same rules; docs/MORPH_NAMES.md lists all
-    /// 192 of them in all four spellings.
+    /// 192 of them in all three spellings.
     /// </summary>
     static string MorphNameModeLabel(PmxMorphNameMode mode)
     {
@@ -171,9 +192,6 @@ public class UISettingsModel : MonoBehaviour
                        + "Original UmaViewer naming schema: stock Uma Blender Addon compatible. Too long for the VMD 15-byte limit, morphs are not resolved in Blender.";
             case PmxMorphNameMode.ShortEnglish:
                 return "Short english: EyeBrow_1_R. Fits a motion, but the name says nothing about what the morph does.";
-            case PmxMorphNameMode.Both:
-                return "Both: EyeBrow_1_R(WaraiA)[M_Face] + EyeBrow_1_R\n"
-                       + "The addon stays happy and motions still land; twice as many morphs.";
             default:
                 return "Unified: Brow_WaraiA_R\n"
                        + "English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive "

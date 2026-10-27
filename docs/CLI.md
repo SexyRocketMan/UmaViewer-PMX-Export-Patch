@@ -218,7 +218,7 @@ colours them at runtime - so showing untextured there is expected, not a bug.
 
 | Option | Effect |
 |---|---|
-| `-MorphNameMode 0\|1\|2\|3` | Morph and shape-key spelling: `0` tagged (`Eye_20_R(XRange)[M_Face]`, what the **stock** Blender addon matches), `1` short (`Eye_20_R`), `2` both, `3` unified (`Eye_XRange_R`) - the default, and what the patched addon in this fork resolves. Models and motions must use the same mode or the motion's morph tracks land on nothing. |
+| `-MorphNameMode 0\|1\|2` | Morph and shape-key spelling, for the model **and** the motion it is recorded with: `0` tagged (`Eye_20_R(XRange)[M_Face]`, what the **stock** Blender addon matches, but 27-30 bytes - too long for a vmd morph name field, so no motion can drive a model exported this way), `1` short (`Eye_20_R`), `2` unified (`Eye_XRange_R`) - the default, and what the patched addon in this fork resolves. Models and motions must use the same mode or the motion's morph tracks land on nothing, which is why there is no separate motion-side switch. `3` used to be a fourth mode ("both", tagged plus a short alias) and is rejected now. |
 | `-APose` | Exports the model with both upper arms rotated 38.5° into the A-pose that recorded motions are relative to, so a model and a motion line up in Blender without posing anything by hand. **Off by default** - rigging and retargeting tools expect a T-pose rest. |
 | `-PlainMaterials` | Writes plain MMD materials: no uma shader settings in the material comment, plain diffuse/specular/outline values. Use it for a model meant to be used *without* the uma addon. |
 | `-NoExtraMorphs` | Writes no advanced morphs at all: no deploy or tear morphs, and none of the `morph=` / `blend=` / `scroll=` tokens that describe them. The morph *parts* then stay wherever the game draws them, so the decals are permanently visible - that is what `Config.PmxExtraMorphs = false` does, and it is the opposite of `-PlainMaterials`, which keeps the morphs and drops the shader values. |
@@ -297,7 +297,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-RecordFps <n>` | 30 | Frame rate of the recording |
 | `-RecordReduction <n>` | 0 (use `Config.json`) | Keep every `n`th key; `0` means the configured value, normally 1 |
 | `-RecordMode deterministic\|realtime` | `deterministic` | `deterministic` pins one frame per sample; `realtime` is the legacy sampler |
-| `-MorphNameMode -1\|0\|1\|2\|3` | -1 (use `Config.json`, i.e. unified) | Morph-name spelling, see [above](#7-change-what-the-exported-file-contains) |
+| `-MorphNameMode -1\|0\|1\|2` | -1 (use `Config.json`, i.e. unified) | Morph-name spelling, see [above](#7-change-what-the-exported-file-contains) |
 | `-APose` | off | Export the A-pose rest pose |
 | `-PlainMaterials` | off | Export plain MMD materials |
 | `-NoExtraMorphs` | off | Export without the advanced morphs and their tokens |

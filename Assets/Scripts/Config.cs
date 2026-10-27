@@ -47,12 +47,10 @@ public class Config
     public string LastMotionFolderTip = "Folder the VMD save dialogs open in. Updated after every save, so the next one starts where the last one went.";
     public string LastMotionFolder = "";
 
-    public string VmdUseEnglishBoneNamesTip = "True = uses the same bone names as exported models, false = uses japanese names";
+    public string VmdUseEnglishBoneNamesTip = "Bone names: English. True = a recorded vmd uses the same bone names as exported models, which is what keeps a motion and its model in step; false = japanese names. There is no separate switch for morph names: they always follow PmxMorphNameMode, because a motion spelled differently from its model is silently useless.";
     public bool VmdUseEnglishBoneNames = true;
-    public string VmdUseEnglishMorphNamesTip = "True = uses the same morph names as exported models, false = uses japanese names";
-    public bool VmdUseEnglishMorphNames = true;
 
-    public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and vmd motions. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but is too long for a vmd morph name; 1 = short english names (Eye_2_L); 2 = both, tagged morphs plus short english aliases; 3 = unified, descriptive and vmd sized (Brow_WaraiA_R)";
+    public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and in the vmd motions recorded beside them - one setting for both, because a motion can only drive a model whose morphs are spelled the same way, and the two used to be independently selectable. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but that is 27-30 bytes and a vmd morph name field holds 15, so a model exported this way cannot be driven by any motion; 1 = short english names (Eye_2_L), fits a motion but says nothing about what the morph does; 2 = unified, descriptive and vmd sized (Brow_WaraiA_R)";
     public PmxMorphNameMode PmxMorphNameMode = PmxMorphNameMode.Unified;
 
     public string PmxAPoseRestPoseTip = "true/false. Exports the model with both upper arms rotated 38.5 degrees into the A-pose that motion recording is relative to, so a recorded vmd lines up in Blender on its own - no posing the model and re-importing the motion with \"Use current pose as rest pose\". true for MMD style use, false (default) keeps the plain T-pose rest that rigging/retargeting expects.";
@@ -342,7 +340,14 @@ public enum WorkMode
 }
 
 /// <summary>
-/// How vertex morphs are named in exported .pmx models.
+/// How vertex morphs are named in exported .pmx models and in the vmds recorded beside them.
+///
+/// The values are numbered explicitly because this enum is persisted into Config.json as a number. The
+/// numbering changed once: 2 used to be <c>Both</c> (tagged plus a short alias) and <c>Unified</c> was 3.
+/// <c>Both</c> is gone - it wrote 432 morph entries for what <c>Unified</c> does in 192, and nothing
+/// needed the tagged spelling in the same file as a motion - so <c>Unified</c> took slot 2. Every build
+/// ships its own Config.json, so no migration is needed; a stale value of 3 simply lands on the
+/// fail-safe in <see cref="MorphNaming.NamesFor"/>.
 /// </summary>
 public enum PmxMorphNameMode
 {
@@ -354,18 +359,18 @@ public enum PmxMorphNameMode
     /// </summary>
     BlenderCompatible = 0,
 
-    /// <summary>Short names only (e.g. "Eye_20_R"), matching the names used in exported vmd motions.</summary>
+    /// <summary>
+    /// Short names only (e.g. "Eye_20_R"). Fits a vmd, but the name says nothing about what the morph
+    /// does - which is what <see cref="Unified"/> exists to fix.
+    /// </summary>
     ShortEnglish = 1,
-
-    /// <summary>Emits both the tagged and the short name for every morph.</summary>
-    Both = 2,
 
     /// <summary>
     /// Descriptive, unique and within the vmd byte limit: english group + romaji tag + side
     /// (e.g. "Brow_WaraiA_R", "Eye_XRange_L"). One name for the model and the motion, see
     /// <see cref="MorphNaming"/>. Default.
     /// </summary>
-    Unified = 3
+    Unified = 2
 }
 
 [Serializable]

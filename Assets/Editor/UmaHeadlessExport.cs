@@ -51,7 +51,7 @@ using UnityEngine.Rendering;
 ///                          clip of that sound asset, then exit
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
-///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short, 2 both, 3 unified)
+///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short english, 2 unified)
 ///   -umaAPose            export models with the arms in the A-pose that recorded motions are relative to
 ///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
 ///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
@@ -410,6 +410,14 @@ public static class UmaHeadlessExport
 
                     if (options.MorphNameMode >= 0)
                     {
+                        // the enum no longer has a slot 3 (it used to be "both"), and an unknown value would
+                        // otherwise be cast straight through and only show up as the wrong spelling in the file
+                        if (options.MorphNameMode > (int)PmxMorphNameMode.Unified)
+                        {
+                            Fail($"-umaMorphNameMode takes 0 (tagged), 1 (short english) or 2 (unified), not {options.MorphNameMode}");
+                            return;
+                        }
+
                         Config.Instance.PmxMorphNameMode = (PmxMorphNameMode)options.MorphNameMode;
                         Debug.Log($"{Tag} morph naming mode overridden to {Config.Instance.PmxMorphNameMode} "
                                   + $"({(int)Config.Instance.PmxMorphNameMode})");

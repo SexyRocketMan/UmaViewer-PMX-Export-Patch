@@ -1427,16 +1427,11 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     }
                 }
                 Debug.Log($"[Morph Debug] Final MorphDrivers count: {MorphDrivers.Count}");
-                if (Config.Instance.VmdUseEnglishMorphNames && !MorphNaming.ModelAndMotionNamesAgree(Config.Instance.PmxMorphNameMode))
+                if (!MorphNaming.ModelAndMotionNamesAgree(Config.Instance.PmxMorphNameMode))
                 {
                     Debug.LogWarning("[VMD] PmxMorphNameMode 0 (BlenderCompatible) names morphs longer than a vmd morph name field, "
-                                     + "so exported motions cannot drive the exported model. Use mode 3 (Unified) or 2 (Both) for motions.");
-                }
-                else if (!Config.Instance.VmdUseEnglishMorphNames)
-                {
-                    Debug.LogWarning("[VMD] Japanese vmd morph names do not match any morph name an exported model can carry, "
-                                     + "so Blender will drop the morph keyframes on import. Enable 'english morph names' in the "
-                                     + "animation settings to match the exported model.");
+                                     + "so this motion cannot drive a model exported in that mode. Export the model with mode 2 "
+                                     + "(Unified) if the two are meant to be used together.");
                 }
                 foreach (var kvp in MorphDrivers)
                 {
@@ -1455,32 +1450,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         /// <summary>
         /// The name this morph gets in the vmd. It has to be the same name <see cref="ModelExporter"/>
         /// wrote into the model, otherwise Blender's mmd_tools silently drops the morph keyframes when
-        /// the motion is imported - both sides therefore go through <see cref="MorphNaming"/>.
+        /// the motion is imported - both sides therefore go through <see cref="MorphNaming"/>, and there
+        /// is deliberately no separate switch for motion-side morph names: a motion spelled differently
+        /// from its model is silently useless, so <see cref="Config.PmxMorphNameMode"/> decides both.
         /// </summary>
         public string ConvertMorphName(FacialMorph morph)
         {
             string name = morph != null ? morph.name : "";
             string tag = morph != null ? morph.tag : "";
 
-            if (Config.Instance.VmdUseEnglishMorphNames)
-            {
-                return MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode);
-            }
-
-            // Default behavior: Convert to Japanese MMD standard names
-            if (Config.Instance.VmdMorphConvertSetting != null && Config.Instance.VmdMorphConvertSetting.Count > 0)
-            {
-                var setting = Config.Instance.VmdMorphConvertSetting;
-                foreach (var val in setting)
-                {
-                    foreach (var v in val.UMAMorph)
-                    {
-                        if(v.Equals(name)) return val.MMDMorph;
-                    }
-                }
-            }
-
-            return MorphNaming.ShortName(name);
+            return MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode);
         }
 
         public void RecrodAllMorph()

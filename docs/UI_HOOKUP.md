@@ -8,18 +8,32 @@ is left is scene work in `Assets/Scenes/Version2.unity`.
 
 | Feature | Wired through |
 |---|---|
-| English bone names in vmds | `UISettingsAnimation.EnableEnglishVmdBoneNames` (already called by a scene toggle) |
-| English morph names in vmds | `UISettingsAnimation.EnableEnglishVmdMorphNames` (already called by a scene toggle) |
+| `Bone names: English` in vmds | `UISettingsAnimation.EnableEnglishVmdBoneNames` (already called by a scene toggle; the row's label wants renaming, see below) |
 | `Record VMD` recording one clean loop | the existing button calls `UmaViewerUI.AutoRecordVMD` |
 | Texture set rows for props/scenes | built in code by `UISettingsModel.LoadTextureSetPanel` from `UmaViewerUI.UmaContainerTogglePrefab`, then cleared again on unload. No scene object needed - only keep `UISettingsModel.MaterialsList` assigned. |
 
-## The three rows to add
+## Two scene edits the naming change needs
+
+Both are in `Assets/Scenes/Version2.unity`, so they are editor work like the rows further down.
+
+1. **Delete the "English morph names" toggle.** Its callback was
+   `UISettingsAnimation.EnableEnglishVmdMorphNames`, which no longer exists: morph names now follow the
+   model tab's naming dropdown, because a motion and its model choosing their spellings independently is
+   how they silently stopped matching. The row's `onValueChanged` reference is now dangling - Unity logs
+   `Failed to call function EnableEnglishVmdMorphNames` when the toggle is clicked - so clear that call
+   list or delete the row. Nothing in `Config.json` depends on it any more (`VmdUseEnglishMorphNames` is
+   gone; a stale key in an old `Config.json` is simply ignored).
+2. **Relabel the bone-names toggle** to `Bone names: English`. That switch stays - it is what keeps a
+   vmd's bone names in step with the pmx, and nothing else governs them.
+
+## The rows to add
 
 | # | Option | Control to add | Where | Method to bind | Serialized field to assign | Default |
 |---|---|---|---|---|---|---|
 | 1 | A-pose rest pose for exported models | `Toggle` | Model tab, next to "Open with T-Pose" | `UISettingsModel.EnableAPoseRestPose` | `_aPoseRestPose` | off |
-| 2 | Morph naming mode | `TMP_Dropdown` | Model tab, near the export button | `UISettingsModel.ChangeMorphNameMode` | `_morphNameMode` | Unified (index 3) |
-| 3 | VMD key reduction | `Slider` + label | Animation tab, under the record button | `UISettingsAnimation.ChangeVmdKeyReduction` | `_keyReduction`, `_keyReductionText` | 1 |
+| 2 | Advanced morphs (decals as vertex morphs) | `Toggle` | Model tab, beside the naming dropdown | `UISettingsModel.EnablePmxExtraMorphs` | `_extraMorphs` | **on** |
+| 3 | Morph naming mode | `TMP_Dropdown` | Model tab, near the export button | `UISettingsModel.ChangeMorphNameMode` | `_morphNameMode` | Unified (index 2) |
+| 4 | VMD key reduction | `Slider` + label | Animation tab, under the record button | `UISettingsAnimation.ChangeVmdKeyReduction` | `_keyReduction`, `_keyReductionText` | 1 |
 
 The serialized fields are `[SerializeField] private`, so they show up in the inspector as `A Pose Rest
 Pose`, `Morph Name Mode`, `Key Reduction`, `Key Reduction Text`. They are all **optional**: an unassigned
@@ -39,8 +53,13 @@ the shared container toggle prefab, which is what the materials list already use
   |---|---|---|---|
   | 0 | `Tagged (stock Blender addon)` | `EyeBrow_1_R(WaraiA)[M_Face]` | you use the unpatched `uma_addon` and never import vmds |
   | 1 | `Short english` | `EyeBrow_1_R` | the old fork behaviour |
-  | 2 | `Both (tagged + short)` | both of the above | bridging: addon and motion both work |
-  | 3 | `Unified (recommended)` | `Brow_WaraiA_R` | normal use; the only mode that works for model **and** motion |
+  | 2 | `Unified (recommended)` | `Brow_WaraiA_R` | normal use; the only mode that works for model **and** motion |
+
+  There used to be a fourth (`Both`, index 2: the tagged name plus a short alias). It is gone - 432 morph
+  entries for what `Unified` does in 192, and nothing needed the tagged spelling in the file that carries a
+  motion. `Unified` moved into slot 2, so **a saved dropdown value of 3 no longer means anything**: the
+  exporter falls back to `Unified` rather than to the model-only tagged spelling, and `-MorphNameMode 3` is
+  rejected on the command line. An option list that still has four entries has to lose the old index 2.
 
 * Optional description label under the dropdown: assign a `TextMeshProUGUI` to `_morphNameModeText` and the
   code writes the explanation for whichever mode is selected, including the example, so the options
@@ -50,23 +69,22 @@ the shared container toggle prefab, which is what the materials list already use
   |---|---|
   | 0 | `Tagged: EyeBrow_1_R(WaraiA)[M_Face]` / `The stock Blender addon finds these, but the name is 27 bytes and a motion can only hold 15 - so a recorded vmd cannot drive these morphs.` |
   | 1 | `Short english: EyeBrow_1_R` / `Fits a motion, but the name says nothing about what the morph does.` |
-  | 2 | `Both: EyeBrow_1_R(WaraiA)[M_Face] + EyeBrow_1_R` / `The addon stays happy and motions still land, at the cost of twice as many morphs.` |
-  | 3 | `Unified: Brow_WaraiA_R` / `English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive name for the model and the motion.` |
+  | 2 | `Unified: Brow_WaraiA_R` / `English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive name for the model and the motion.` |
 
   Leave `_morphNameModeText` empty if you would rather put the examples in the option text itself; then
   append them to the option strings, e.g. `Tagged - EyeBrow_1_R(WaraiA)[M_Face]`.
 
-### All four modes on one morph
+### All three modes on one morph
 
-Everything below is the smiling right eyebrow of character 1001, taken from four real exports (one per
-mode) rather than typed by hand:
+Everything below is the smiling right eyebrow of character 1001, taken from real exports rather than typed
+by hand (they were made while the retired `Both` mode still existed, which is why the numbering in the old
+files reads one higher for `unified`):
 
 | Mode | This morph is called | Bytes | A vmd can drive it |
 |---|---|---|---|
 | 0 tagged | `EyeBrow_1_R(WaraiA)[M_Face]` | 27 | no |
 | 1 short english | `EyeBrow_1_R` | 11 | yes |
-| 2 both | `EyeBrow_1_R(WaraiA)[M_Face]` **and** `EyeBrow_1_R` | 27 / 11 | yes (via the short alias) |
-| 3 unified | `Brow_WaraiA_R` | 13 | yes |
+| 2 unified | `Brow_WaraiA_R` | 13 | yes |
 
 Two more that show the other rules:
 
@@ -78,27 +96,28 @@ Two more that show the other rules:
 | the morphs the Blender addon builds eye controls from | `Eye_20_R(XRange)[M_Face]` | `Eye_20_R` | `Eye_XRange_R` |
 
 Over the whole character, mode 0 writes **240** morph entries (same morph on `M_Face` and `M_Mayu` kept
-apart), modes 1 and 3 write **192** (those 48 duplicates merge), and mode 2 writes **432** - the union of
-mode 0 and mode 1. The complete mapping, all 192 morphs in all four spellings, is in
-[`MORPH_NAMES.md`](MORPH_NAMES.md), and `morph_name_table.py` in the companion `UmaViewer-DevTools` tooling
-regenerates it from four exports and fails if a name in it is not actually in the corresponding `.pmx`.
+apart) and modes 1 and 2 write **192** (those 48 duplicates merge). The complete mapping, all 192 morphs in
+all three spellings, is in [`MORPH_NAMES.md`](MORPH_NAMES.md), and `morph_name_table.py` in the companion
+`UmaViewer-DevTools` tooling regenerates it from one export per mode and fails if a name in it is not
+actually in the corresponding `.pmx`.
 
 ## Step by step (by duplicating an existing row)
 
 1. Open `Assets/Scenes/Version2.unity`.
 2. Find the settings panel that owns `UISettingsModel`: select any scene toggle that is already wired, e.g.
-   the one whose `onValueChanged` calls `EnableEnglishVmdMorphNames`, and look at the **target** of that
-   call - that object is the `UISettingsAnimation` object. The `UISettingsModel` object is found the same
+   the bone-names one, whose `onValueChanged` calls `EnableEnglishVmdBoneNames`, and look at the **target** of
+   that call - that object is the `UISettingsAnimation` object. The `UISettingsModel` object is found the same
    way through one of its own toggles (the "Open with T-Pose" row).
 3. Duplicate that row (`Ctrl+D`), rename the GameObject, change its label text, and clear the duplicated
    toggle's `onValueChanged` list before adding your own.
 4. On the new control, add the callback: `onValueChanged` (`+`) → drag the `UISettingsModel` /
    `UISettingsAnimation` object into the object slot → pick the method **from the "Dynamic" section**
-   (`EnableAPoseRestPose` / `ChangeVmdKeyReduction`). For the dropdown it is under `ChangeMorphNameMode`
-   (int). Picking the static entry instead would send a fixed value and the control would do nothing.
+   (`EnableAPoseRestPose` / `EnablePmxExtraMorphs` / `ChangeVmdKeyReduction`). For the dropdown it is under
+   `ChangeMorphNameMode` (int). Picking the static entry instead would send a fixed value and the control
+   would do nothing.
 5. Select the settings object and drag the new control into the matching serialized field listed above.
-6. For the dropdown, set the option list exactly as in the table above, and set `Value` to 3 (or leave it
-   - `ApplySettings` overwrites it from `Config.json` at startup anyway).
+6. For the dropdown, set the option list exactly as in the table above (three entries), and set `Value` to 2
+   (or leave it - `ApplySettings` overwrites it from `Config.json` at startup anyway).
 7. For the slider, set `Whole Numbers` on, `Min Value` 1, `Max Value` 4, and put the label
    `TextMeshProUGUI` into `_keyReductionText`.
 8. Save the scene and commit the scene changes. The `.cs` files are already committed, so your commit
@@ -116,8 +135,12 @@ the scene's saved tick was the only thing the panel showed until you clicked it.
   A-pose. Or headless: `Tools\headless_export.ps1 -Char 1001 -Costume 00 -APose -Out x.pmx`, then import
   `x.pmx` together with a recorded motion and pose nothing by hand.
 * **Morph naming**: `Tools\headless_export.ps1 -Char 1001 -Costume 00 -Out x.pmx` then
-  `uv run Tools/pmx_inspect.py names x.pmx --require Eye_XRange_L,Eye_XRange_R` for mode 3, plus
+  `uv run Tools/pmx_inspect.py names x.pmx --require Eye_XRange_L,Eye_XRange_R` for mode 2, plus
   `uv run Tools/pmx_inspect.py names x.pmx` to see every name and its byte length.
+* **Advanced morphs**: the same export twice, once with the row on and once with it off (or `-NoExtraMorphs`),
+  into **fresh folders** - the export folder is not cleaned, so leftovers from the previous run read as
+  current output. With it on the pmx carries the `Cheek_Blush` / eye-manga / `Tear_*` morphs and the
+  `morph=` tokens; with it off, none, and the decals sit where the game draws them.
 * **Key reduction**: record, then `uv run Tools/vmd_inspect.py summary x.vmd` - the bone key count drops
   by roughly the reduction level, and `loop` still has to pass.
 * **Texture sets**: load a home scene; the materials panel lists `Texture set <variant>` rows, the active
@@ -126,10 +149,15 @@ the scene's saved tick was the only thing the panel showed until you clicked it.
 
 ## Gotchas worth knowing
 
-* **Mode 0 with english morph names is a dead end for motions.** Those names are 27-30 bytes and a vmd
-  morph name field holds 15, so the keyframes are dropped on import. The recorder logs a warning when it
-  sees that combination, and another one if japanese morph names are selected, because no exported model
-  can carry those either.
+* **Mode 0 is a dead end for motions.** Those names are 27-30 bytes and a vmd morph name field holds 15, so
+  the keyframes are dropped on import. The recorder logs a warning when it records under mode 0, and
+  `-MorphNameMode 3` - `Unified` under the retired numbering - is now rejected instead of silently
+  exporting something else.
+* **There is no japanese morph-name mode, on purpose.** The game ships no japanese morph names: the viewer
+  builds `EyeBrow_1_L` itself from an index into an english enum (`Gallop.FaceDrivenKeyTarget`), so there is
+  nothing to fall back on. The one japanese table in the repo, `Config.VmdMorphConvertSetting`, names 94 of
+  the 192 morphs and merges several of them into one, so it is a *different, incomplete* morph set rather
+  than a spelling of this one - see `HANDOFF_OPTIONS_AND_RELEASE.md`. The table is left in place, unused.
 * **Changing the naming mode is a re-export.** Models and motions have to be spelled the same way, so after
   switching the dropdown, export the model again before using an old motion with it.
 * **The A-pose row only affects exports.** Recordings are always relative to the A-pose whatever the row

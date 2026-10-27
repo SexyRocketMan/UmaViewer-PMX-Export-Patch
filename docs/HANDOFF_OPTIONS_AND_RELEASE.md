@@ -1,8 +1,8 @@
 # Handoff — options, naming and the release
 
-Written at the end of a long session. `HANDOFF_SHADER_LIBRARY.md` owns the shading library work and is still accurate;
-this one is the **exporter/add-on options** side and the state of the release. Read the "Open work, in order" section
-first — it is the queue, with the anchors checked against the code.
+Written at the end of a long session. `HANDOFF_SHADER_LIBRARY.md` owns the shading library work and is still
+accurate; this one is the **exporter/add-on options** side and the state of the release. Read the "Open work,
+in order" section first — it is the queue.
 
 ## Where things are
 
@@ -10,117 +10,139 @@ first — it is the queue, with the anchors checked against the code.
 |---|---|
 | export repo | `C:\Users\user\Documents\dev\UmaViewer-PMX-Export-Patch` (branch `feat/extra-morphs`) |
 | add-on repo | `C:\Users\user\AppData\Roaming\Blender Foundation\Blender\5.2\extensions\user_default\uma_addon` (branch `feat/morph-drivers`) |
-| add-on version | **2.34.0** (`blender_manifest.toml`) |
+| add-on version | **2.34.0** (`blender_manifest.toml`) — nothing changed it this session |
 | exporter CLI | `Tools/headless_export.ps1` + `docs/CLI.md` — **runs from here**, see "How to verify" |
 | shader libraries | `uma_addon/addons/uma_addon/operators/shaders/*.blend` beside their manifests |
 
-Both trees are clean apart from **the user's own dirty set in the fork** — as of this handoff it is:
-`Assets/Editor/UmaHeadlessExport.cs`, `Assets/Scripts/Exporters/ModelExporter.cs`,
-`Assets/Scripts/Exporters/TextureExporter.cs`, `Assets/Scripts/Exporters/VMDRecorder/UnityHumanoidVMDRecorder.cs`,
-`Assets/Scripts/Settings/UISettingsModel.cs`, `Assets/Scripts/UI/UIShortcuts.cs`, `Assets/Scripts/UmaContainerCharacter.cs`,
-`Assets/Scripts/UmaViewerBuilder.cs`, `Tools/headless_export.ps1`, `docs/CLI.md` — plus the untracked `.blend.bak` files
-the earlier handoff says to leave, and a pile of untracked `Tools/probe_*.py`. **That dirty set is work in progress, not
-this session's** (the English-naming tickboxes and the CLI live in it): read it before building on `ModelExporter` or
-`UISettingsModel`, and do not commit it wholesale.
+The add-on tree is untouched this session and still has only the four `.blend.bak` files plus
+`shaders/uma_face_blush_fixed.png` untracked.
 
-## What shipped this session (2.34.0)
+**This session's changes are committed (`1eaeff5`), and the tree is still dirty with the user's own work in
+progress.** The two could only be separated at hunk level, because they interleave in five files; anything
+further must be staged the same way. Still uncommitted, and not this session's: the wet/rain look
+(`UmaContainerCharacter.cs`, `UIShortcuts.cs`, `UISettingsModel.cs`), the export failure report
+(`UISettingsModel.cs`), the CLI and wrapper work (`UmaHeadlessExport.cs`, `Tools/headless_export.ps1`,
+`docs/CLI.md`), plus `ModelExporter.cs`, `TextureExporter.cs` and `UnityHumanoidVMDRecorder.cs` — the same ten
+files the previous handoff listed. **That WIP is a single cross-file unit**: `UIShortcuts.cs` and
+`UmaViewerBuilder.cs` call `ToggleWetLook` / `IsWetLook`, which live in the user's hunks of
+`UISettingsModel.cs`, so committing any part of it without the rest does not compile. If a future split is
+needed, materialise the index and build it before trusting it (`git show :<path>` per file, `dotnet build`,
+restore) — that check caught two bad staging attempts this session.
 
-Brows (`Uma Brows` in both libraries — the user's own view-vector displacement, measured 261 → 1657 brow pixels), the
-five eye knobs (`CrySwitch`, tremble rate/amount, two highlight colours, as node-targeted settings rows), Spork's eye
-ported with an **exact** group matcher (`Simple Diff + Shaded FACE` no longer counts as a shader), the unlit
-`Uma Decal` with opacity/tint rows, the face donor following `Eye_EyeHideA_L/_R`, **every material named by role**
-(`[face]`, `[decal]`, `[stock]` — `MorphDrivers.base_material_name` sees past the suffix), the face step producing one
-donor per character in a multi-character file, and the panel's advanced-morphs box as **checkboxes** with the headings
-"Advanced morphs" / "Advanced morphs setup" and a one-way pregnancy row.
+## What shipped this session
 
-**Verified, not assumed:** six verifiers pass (`verify_brows`, `verify_eye_controls`, `verify_eye_panel`,
-`verify_spork_library`, `verify_decals`, `verify_face_donor`, `verify_two_copies`), plus `measure_decal_key` and a
-`dotnet build umamusume.csproj` at 0 errors.
+**The naming question is answered, and the answer is "no Japanese mode".** The previous handoff left this
+open with a question that decides the size of the job. It is settled, from the code, and it goes the other
+way from what that handoff assumed:
 
-## Shelved, with the reasons
+- `rawName` is **never** Japanese, so `Japanese` as `yield return rawName` was never possible. The game ships
+  morph *indices*; the viewer builds the name itself — `FaceDrivenKeyTarget.cs:81,115`:
+  `morph.name = "EyeBrow_" + i + "_L"`, `morph.tag = Enum.GetName(typeof(FacialEyebrowId), i)` = `WaraiA`.
+  The romaji lives in the decompiled enum at `LiveTimelineDefine.cs:161-221`, not in the data.
+- A Japanese table *does* exist (`Config.VmdMorphConvertSetting`, `Config.cs:78-138`): 57 MMD-standard
+  expression names over 94 UMA morphs. Measured against the model it is a clean subset — 94 of 192, zero
+  stale names — but it **merges** (`困る右` = `EyeBrow_6_R` + `EyeBrow_12_R`) and leaves the other 98 morphs
+  nameless, including *all 32* ear morphs. That is a different, incomplete morph set, not a spelling of this
+  one, so it cannot be a naming mode.
+- The user's call: **drop it** rather than ship a mode that names half a model and merges the other half,
+  and revisit only if a real schema turns up. The table is left in `Config.cs` untouched and dormant, as
+  agreed — but be aware its last consumer is gone too (below), so **nothing reads it now**.
 
-- **Blush into the face texture.** Tried three ways: a UV transform from the face atlas to the blush map (impossible —
-  `Tools/fit_blush_uv.py`, ~42 UV units of residual on a 0..1 map), a bake (works, aligns, but ugly: a 128² multiply
-  sprite magnified to 512²), and the clean texture (wraps wrong). The shared-layer idea was right in principle — the
-  *layer* is static even though no UV transform is — but the art does not survive the magnification. Libraries and the
-  exporter were reverted (`8ff2fb2`, `658140b`, `93c0528`); the attempt is in history (`47df680`…`da3afdd`).
-- **The decal black key** (`UMA Decal Key`, keyed alpha by the map's brightest channel). Shipped on by default, then off
-  by default when the manga came out pure white — and *removed entirely* in `a14ad5b`, because a default only applies
-  when a property is **created**, so a file shaded in between kept `uma_shader_decal_key = 1.0` on its `Uma Sun` and the
-  driver kept forcing it. Two regressions from one idea the manga cannot use: their art is black line work.
-- **The eye-highlight `_mask` bake** (exporter). Dead end, measured: no material names a `_mask` file in any slot
-  (`tex` = 10 = `eye0`, `sphere` −1, `toon` −1) and the add-on thresholds the raw `eyehi00/01/02` in `Uma Eyes`. They
-  were in the pmx's texture table only because the bake registered them as dependencies. Removed (`920843e`); a fresh
-  export is 35 files with none of them.
+What changed in code:
+
+- **`Both` is gone and `Unified` took slot 2** (`PmxMorphNameMode` = 0 tagged, 1 short english,
+  2 unified). `Both` wrote 432 morph entries for what `Unified` does in 192, and nothing needed the tagged
+  spelling in the file that carries a motion. No migration: each build ships its own `Config.json` (the
+  user's call), so the numbers are free to move; a stale value above 2 is not rejected by the enum but is
+  caught by the CLI and falls back safely in code.
+- **`NamesFor`/`VmdName` fail safe towards `Unified`.** `BlenderCompatible` is now an explicit `case` and
+  `default` yields the unified name, because an unknown mode should not silently land on the one spelling no
+  motion can drive. `VmdName` follows the same rule (`mode != ShortEnglish` → try unified first), which also
+  means mode 0 motions now get the unified spelling rather than the short one — equally undrivable before,
+  but the right side to fail towards.
+- **`VmdUseEnglishMorphNames` is deleted** (`Config.cs`) and with it
+  `UISettingsAnimation.EnableEnglishVmdMorphNames`, the recorder's Japanese branch and its warning. A motion
+  and its model can no longer be spelled differently: `ConvertMorphName` always calls
+  `MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode)`. `VmdUseEnglishBoneNames` **stays**
+  (nothing else governs bone names) and its tip is now the `Bone names: English` label text.
+  **This is also what orphaned `VmdMorphConvertSetting`** — that Japanese branch was its only reader.
+- **The mode-0 warning survives** at record time (`MorphNaming.ModelAndMotionNamesAgree`), which the old
+  queue said to delete along with the toggle path. Kept deliberately: it is the one place that tells a user,
+  at the moment they waste an hour, that a mode-0 model cannot be driven. Delete it if you disagree.
+- **`PmxExtraMorphs` has a control** (`UISettingsModel.EnablePmxExtraMorphs` + `_extraMorphs` toggle, wired
+  into `ApplySettings`) — the on/off test the user asked for. The `…Tip` string it was supposed to need
+  already existed in `Config.cs`; `…Tip` fields are JSON documentation only, no UI code reads them.
+- **`-umaMorphNameMode` validates** instead of casting any integer through: `3` is now a clear failure
+  naming the three modes, not a silent fourth spelling.
+- **`_blush.png` naming fixed at the source**: `BakeBlush` takes the name the export writes the texture
+  under and refuses to bake at all when neither that nor the source has a name. Both call sites pass
+  `tex_name`.
+
+**Verified, with real exports, after the editor closed:**
+
+| run | result |
+|---|---|
+| `dotnet build umamusume.csproj` | 0 errors, 22 pre-existing warnings, none from the files touched |
+| default (`C:\tmp\name_on`) | 205 morphs, 35 files, 34 textures, 5,798,573 B; unified names, `maxBytes=15`, all unique; the 13 advanced morphs present (`Cheek_Blush`, 8 × `Manga_*`, 4 × `Tear_*`) |
+| `-NoExtraMorphs` (`C:\tmp\name_off`) | 192 morphs, 24 files, 23 textures, 5,733,691 B; zero advanced morphs |
+| `-MorphNameMode 3` | exit 1: `FAILED: -umaMorphNameMode takes 0 (tagged), 1 (short english) or 2 (unified), not 3` |
+| `-MorphNameMode 0` (`C:\tmp\mode0`) | 253 morphs, tagged spelling (`EyeBrow_1_R(WaraiA)[M_Face]`), and the inspector flags 240 of them as >15 bytes — model-only, exactly as documented |
+| after the scene edit | 5,798,573 B, byte-identical to the pre-edit default run; log has no `Failed to call`, no `NullReference`, no exception |
+
+**`_blush.png` is gone and the bakes are named**: both bakes are on disk as
+`tex_chr1001_00_cheek0_blush.png` / `…cheek1_blush.png` and both are named by the pmx's texture table. A
+folder scan (pmx texture table vs. the files) reports exactly one file written and never referenced, in both
+exports: **`tex_chr1001_00_eye0_all.png`** — the pre-existing item below, not a regression. No `eyehi*_mask.png`
+anywhere, and nothing the pmx names is missing from disk.
+
+## Scene work — done, with two leftovers fixed
+
+The user wired the panel in the editor; four things are worth knowing about the result.
+
+- The **"Extra morphs export"** toggle exists, is bound to `UISettingsModel.EnablePmxExtraMorphs` with
+  `m_Mode: 0` (the dynamic entry, which is the one that sends the tick's value) and starts on.
+- **`_extraMorphs` was left unassigned** (`{fileID: 0}`), so `ApplySettings` could not show `Config.json`'s
+  value in it — the row worked but could disagree with the config at startup. Assigned to the toggle
+  component (`fileID: 344244284`) in the scene file, editor closed. `m_Value: 3` on the naming dropdown was
+  likewise out of range for a three-member enum and is now `2`; `ApplySettings` overwrote it at runtime
+  anyway, but a saved value with no matching option is a trap for the next reader.
+- The **morph-names row is gone** (`EnableEnglishVmdMorphNames` no longer appears in the scene at all) and the
+  dropdown carries the three current options. `_morphNameModeText` is still unassigned, so the description
+  label under the dropdown stays empty — optional, see `UI_HOOKUP.md`.
+- The bone-names control was **not relabelled**. It is a pre-existing row (the upstream viewer's own), so
+  leaving its label alone costs nothing; the `Config.json` tip already reads `Bone names: English`.
 
 ## Open work, in order
 
-### 1. `MorphNaming`: drop `Both`, add `Japanese` — **one question first**
+### 1. The decal winding defect (shader side, still open)
 
-`Assets/Scripts/Exporters/MorphNaming.cs`:
+Right-eye instances of two of the four manga prefabs (`mtl_eff_chr_emo_eye_002.001` Shut, `…_003.001` Wide)
+and one tear sheet (`mtl_chr_tear001.001`) have polygons facing **into** the head —
+`normal · outward = −0.705` / `−0.793` where their left twins read `+0.705` / `+0.793` — and the exporter
+lifts every decal **along its own normal**, so those parts sit behind the face. That is the user's "most
+manga invisible" and "Wide lost its black rim". Agreed fix, unwritten: flip the winding (and with it the
+lift direction) for a decal part whose normal opposes the outward direction; the addon-side stopgap would be
+the same test at shading time.
 
-- `NamesFor` (line 183) has `case PmxMorphNameMode.Both:` yielding `rawName` then `ShortName(rawName)`;
-- `VmdName` (line 211) prefers `UnifiedName` when it fits, else `ShortName`;
-- `FitsVmd`/`ByteLength` and `VmdNameByteLimit = 15` are already there (line 24-25, 171, 236) — the Japanese overflow
-  rule should reuse them;
-- `Config.cs:347` declares `BlenderCompatible = 0, ShortEnglish = 1, Both = 2, Unified = 3` — **explicitly numbered**,
-  so `PmxMorphNameMode` persists into `Config.json` as a number.
+### 2. Small ones
 
-**The question that decides the size of the job:** is `rawName` already the game's Japanese name (so `Japanese` mode is
-literally `yield return rawName;`), or has Unity romanised it before `MorphNaming` sees it (so a Japanese mode needs a
-name table that does not exist in the repo)? Settle it by exporting with `PmxMorphNameMode = Blend` and reading one
-morph name out of the pmx. Everything below assumes the first answer.
-
-Plan, agreed with the user: **replace `Both` in slot 2 with `Japanese`** rather than appending — slot 2 was unusable for
-motion, so an old config that selected it gains a working mode instead of an error, and no other choice shifts. Then:
-`VmdName` gains the Japanese pass-through + overflow rule; the four mode descriptions in
-`Settings/UISettingsModel.cs:180-212` lose the `Both` text and gain a `Japanese` entry that states the 15-byte /
-five-character limit.
-
-### 2. VMD and PMX naming must not diverge
-
-`Exporters/VMDRecorder/UnityHumanoidVMDRecorder.cs`: `VmdUseEnglishMorphNames` is read at 1531, 1536 and 1566, and
-`MorphNaming.ModelAndMotionNamesAgree(mode)` exists only to **warn** about the combination of it with
-`PmxMorphNameMode.BlenderCompatible` (a model carrying names too long for a vmd field). A motion whose names do not
-match the model is silently useless, so: drop the toggle, always
-`MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode)`, and delete the warning path. `Config.cs:51`
-`VmdUseEnglishBoneNames` **stays** (nothing else governs bone names and it is what keeps a vmd in step with its pmx) —
-relabel it `Bone names: English`.
-
-### 3. Expose `PmxExtraMorphs` in the model panel — the user's on/off test
-
-The field exists (`Config.cs`, read through `Config.Instance.PmxExtraMorphs`) and the exporter guards on it
-(`ExtraMorphBlend`, `DeployMorphs`, `ModelExporter` around the morph passes), and the CLI has `-NoExtraMorphs`. What is
-missing is the **tickbox** in the model panel, plus its tip string (every other option has a `…Tip` field beside it —
-follow that shape). Without it the only way to test advanced morphs on/off is editing `Config.json`.
-
-### 4. APose and other booleans
-
-Agreed position: a checkbox for a boolean, a dropdown for an enumeration. `Export using APose` stays a checkbox unless
-it grows a *choice of poses* (A / T / leave rest), in which case promote it. The bone-naming dropdown the user floated
-is the same call: two options, so a checkbox labelled `Bone names: English` is clearer than a two-item menu — promote it
-if a third naming option ever appears.
-
-### 5. The decal winding defect (shader side, still open)
-
-Right-eye instances of two of the four manga prefabs (`mtl_eff_chr_emo_eye_002.001` Shut, `…_003.001` Wide) and one tear
-sheet (`mtl_chr_tear001.001`) have polygons facing **into** the head — `normal · outward = −0.705` / `−0.793` where
-their left twins read `+0.705` / `+0.793` — and the exporter lifts every decal **along its own normal**, so those parts
-sit behind the face. That is the user's "most manga invisible" and "Wide lost its black rim" (the rim went with the
-black key, now removed). Agreed fix, unwritten: flip the winding (and with it the lift direction) for a decal part whose
-normal opposes the outward direction; the addon-side stopgap would be the same test at shading time.
-
-### 6. Small ones
-
-- **`_blush.png` still appears.** The guard added checks `tex_name`, but `BakeBlush` names itself from
-  `mat_texture.name`, and `duplicateTexture` (line ~209) can leave that empty. Fix: derive the baked name from
-  `tex_name` at both `BakeBlush` call sites (`TextureExporter.cs` ~244 and ~291).
-- **`tex_chr1001_00_eye0_all.png`** is written and referenced by nothing (42 KB/character). The user said to keep the
-  four eye textures; this fifth one is a separate question.
-- **Morph-setup guard**: `setup_advanced_morphs` reports `"<root>: the mesh carries no deploy morphs"` for a model that
-  predates the advanced morphs — it does not crash, but "old model" and "setup failed" read identically.
-- **Decals stay on the body** (the user's call): `split_face_into_object` only moves face+eye polygons, so the cheek and
-  tear quads and their morphs remain on the body. They are bone-parented, so they follow the head — that was accepted.
+- **A multiply material would bake a blush per textured slot.** `AddRenderer` walks every texture property
+  and calls `BakeBlush` for each one on a multiply material, while `ModelExporter` only ever references
+  `BlushName(mainTexture.name)`. Measured on 1001 the two bakes are `cheek0_blush` and `cheek1_blush` and
+  **both** are named by the pmx, so it orphans nothing today — but the code is slot-agnostic while the
+  reference is `mainTexture` only, so a multiply material with two textured slots would leave second-class
+  files behind. Bake from `_MainTex` only if it ever bites.
+- **`BakeHighlight` is now uncalled** (the mask bake was removed in `920843e` but the function stayed) and
+  carries the same unnamed-artifact bug the new `BakeBlush` parameter fixes. Delete it, or give it the same
+  `name` parameter, before anything calls it again. `docs/UMA_EYE_SHADER.md:64` still refers to it.
+- **`tex_chr1001_00_eye0_all.png`** is written and referenced by nothing (42 KB/character). The user said to
+  keep the four eye textures; this fifth one is a separate question.
+- **Morph-setup guard**: `setup_advanced_morphs` reports `"<root>: the mesh carries no deploy morphs"` for a
+  model that predates the advanced morphs — it does not crash, but "old model" and "setup failed" read
+  identically.
+- **Decals stay on the body** (the user's call): `split_face_into_object` only moves face+eye polygons, so
+  the cheek and tear quads and their morphs remain on the body. They are bone-parented, so they follow the
+  head — accepted.
 
 ## How to verify — the loop that makes this repo workable
 
@@ -139,31 +161,46 @@ blender --background --factory-startup --python Tools\verify_decals.py -- <out.t
 #    verify_face_donor, verify_two_copies, measure_decal_key, measure_brows, probe_*.py
 ```
 
-`Tools\probe_texture_usage.py <out.txt> <folder-or-pmx>` answers "is this file used" from the pmx's own texture table;
-`Tools\probe_decal_normals.py` measures which way each decal part faces.
+`Tools\probe_texture_usage.py <out.txt> <folder-or-pmx>` answers "is this file used" from the pmx's own
+texture table; `Tools\probe_decal_normals.py` measures which way each decal part faces.
 
-## Traps that cost time (add to the ones in the shader handoff)
+## Traps that cost time
 
-- **PowerShell `.Replace` on source files fails silently** when the anchor's whitespace differs — it bit four times
-  today. Use the `edit` tool, or a Python script with `assert` per anchor and an explicit EOL. `pwsh` has no heredoc.
-- **`AddonPanels.py` is CRLF**; an inserted block arrives LF-only and leaves mixed endings (569 CRLF vs 575 LF). Normalise
-  after inserting, and check the byte counts.
-- **`sys.argv` slicing after `--`** must degrade to *empty*, not to `sys.argv[1:]`, or Blender's own flags become the
-  script's arguments (`open_mainfile('--background')`).
-- **Custom properties are never re-defaulted.** Changing a manifest `default` does not touch a property that already
-  exists, so a file shaded under the old default keeps it — that is what made the decal key a second regression.
-- **Unity `Debug.Log` from the exporter is invisible** on the headless console unless the wrapper's allowlist matches it;
-  everything is in the log file.
+- **Naming a derived file after `texture.name` instead of the exporter's own `tex_name`** is how `_blush.png`
+  appeared: a `Texture2D` copy carries the source's name and `new Texture2D` starts out unnamed, so the
+  bake inherited nothing. Pass the exporter's name through (see `BakeBlush(source, name)`).
+- **Removing a UI method leaves its scene binding dangling** — Unity only complains at click time
+  (`Failed to call function …`), so a compile-clean change still has a broken row.
+- **Do not hand-edit `Assets/Scenes/Version2.unity` while the editor is open.** The editor holds the scene
+  in memory and overwrites the file; a YAML edit only survives with the editor closed.
+- **Renumbering a persisted enum is safe here only because each build ships its own `Config.json`.** Do not
+  generalise that to a build that shares one.
+- **PowerShell `.Replace` on source files fails silently** when the anchor's whitespace differs — it bit four
+  times in an earlier session. Use the `edit` tool, or a Python script with `assert` per anchor and an
+  explicit EOL. `pwsh` has no heredoc.
+- **`AddonPanels.py` is CRLF**; an inserted block arrives LF-only and leaves mixed endings. Normalise after
+  inserting, and check the byte counts. (`edit` preserves whatever the file already uses — verify with a
+  CR-count if a file was touched by both.)
+- **`sys.argv` slicing after `--`** must degrade to *empty*, not to `sys.argv[1:]`, or Blender's own flags
+  become the script's arguments (`open_mainfile('--background')`).
+- **Custom properties are never re-defaulted.** Changing a manifest `default` does not touch a property that
+  already exists, so a file shaded under the old default keeps it — that is what made the decal key a second
+  regression.
+- **Unity `Debug.Log` from the exporter is invisible** on the headless console unless the wrapper's allowlist
+  matches it; everything is in the log file.
 - **The parts are `SkinnedMeshRenderer`s.** `GetComponent<MeshFilter>()` returns null for them; read
-  `((SkinnedMeshRenderer)renderer).sharedMesh`. This is why the first face-blush bake silently did nothing.
-- **`ShaderNodeMix` indexes sockets across all data types** (0 = float factor, 2 = float A, 3 = float B); linking by
-  index wrongly is silent. And `vec_a*(1-F) + vec_b*F` means A is the "off" side.
+  `((SkinnedMeshRenderer)renderer).sharedMesh`.
+- **`ShaderNodeMix` indexes sockets across all data types** (0 = float factor, 2 = float A, 3 = float B);
+  linking by index wrongly is silent. And `vec_a*(1-F) + vec_b*F` means A is the "off" side.
 - **`mmd_tools` hands texture names back with a trailing `>`** — normalise before comparing them to file names.
-- **The export folder is not cleaned.** A fresh test needs a fresh folder, or leftovers from older settings look like
-  current output (the "masks are still there" false alarm).
+- **The export folder is not cleaned.** A fresh test needs a fresh folder, or leftovers from older settings
+  look like current output (the "masks are still there" false alarm).
 
 ## Decisions the user has made (do not re-litigate)
 
-Advanced morphs on/off must be testable from the panel; decals stay on the body; the blush is shelved; the black key is
-gone; masks are gone; morph naming should be one dropdown including Japanese, with `Both` removed; vmd and pmx naming
-must not be independently selectable; booleans stay checkboxes unless they grow variants.
+Advanced morphs on/off must be testable from the panel; decals stay on the body; the blush is shelved; the
+black key is gone; masks are gone; morph naming is **one dropdown with three modes** (`Both` retired,
+`Unified` in slot 2); a japanese mode is **dropped, not deferred** — the table stays but nothing reads it,
+and it comes back only if a real schema appears; vmd and pmx naming must not be independently selectable;
+booleans stay checkboxes unless they grow variants; enum renumbering needs no `Config.json` migration because
+each build carries its own.

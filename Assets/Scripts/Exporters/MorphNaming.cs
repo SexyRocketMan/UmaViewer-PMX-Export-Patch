@@ -13,11 +13,16 @@ using System.Text;
 /// Naming modes (see <see cref="PmxMorphNameMode"/>):
 ///   BlenderCompatible  "(Tag)[Mesh]" suffix kept, matches the stock uma_addon but is far too long
 ///                      for a vmd morph name (the limit is 15 shift-jis bytes), so motions cannot
-///                      drive those morphs.
+///                      drive those morphs. Model-only by definition.
 ///   ShortEnglish       "Eye_2_L" - fits a vmd but says nothing about what the morph does.
-///   Both               emits the tagged morph plus a short alias.
 ///   Unified            "Brow_WaraiA_R" - descriptive, unique and within the vmd byte limit, so one
 ///                      name serves the model and the motion. Default.
+///
+/// A Japanese mode was considered for the space `Both` used to occupy and dropped: the game ships no
+/// japanese morph names at all (the viewer builds "EyeBrow_1_L" from an index into an english enum,
+/// see Gallop.FaceDrivenKeyTarget), and the only japanese table in the repo,
+/// <see cref="Config.VmdMorphConvertSetting"/>, names 94 of the 192 morphs and merges several of them
+/// into one - so it is not a spelling of these morphs but a different, incomplete morph set.
 /// </summary>
 public static class MorphNaming
 {
@@ -184,22 +189,19 @@ public static class MorphNaming
     {
         switch (mode)
         {
+            case PmxMorphNameMode.BlenderCompatible:
+                yield return rawName;
+                yield break;
+
             case PmxMorphNameMode.ShortEnglish:
                 yield return ShortName(rawName);
                 yield break;
 
-            case PmxMorphNameMode.Unified:
-                yield return UnifiedName(rawName, tagHint);
-                yield break;
-
-            case PmxMorphNameMode.Both:
-                yield return rawName;
-                string shortName = ShortName(rawName);
-                if (shortName != rawName) yield return shortName;
-                yield break;
-
+            // Unified is also the fallback for a value this build does not know, because it is the only
+            // spelling that works for a model and a motion alike. The tagged one is model-only, and
+            // failing safe means failing towards the mode that cannot strand a motion.
             default:
-                yield return rawName;
+                yield return UnifiedName(rawName, tagHint);
                 yield break;
         }
     }
@@ -210,13 +212,16 @@ public static class MorphNaming
     /// </summary>
     public static string VmdName(string rawName, string tagHint, PmxMorphNameMode mode)
     {
-        if (mode == PmxMorphNameMode.Unified)
+        // Unified is the only spelling a model and a motion can both carry, so it is also the one an
+        // unknown mode value falls back to - the same fail-safe <see cref="NamesFor"/> uses.
+        if (mode != PmxMorphNameMode.ShortEnglish)
         {
             string unified = UnifiedName(rawName, tagHint);
             if (FitsVmd(unified)) return unified;
         }
 
-        // the short spelling is what "ShortEnglish" exports and what "Both" emits as an alias
+        // the short spelling is what "ShortEnglish" exports, and the last resort for a morph whose
+        // unified name would overflow the field
         string shortName = ShortName(rawName);
         return FitsVmd(shortName) ? shortName : UnifiedName(rawName, tagHint);
     }
