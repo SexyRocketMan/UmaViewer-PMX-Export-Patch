@@ -14,9 +14,14 @@ first — it is the queue, with the anchors checked against the code.
 | exporter CLI | `Tools/headless_export.ps1` + `docs/CLI.md` — **runs from here**, see "How to verify" |
 | shader libraries | `uma_addon/addons/uma_addon/operators/shaders/*.blend` beside their manifests |
 
-Both trees are clean apart from the user's own dirty set in the fork (`VMDRecorder/UnityHumanoidVMDRecorder.cs`,
-`Settings/UISettingsModel.cs`, `UI/UIShortcuts.cs`, `UmaContainerCharacter.cs`, `UmaViewerBuilder.cs`) and the
-untracked `.blend.bak` files the earlier handoff says to leave.
+Both trees are clean apart from **the user's own dirty set in the fork** — as of this handoff it is:
+`Assets/Editor/UmaHeadlessExport.cs`, `Assets/Scripts/Exporters/ModelExporter.cs`,
+`Assets/Scripts/Exporters/TextureExporter.cs`, `Assets/Scripts/Exporters/VMDRecorder/UnityHumanoidVMDRecorder.cs`,
+`Assets/Scripts/Settings/UISettingsModel.cs`, `Assets/Scripts/UI/UIShortcuts.cs`, `Assets/Scripts/UmaContainerCharacter.cs`,
+`Assets/Scripts/UmaViewerBuilder.cs`, `Tools/headless_export.ps1`, `docs/CLI.md` — plus the untracked `.blend.bak` files
+the earlier handoff says to leave, and a pile of untracked `Tools/probe_*.py`. **That dirty set is work in progress, not
+this session's** (the English-naming tickboxes and the CLI live in it): read it before building on `ModelExporter` or
+`UISettingsModel`, and do not commit it wholesale.
 
 ## What shipped this session (2.34.0)
 
