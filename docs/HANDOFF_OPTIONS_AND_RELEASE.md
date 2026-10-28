@@ -207,9 +207,15 @@ Two decisions from the user's first real export of this work:
   identical defect for minis: its **"Fix mini umamusume model"** operator (`AddonOperators.FixMini.fixblush`)
   builds a `MULTIPLY` Mix node (factor 1, second colour `(1, 0.799, 0.597)`, clamped) and wires a colour ramp
   of the map's own value - white up to 0.85, black at 1.0 - into the shader's alpha, so the white "no blush"
-  area is what becomes transparent. That recipe is written into `docs/PMX_EXTENSIONS.md`, and it is the
-  addon-side half still to implement for big umas. Measured after the change: 2 cheek files instead of 4, the
-  material points at `tex_chr1001_00_cheek0.png`, no `_blush` entry in the texture table, tokens intact.
+  area is what becomes transparent.
+  **The addon half is now implemented** (addon repo, `b8c3740`): `Umashader.wire_multiply_transparency` does
+  the same to the library's `Uma Decal` copy - the ramp takes over exactly the socket the map's alpha fed, so
+  the opacity control still multiplies - and `apply_decal_material` runs it only for a decal whose comment says
+  `blend=multiply`. Verified through the real Shading operator: the cheek becomes `mtl_chr1001_00_cheek [decal]`
+  with the ramp at 0.85/1.0 and both links, and it refuses to stack a second ramp.
+  **Why 0.85 transfers to the big maps**: measured on 1001 costume 00, the cheek map spans luminance 0.954 to
+  1.000, so the deepest texel lands near 0.31 alpha - about a 7-8% darkening of the face against the game's own
+  multiply at under 6%. A ramp at the map's minimum instead would be several times too strong.
   **The cost, stated not hidden:** a model exported *for MMD alone* shows a white shell if the cheek morph is
   deployed, because MMD cannot multiply. That is the trade the user chose over shipping a degraded duplicate.
 - **`DirtRates` is removed** (`113b5cd`), after the user measured that stepping the global `_DirtRate` through
