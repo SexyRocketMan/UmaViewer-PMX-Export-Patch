@@ -186,6 +186,30 @@ them without a table:
 Only albedo maps have a dirt version, so a material can carry a wet twin and no dirt map. Files keep the
 game's own names, in the same `Texture2D/` folder as everything else.
 
+**The dirt map is three masks in one file, not a picture.** Measured on `tex_bdy1001_00_dirt` (256x256) and
+`tex_chr1001_00_face_dirt` (128x128):
+
+| channel | body | face |
+| --- | --- | --- |
+| R | mean 0.085, sd 0.152, 3.7% above 0.5 | mean 0.008, sparse marks |
+| G | mean 0.079, sd 0.151, 3.7% above 0.5 | mean 0.006, sparse marks |
+| B | mean 0.081, sd 0.254, 8.9% above 0.5 | **all zero** |
+| A | 1.0 everywhere | 1.0 everywhere |
+
+Pairwise channel correlation is within 0.01 of zero and 26% of the body's pixels differ by more than one standard
+deviation between R and G, i.e. these are three *independent* layers, not a colour with a shared shape. Neither
+map tiles (the wrap seam stands out at 0.13 against 0.01 between neighbours), so a consumer should not repeat it.
+The size is the game's own - 981 dirt maps ship, one per body/attachment part, all of this order - and it is the
+one map class where a hand-made replacement would beat the asset.
+
+**Which channel is which layer, and what the shader does with them, is not known.** What the interface says:
+`_DirtTex` (unbound on every shipped material), a per-material `_DirtRate` **Vector4** and `_DirtScale` scalar
+(1.0 on body and hair, 0.3 on the face), plus the globals `_DirtRate` (three floats, 0..1) and the three tints
+`_GlobalDirtColor`, `_GlobalDirtToonColor`, `_GlobalDirtRimSpecularColor`. `Gallop.CharaShaderEffectData`
+declares an effect index `DATA_SET_DIRT`, and its application is not in the decompile, so there is no reference
+maths to copy - a consumer that wants the look defines it. The add-on's version mixes toward one colour by
+`max(r, g, b)` times its own `Dirt` property, which is a choice, not a reconstruction.
+
 **The model comment** gains one line, so a reader can tell three states apart without scanning every material:
 
 ```
