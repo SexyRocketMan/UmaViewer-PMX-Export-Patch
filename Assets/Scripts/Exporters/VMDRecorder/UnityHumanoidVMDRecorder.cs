@@ -658,8 +658,24 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 SampleFrame();
             }
 
+            // Whether the take is going to be closed on itself decides whether the lead-in drop applies at
+            // all: its whole justification is CloseRecordedLoop copying frame 0 onto the last frame, so a
+            // one-shot take must keep every frame it recorded. Measure before touching the samples.
             LoopSeam(out float seamRotation, out float seamPosition);
             bool closes = declaredLoop || (seamRotation <= LoopSeamRotation && seamPosition <= LoopSeamPosition);
+
+            int droppedLead = closes ? DropAnomalousLeadIn() : 0;
+            if (droppedLead > 0)
+            {
+                Debug.Log($"[VMD] dropped {droppedLead} leading frame(s): their step away from the "
+                          + $"cycle stood out from the rest of the take. CloseRecordedLoop would "
+                          + $"otherwise copy frame 0 onto the last frame and put that offset at both "
+                          + $"ends of the loop.");
+                // the drop moves the seam, so the closing decision and its log line have to be re-measured
+                LoopSeam(out seamRotation, out seamPosition);
+                closes = declaredLoop || (seamRotation <= LoopSeamRotation && seamPosition <= LoopSeamPosition);
+            }
+
             Debug.Log($"[VMD] '{clip.name}': {totalFrames + 1} frames, seam rotation {seamRotation:F5} "
                       + $"position {seamPosition:F5}, closed on itself {closes} "
                       + $"(declared loop {declaredLoop}, tolerances {LoopSeamRotation}/{LoopSeamPosition})");
@@ -817,6 +833,98 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             var values = driver.ValueList;
             if (values.Count > 1) values[values.Count - 1] = values[0];
         }
+    }
+
+    /// <summary>
+    /// Drop leading frames that are not part of the cycle, and report how many were dropped.
+    ///
+    /// <para>The first sampled frames are not reliably part of the motion. Measured on real takes of
+    /// <c>anm_eve_chr1032_00_idle01_loop</c>: summed over all bones, the step from frame 0 to 1 is
+    /// 25.97 degrees and from 1 to 2 is 21.69, while every step from frame 2 onward is at most 1.73.
+    /// The head alone accounts for 25.52 and 13.91 of that. So frames 0 and 1 are outliers and frames
+    /// 2..end are already a clean cycle whose end continues naturally into frame 2.</para>
+    ///
+    /// <para>It matters because <see cref="CloseRecordedLoop"/> copies frame 0 onto the LAST frame, so
+    /// that offset ends up at both ends of the loop: the seam then measures ~0.31 against a tolerance
+    /// of 0.05, and because a <c>_loop</c> clip sets <c>declaredLoop</c> the close happens anyway. A
+    /// forced close is a discontinuity, which is the one-frame jerk seen once per cycle.</para>
+    ///
+    /// <para>Dropping the outliers and re-closing fixes it at the source: same measurement, worst step
+    /// 47.47 -> 2.90 degrees and the head 38.93 -> 0.05. The threshold is relative on purpose -- a clip
+    /// that genuinely opens fast has opening steps no larger than its own interior ones, so a run
+    /// (opening 15.7/299.5 against an interior 280.17) and a walk (1.4/37.7 against 46.99) are left
+    /// untouched.</para>
+    /// </summary>
+    private int DropAnomalousLeadIn(int maxDrop = 3)
+    {
+        const float factor = 3f;      // opening must exceed the interior by this much...
+        const float floor = 5f;       // ...and by at least this many degrees, summed over bones
+        const int warmup = 2;         // the lead-in occupies the first TWO steps, so the interior
+                                      // must be sampled from two frames in, not one
+
+        int frames = 0;
+        foreach (var pair in rotationDictionary)
+        {
+            if (pair.Value != null) frames = Mathf.Max(frames, pair.Value.Count);
+        }
+        if (frames < warmup + 6) return 0;
+
+        System.Func<int, float> step = i =>
+        {
+            float total = 0f;
+            foreach (var pair in rotationDictionary)
+            {
+                var rotations = pair.Value;
+                if (rotations != null && i >= 0 && i + 1 < rotations.Count)
+                {
+                    total += Quaternion.Angle(rotations[i], rotations[i + 1]);
+                }
+            }
+            return total;
+        };
+
+        float interiorMax = 0f;
+        for (int i = warmup; i < frames - 2; i++) interiorMax = Mathf.Max(interiorMax, step(i));
+        if (interiorMax <= 0f) return 0;
+
+        float threshold = Mathf.Max(factor * interiorMax, floor);
+        int drop = 0;
+        while (drop < maxDrop && drop + warmup < frames && step(drop) > threshold) drop++;
+        if (drop == 0) return 0;
+
+        // Remove the same number of frames from every per-frame list. They are indexed by frame
+        // number, so dropping entries at the front renumbers the whole take; FrameNumber and the
+        // visibility keys are shifted to match.
+        foreach (var pair in positionDictionary)
+        {
+            if (pair.Value != null) pair.Value.RemoveRange(0, Mathf.Min(drop, pair.Value.Count));
+        }
+        foreach (var pair in rotationDictionary)
+        {
+            if (pair.Value != null) pair.Value.RemoveRange(0, Mathf.Min(drop, pair.Value.Count));
+        }
+        if (morphRecorder != null)
+        {
+            foreach (var driver in morphRecorder.MorphDrivers.Values)
+            {
+                if (driver.ValueList != null)
+                {
+                    driver.ValueList.RemoveRange(0, Mathf.Min(drop, driver.ValueList.Count));
+                }
+            }
+        }
+        if (visitableDictionary.Count > 0)
+        {
+            var shifted = new Dictionary<int, bool>();
+            foreach (var pair in visitableDictionary)
+            {
+                int key = pair.Key - drop;
+                if (key >= 0) shifted[key] = pair.Value;
+            }
+            visitableDictionary = shifted;
+        }
+        FrameNumber = Mathf.Max(0, FrameNumber - drop);
+        return drop;
     }
 
     /// <summary>How many bones actually move over the recorded loop (the closing frame is ignored).</summary>

@@ -1,4 +1,4 @@
-﻿using CriWareFormats;
+using CriWareFormats;
 using Gallop;
 using Gallop.Live;
 using NAudio.Wave;
@@ -75,6 +75,9 @@ public class UmaViewerBuilder : MonoBehaviour
             LoadNormalUma(umaContainer, chara, costumeId, true, haedCostumeId);
         }
 
+        // the rain look is a view setting, so a character loaded while it is on wears it too
+        if (ModelSettings.IsWetLook) umaContainer.SetWetLook(true);
+
         yield break;
     }
 
@@ -101,6 +104,8 @@ public class UmaViewerBuilder : MonoBehaviour
                 }
 
                 Gallop.Live.Director.instance.CharaContainerScript.Add(umaContainer);
+
+                if (ModelSettings.IsWetLook) umaContainer.SetWetLook(true);
             }
         }
     }

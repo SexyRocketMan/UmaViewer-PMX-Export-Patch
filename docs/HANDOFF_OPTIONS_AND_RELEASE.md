@@ -114,6 +114,63 @@ folder scan (pmx texture table vs. the files) reports exactly one file written a
 exports: **`tex_chr1001_00_eye0_all.png`** — the pre-existing item below, not a regression. No `eyehi*_mask.png`
 anywhere, and nothing the pmx names is missing from disk.
 
+## Keybinds and the modes they collide with
+
+The shortcuts (`docs/KEYBINDS.md` has the audit table; do not add a binding without reading it) **now
+live in `Config.json`** as `ViewerShortcuts: [{ Name, Key, Alt }]`, parsed by name so `"R"` reads as `R`
+rather than `114`. `UIShortcuts` keeps the action list and the context rules; an unknown name or key is
+logged and skipped. Startup logs every binding it made.
+
+What the audit found, and what changed:
+
+- **The pose-mode conflict was much smaller than it looked.** Every `TransformGizmo` key needs LeftAlt
+  (`Alt+W/E/R/Y/Z/C/X/S`), and `UIShortcuts` fires a plain binding only when Alt is *not* held — so plain
+  `W`/`E`/`R` never fought the gizmo. What did need gating in pose mode: the **list walk**, because it
+  loads whatever it lands on and would replace the model mid-pose, and **recording**, because
+  `EnablePoseMode` disables the animator the recorder samples.
+- **The free-camera conflict is real and total.** `CameraOrbit` mode 1 moves through the `Horizontal`/
+  `Vertical` axes, i.e. WASD *and* the arrows, so every navigation shortcut fought it. Any binding whose
+  key is one of those eight is now suspended while the camera flies; `E` and `R` do not collide and keep
+  working. Matched against the bound key, not the action, so a rebound shortcut works while flying.
+- **Two leaks fixed in the pose system itself**: `H` (help panel) and `Space` (IK toggle) fired in *every*
+  mode, flipping state for a solver that does not exist outside pose mode. Both are gated on `PoseModeOn`.
+- **`FreeCam.cs` is dead code** — no scene reference, no `AddComponent`. The live free camera is
+  `CameraOrbit`. Left in place; it is on the delete-me list, because if it were ever wired up it would
+  collide with nearly every shortcut.
+- **Rebindable in `Config.json`, not in a panel**: there is no shortcuts UI, and `ShortcutConfig` is a
+  plain list, so a panel row is not required to add one later.
+
+Not verified: the suspensions were reasoned from the code and the build is clean, but no one has flown
+the camera with a nav key held since the change — the headless runs only prove the nine default bindings
+initialise (`[Shortcuts] 9 binding(s): ...`) and reach `Config.json`.
+
+## The dirt set — found, mechanism identified, not built
+
+The user asked whether there is a "dirty" set to go with the rain one. **There is**, and it is *not* the
+same mechanism as wet. Measured with `-ListTextures` (new CLI option, see `docs/CLI.md`):
+
+- **`_dirt` texture assets exist**: 33 in one alphabetical slice of the character assets, e.g.
+  `tex_bdy1001_00_dirt` beside `tex_bdy1001_00_diff`/`_base`/`_shad_c`, plus per-attachment ones
+  (`tex_attach1048_00_dirt`) and offline/zekken body variants. Character 1001 costume 00 has one
+  (`tex_bdy1001_00_dirt`) next to its 4 `_wet` twins.
+- **The shader already has a dirt slot, and the game does not bind it**: the uma shader exposes
+  `_DirtTex` (`Texture`, `<none>` on every material of 1001), `_DirtScale` (`Range`, 0.3 or 1.0 per
+  material) and `_DirtRate` (`Vector`, `(0,0,0,0)`). So dirt is *not* a same-property swap like the wet
+  set — it fills a dedicated slot whose rate is currently zero.
+- **There is also a global dirt channel**: `UmaViewerGlobalShader` pushes `_DirtRate` as a **float array
+  of 3** (`_DirtRate_0..2`, inspector fields, default 0) plus `_GlobalDirtColor`,
+  `_GlobalDirtToonColor`, `_GlobalDirtRimSpecularColor`. The repo's own community shaders
+  (`Assets/Resources/NarsShader/*.shader`) never mention dirt, so only the game's own shaders (loaded
+  from the bundles) consume it. `CharaShaderEffectData.DATA_SET_DIRT = 11` is a dead constant from the
+  decompile — declared, never read.
+
+**Open question, deliberately not guessed at:** what a dirt toggle should actually set. The pieces are
+`_DirtTex` ← the `_dirt` asset, `_DirtScale`, the per-material `_DirtRate` vector, and the three globals.
+Choosing values without watching the game apply them would be a guess dressed as a feature, and this
+repo's standard is measurement. The cheap way to measure: expose the global `_DirtRate_0..2` (already
+serialized on `UmaViewerGlobalShader`, so they can be moved in the Inspector today) and watch what the
+game's shaders do with them, then wire a `DirtyLook` action beside `RainLook`.
+
 ## Scene work — done, with two leftovers fixed
 
 The user wired the panel in the editor; four things are worth knowing about the result.

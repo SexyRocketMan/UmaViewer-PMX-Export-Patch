@@ -45,7 +45,8 @@ public class UISettingsModel : MonoBehaviour
         _isTPose,
         _dynamicBoneEnable = true,
         _enableEyeTracking = true,
-        _enableFaceOverride = true;
+        _enableFaceOverride = true,
+        _isWetLook;
 
     private float _outlineWidth;
 
@@ -111,6 +112,38 @@ public class UISettingsModel : MonoBehaviour
     {
         _enableFaceOverride = isOn;
         Builder.CurrentUMAContainer?.SetFaceOverrideData(isOn);
+    }
+
+    /// <summary>
+    /// Whether the loaded character wears the game's rain (wet) texture set. Session only, like the other
+    /// view toggles here (T-pose, eye tracking, face override): the game decides this from the race's
+    /// weather, so there is nothing to write to Config.json.
+    /// </summary>
+    public bool IsWetLook
+    {
+        get { return _isWetLook; }
+    }
+
+    /// <summary>Rain look on or off for the character that is loaded (bound to R in <see cref="UIShortcuts"/>).</summary>
+    public void ToggleWetLook()
+    {
+        SetWetLook(!_isWetLook);
+    }
+
+    public void SetWetLook(bool wet)
+    {
+        var container = Builder.CurrentUMAContainer;
+        if (container == null)
+        {
+            UmaViewerUI.Instance?.ShowMessage("Load a character first", UIMessageType.Warning);
+            return;
+        }
+
+        // the container answers with what it could really do: a model whose parts ship no wet maps stays dry
+        _isWetLook = container.SetWetLook(wet);
+        UmaViewerUI.Instance?.ShowMessage(_isWetLook
+            ? "Rain look on (the game's wet textures)"
+            : "Rain look off", UIMessageType.Default);
     }
 
     public void ChangeOutlineWidth(float val)
@@ -271,7 +304,7 @@ public class UISettingsModel : MonoBehaviour
                 ExportNaming.ModelFile(container), ModelExportFilters);
             if (!string.IsNullOrEmpty(path))
             {
-                ModelExporter.ExportModel(container, path);
+                ExportWithReport(() => ModelExporter.ExportModel(container, path), path);
                 Config.Instance.RememberModelSave(path);
             }
         }
@@ -284,7 +317,7 @@ public class UISettingsModel : MonoBehaviour
                 ModelExportFilters);
             if (!string.IsNullOrEmpty(path))
             {
-                ModelExporter.ExportModel(prop_container, path);
+                ExportWithReport(() => ModelExporter.ExportModel(prop_container, path), path);
                 Config.Instance.RememberModelSave(path);
             }
         }
@@ -292,6 +325,42 @@ public class UISettingsModel : MonoBehaviour
 #else
         UmaViewerUI.Instance.ShowMessage("Not supported on this platform", UIMessageType.Warning);
 #endif
+    }
+
+    /// <summary>
+    /// Runs one export and puts its failure in front of the user.
+    ///
+    /// The exporter writes the `Texture2D/` folder before it reads any geometry, so a scene it cannot read
+    /// used to leave the folder on disk, no model, and nothing on screen saying why - the exception went to
+    /// the log and `Export Model` looked as if it had simply done nothing. Scenes are where that happened:
+    /// their meshes are whatever the game shipped, and two of the shapes that broke the export (a mesh with
+    /// no normals, a scene with no textures at all) are fixed, but a third will show up eventually, and it
+    /// should name itself. The message is short on purpose - the exception with its stack is in the log,
+    /// which is what a bug report needs.
+    /// </summary>
+    private static void ExportWithReport(System.Action export, string path)
+    {
+        // File.Exists alone is not the question: a file left by an earlier export makes it true, and the
+        // export-failed-fix-export-again loop is exactly when the hint matters. Snapshot what is there
+        // before the write and compare after, which holds whether the path was empty, stale or fresh.
+        System.DateTime? before = System.IO.File.Exists(path)
+            ? System.IO.File.GetLastWriteTimeUtc(path)
+            : (System.DateTime?)null;
+        try
+        {
+            export();
+        }
+        catch (System.Exception e)
+        {
+            bool wroteModel = System.IO.File.Exists(path)
+                              && (before == null || System.IO.File.GetLastWriteTimeUtc(path) != before.Value);
+            UnityEngine.Debug.LogError($"[UISettingsModel] export to {path} failed: {e}");
+            UmaViewerUI.Instance?.ShowMessage($"Export failed ({e.GetType().Name}: {e.Message})."
+                                              + (wroteModel
+                                                  ? ""
+                                                  : " No model was written, though its textures may be.")
+                                              + " See the log for the full trace.", UIMessageType.Error);
+        }
     }
 
     /// <summary>

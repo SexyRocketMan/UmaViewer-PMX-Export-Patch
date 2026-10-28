@@ -29,8 +29,9 @@ line, runs it, and prints the interesting lines of the log afterwards.
 | Record one loop of a motion | `./Tools/headless_export.ps1 -Char 1001 -Motion anm_rac_type01_run02_stride -RecordVmd D:/out/run.vmd` |
 | Do both in one run | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Motion <motion> -Out m.pmx -RecordVmd m.vmd` |
 | Screenshot the game's own render | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/face.png -ShotOnly` |
-| Export a prop or a scene | `./Tools/headless_export.ps1 -ListProps home10001` then `-Prop <path> -Out D:/out/home.pmx` |
+| Export a prop or a scene | `./Tools/headless_export.ps1 -ListProps -ListPropsFilter home10001` then `-Prop <path> -Out D:/out/home.pmx` |
 | Find out why a scene renders white | `./Tools/headless_export.ps1 -ScanProps "3d/env/home" -ScanCount 12` |
+| Find every scene that fails to export | `./Tools/headless_export.ps1 -ScanProps "3d/env" -ScanCount 60 -ScanExport` |
 | See what a sound clip says | `./Tools/headless_export.ps1 -Transcript snd_voi_home_100100` |
 | Export a voice clip to mp3 with its line in the tag | `./Tools/headless_export.ps1 -ExportAudio snd_voi_story_041047007 -ExportClip 3 -Out D:/out/line.mp3` |
 | Check what you exported | `uv run Tools/pmx_inspect.py summary <file.pmx>`, `uv run Tools/vmd_inspect.py loop <file.vmd>` |
@@ -192,7 +193,7 @@ excludes it, so taking a shot does not disturb an export that happens in the sam
 ### 6. Props, scenes and their textures
 
 ```powershell
-./Tools/headless_export.ps1 -ListProps home10001        # find scene assets (substring filter, optional)
+./Tools/headless_export.ps1 -ListProps -ListPropsFilter home10001   # find scene assets (filter optional)
 ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -Out D:/out/home.pmx
 ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -Variant 214 -Out D:/out/home_214.pmx
 ```
@@ -213,6 +214,83 @@ health per scene, which is how you find the ones that would render white instead
 `textureless` after the resolver is the number of slots that still have no `_MainTex`. A few scenes
 (`3d/env/live/common`, `3d/env/race/common`) have no texture assets anywhere in the game data - the game
 colours them at runtime - so showing untextured there is expected, not a bug.
+
+### 6b. Export a whole batch of scenes, and find the ones that throw
+
+`-ScanProps` only reports; `-ScanExport` *exports* every matched scene and keeps going when one throws:
+
+```powershell
+# every downloaded scene under 3d/env/race, one editor launch for the whole batch
+./Tools/headless_export.ps1 -ScanProps "3d/env/race" -ScanCount 40 -ScanExport -ScanOut D:/scan
+```
+
+Each scene gets a line saying whether it produced a file:
+
+```
+[UmaHeadlessExport] [7/40] exporting 3d/env/race/race00000/race00000_8001_000
+[UmaHeadlessExport] [7] 3d/env/race/race00000/race00000_8001_000: exported (4595 bytes)
+[UmaHeadlessExport] [8] 3d/env/race/race00002/.../pfb_env_race00002_cutt000_002: FAILED: IndexOutOfRangeException: ...
+[UmaHeadlessExport] sweep: 35 of 40 prop(s) exported, 5 failed - the failures are named above
+```
+
+and a summary at the end; the run exits non-zero if any scene failed, so it works as a gate in a script.
+The `.pmx` files land in `-ScanOut` (default `<project>/HeadlessExports/scan`) and share one `Texture2D/`
+folder, since a scene's textures are written beside its model.
+
+This is the cheap way to answer "which scenes are broken": one editor launch for the batch instead of one
+per scene, which is where nearly all of a run's time goes. The sweep is how the `IndexOutOfRangeException`
+that made `pfb_env_race10201_cutt000_002` come out as a texture folder with no model was found to affect
+whole families of scenes (the race scenes with billboard trees, and every scene that ships an environment
+prop) - see [the failure modes](#6c-why-a-scene-can-export-its-textures-and-no-model) below.
+
+### 6c. Why a scene can export its textures and no model
+
+The exporter writes the `Texture2D/` folder *before* it reads the geometry, so a model that fails is always
+a folder of PNGs and nothing else. Two things that used to throw there are the reason: both are scene-only,
+because a character's meshes and materials are authored for the export while a scene's are whatever the
+game shipped.
+
+| Cause | What the scene looks like, measured |
+|---|---|
+| a mesh with no normal channel | the exporter walked `vertices.Length` and indexed `mesh.normals`. The race scenes' tree billboards have 4 to 70 vertices and no normals at all: `pfb_env_race10201_cutt000_002` alone has **688** such meshes, and the very first one aborted the export. Normals are now rebuilt from the mesh's own triangles, since a zero normal shades as black in MMD |
+| a model with no textures at all | the textureless-material fallback read `TextureList[0]` on an empty list. `3d/env/race/common/prop/prop0000/pfb_env_cmn_prop0000` and its four siblings carry no texture assets anywhere (the game colours them at runtime), so they threw `ArgumentOutOfRangeException`. Such a part is now written with PMX's own "no texture" |
+
+Two more guards went in beside them, in the same shape, and neither has been seen to fire yet: a renderer
+with no material at all (`materials[Count - 1]` on an empty list - such a submesh is now exported as an
+untextured part named after its object), and a mesh whose uv channel is missing (`vertices.Length` walk
+against `uv` - a missing uv is now zeros, so the surface loses its texture and the geometry stays right).
+
+Both of the real ones announce themselves in the log, so a scene that needed the repair is visible rather
+than silently patched: `holds N vertices, 0 normals and M uvs` per mesh (the first six by name, then a
+count), and `no main texture at all, and the model has no textures at all`.
+
+### 6d. A file that is written, but with corrupt indices
+
+The sweep above is also how the third one surfaced, and it is not visible from the shell: the export
+succeeds and the file is the right size, but its indices point at the wrong things.
+
+A pmx index is **signed** - -1 is how the format says "none", for a parent bone or a texture - so one byte
+addresses 128 entries, not 256. (The vertex index is the one the specification calls unsigned; the note at
+the end of this section says why it takes the signed width here anyway.) The exporter picked its widths with
+unsigned thresholds (`> 255` before widening), which is invisible on a character's skeleton (437 bones, 2
+bytes either way), shows up only in its morph list (205 morphs, 1 byte), and is flat wrong on exactly the
+scenes whose skeleton or material list lands in 129..255:
+
+| Scene | Counts | What the file said |
+|---|---|---|
+| `pfb_env_race10006_cutt000_002` | 230 bones, 212 materials | 1-byte bone and material indices, so every index past 127 came out negative on the way out (`(sbyte)213` is -43). `pmx_inspect integrity` reported vertices "skinned to bone -27" |
+| character 1001 | 205 morphs | 1-byte morph indices - harmless today only because nothing in that file references a morph by index (a group morph would), and enough to fail `integrity` |
+
+Widths are now chosen by what the width can *address*: 128 entries in one byte, 32768 in two, otherwise four
+(`ModelExporter.IndexSize`, used for every index including the vertex one - the pmx spec calls that one
+unsigned, and the signed rule is what the **one-byte** width needs, because 129 to 255 entries used to wrap to
+negative indices there: `MMDReaderWriteUtil.ReadIndex` reads one byte signed, two unsigned and four signed, so
+the sign bit only costs capacity at one byte). Any export older than that is worth a second look:
+
+```powershell
+uv run Tools/pmx_inspect.py integrity <file.pmx>   # exits non-zero on either failure
+```
+
 
 ### 7. Change what the exported file contains
 
@@ -314,10 +392,13 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-ShotTransparent` | off | Screenshot without the background |
 | `-ScanProps <filter>` | - | Load every matching `3d/env` scene in turn and report its material health |
 | `-ScanCount <n>` | 10 | How many scenes `-ScanProps` covers |
+| `-ScanExport` | off | With `-ScanProps`: export each scene instead of reporting it, and continue past the ones that throw |
+| `-ScanOut <dir>` | `<project>/HeadlessExports/scan` | Where `-ScanExport` writes its `.pmx` files and the shared `Texture2D/` folder |
 | `-Transcript <sheet>` | - | Print the dialogue a story voice sheet carries, and what the viewer would label each clip of that asset, then exit |
 | `-ExportAudio <sheet>` | - | Write a sound asset to an mp3 (with `-Out`) carrying its transcript in the ID3 tag |
 | `-ExportClip <n>` | 0 | Which clip of that asset; `-1` mixes the whole asset |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | - | Print and exit without loading |
+| `-ListTextures [filter]` | - | Print the character *texture* assets matching a substring and exit. Use a character id (`-ListTextures -ListTexturesFilter bdy1001_00`) to see what sets a character ships: the wet maps are the `_wet` twins of the dry ones, and any other set - the `_dirt` maps, for example - shows up here as its own name |
 
 ### Listing and plumbing
 
@@ -345,6 +426,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | The motion | `-RecordVmd` (no default) |
 | The mp3 | `-Out`, else `<project>/HeadlessExports/<asset name>.mp3` |
 | Screenshots | `-Screenshot`, with `_yaw+45` / `_az+60_yaw0` inserted before the extension when there are several angles |
+| A `-ScanExport` sweep | `-ScanOut`, else `<project>/HeadlessExports/scan`, one `.pmx` per scene plus one shared `Texture2D/` |
 | The run's log | `-LogPath`, else `<project>/Logs/headless_export_<timestamp>.log` |
 
 ---
@@ -396,6 +478,9 @@ at all, so the track has nothing to drive. Dropping it changes nothing.
 | `FAILED: -umaRecordVmd needs a character with an animator` | `-RecordVmd` with `-Prop`; motions belong to characters. |
 | The recording does not move (`vmd_inspect.py motion` fails) | The clip is an idle, or a one shot that was already over. Use `-PlaySeconds <s>` and a motion that actually moves. |
 | The model is white in Blender | The textures did not travel with it, or the materials were never resolved. Keep the `Texture2D/` folder next to the `.pmx`, and run with `-DumpMaterials` to see what resolved. |
+| A `Texture2D/` folder appeared but no model | The export threw after writing the textures and before opening the `.pmx`; the `FAILED:` line above names the exception (`IndexOutOfRangeException` on a scene's mesh or texture list is the historical pair - see [6c](#6c-why-a-scene-can-export-its-textures-and-no-model)). `-ScanProps "<filter>" -ScanExport` finds every scene in a family that does it in one run. |
+| The model imports but its skinning or materials point at the wrong thing | A pmx index that outgrew its width - see [6d](#6d-a-file-that-is-written-but-with-corrupt-indices). `uv run Tools/pmx_inspect.py integrity <file>` names it. |
+| The same model exports a different file when exported again | It did, for the cheek blush: the bake names its output after the texture it was handed, and the first export into a folder handed it an *unnamed* copy (`new Texture2D`), so it wrote and listed `_blush.png`; a re-export into the same folder skipped that copy and named the bake `tex_..._cheek0_blush.png`. The copy keeps its source's name now, so both exports agree. `-PlainMaterials` hides it, because the bake is what the uma material data asks for. |
 | `uv: command not found` | Only the checkers need it; the export itself does not. |
 | A run that used to work now times out | Check for a leftover Unity process holding the project, and whether an editor window opened on the same project. |
 
@@ -424,7 +509,9 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-RecordFps` / `-RecordReduction` / `-RecordMode` | `-umaRecordFps` / `-umaRecordReduction` / `-umaRecordMode` |
 | `-PlaySeconds` / `-ExtraFrames` / `-Timeout` | `-umaPlaySeconds` / `-umaExtraFrames` / `-umaTimeout` |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | `-umaListChars` / `-umaListCostumes` / `-umaListProps [filter]` |
+| `-ListTextures [filter]` | `-umaListTextures [filter]` |
 | `-DumpMaterials` / `-DumpFace` / `-ScanProps` / `-ScanCount` | `-umaDumpMaterials` / `-umaDumpFace` / `-umaScanProps` / `-umaScanCount` |
+| `-ScanExport` / `-ScanOut` | `-umaScanExport` / `-umaScanOut` |
 | `-Transcript` / `-ExportAudio` / `-ExportClip` | `-umaTranscript` / `-umaExportAudio` / `-umaExportClip` |
 | `-ShotView` / `-ShotWidth` / `-ShotHeight` / `-ShotYaw` / `-ShotYaws` | `-umaShotView` / `-umaShotWidth` / `-umaShotHeight` / `-umaShotYaw` / `-umaShotYaws` |
 | `-ShotAzimuths` / `-ShotLightElevation` / `-ShotTransparent` / `-ShotOnly` | `-umaShotAzimuths` / `-umaShotLightElevation` / `-umaShotTransparent` / `-umaShotOnly` |

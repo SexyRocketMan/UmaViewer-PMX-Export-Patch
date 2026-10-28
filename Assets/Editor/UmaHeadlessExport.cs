@@ -40,9 +40,18 @@ using UnityEngine.Rendering;
 ///   -umaListChars        print every character id together with its costume ids, then exit
 ///   -umaListCostumes     print the costume ids of -umaChar, then exit
 ///   -umaListProps &lt;f&gt;    print prop/scene assets whose name contains &lt;f&gt; (empty = all), then exit
+///   -umaListTextures &lt;f&gt; print character texture assets whose name contains &lt;f&gt; (empty = all, use a
+///                        character id), then exit. This is how a variant set is found rather than guessed
+///                        at: the wet maps are the "..._wet" twins of the dry ones, so any other set the
+///                        game ships would show up here as its own suffix.
 ///   -umaScanProps &lt;f&gt;    load every prop/scene matching &lt;f&gt; in turn and report its material health
 ///                        (textureless slots, missing shaders, resolved texture set), then exit
 ///   -umaScanCount &lt;n&gt;    how many props to scan, default 10
+///   -umaScanExport       with -umaScanProps: export each matched prop instead of only reporting it, and
+///                        continue past the ones that throw, then report how many of each. This is how a
+///                        batch of scenes is checked for the ones that fail to export at all - one editor
+///                        launch for the whole batch (see -umaScanOut)
+///   -umaScanOut &lt;dir&gt;    where -umaScanExport writes; default &lt;project&gt;/HeadlessExports/scan
 ///   -umaExportAudio &lt;sheet&gt;  write a sound asset to an mp3 (with -umaOut) carrying its transcript in
 ///                          the tag: -umaExportAudio snd_voi_story_041047007 -umaExportClip 3 -umaOut x.mp3
 ///   -umaExportClip &lt;n&gt;     which clip of that asset, default 0; -1 mixes the whole asset
@@ -89,6 +98,8 @@ public static class UmaHeadlessExport
     private const string KeyVmdFrames = "UmaHeadlessExport.VmdFrames";
     private const string KeyMotionLoaded = "UmaHeadlessExport.MotionLoaded";
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
+    private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
+    private const string KeyBootReported = "UmaHeadlessExport.BootReported";
 
     private enum Stage
     {
@@ -125,8 +136,19 @@ public static class UmaHeadlessExport
         public bool ListCostumes;
         public bool ListProps;
         public string ListPropsFilter = "";
+        public bool ListTextures;
+        public string ListTexturesFilter = "";
         public string ScanProps = "";
         public int ScanCount = 10;
+        /// <summary>
+        /// With -umaScanProps: *export* every matched prop instead of only reporting its material health, and
+        /// keep going after one that throws. This is the difference between finding a broken scene by
+        /// launching the editor once per scene and finding it in one run: three quarters of the export time is
+        /// the viewer booting, and a sweep boots it once for the whole batch.
+        /// </summary>
+        public bool ScanExport;
+        /// <summary>Where the sweep writes: one `.pmx` per prop, plus the shared `Texture2D/` folder.</summary>
+        public string ScanOutDir = "";
         public bool DumpMaterials;
         // a sound asset to write to an mp3, with the transcript in its tag
         public string ExportAudio = "";
@@ -219,8 +241,14 @@ public static class UmaHeadlessExport
                         // not another -umaX switch
                         if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListPropsFilter = argv[++i];
                         break;
+                    case "-umaListTextures":
+                        options.ListTextures = true;
+                        if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListTexturesFilter = argv[++i];
+                        break;
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
+                    case "-umaScanExport": options.ScanExport = true; break;
+                    case "-umaScanOut": options.ScanOutDir = Next(); break;
                     case "-umaTranscript": options.Transcript = Next(); break;
                     case "-umaExportAudio": options.ExportAudio = Next(); break;
                     case "-umaExportClip": options.ExportClip = int.Parse(Next()); break;
@@ -294,13 +322,14 @@ public static class UmaHeadlessExport
             return;
         }
 
-        if (!options.ListChars && !options.ListCostumes && !options.ListProps
+        if (!options.ListChars && !options.ListCostumes && !options.ListProps && !options.ListTextures
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
             && string.IsNullOrEmpty(options.ExportAudio)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
-                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaScanProps / -umaTranscript");
+                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaListTextures / -umaScanProps "
+                           + "/ -umaTranscript");
             EditorApplication.Exit(2);
             return;
         }
@@ -315,6 +344,8 @@ public static class UmaHeadlessExport
         SessionState.SetString(KeyOptions, JsonUtility.ToJson(options));
         SessionState.SetString(KeyDeadline, DateTime.UtcNow.AddSeconds(options.TimeoutSeconds).Ticks.ToString());
         SessionState.SetString(KeyOutPath, "");
+        SessionState.SetInt(KeyScanFailures, 0);
+        SessionState.SetInt(KeyBootReported, 0);
         _runStartedUtc = DateTime.UtcNow;
         _playModeRetries = 0;
         _faceDumped = false;
@@ -404,9 +435,15 @@ public static class UmaHeadlessExport
 
                     if (!usable || (!fullyBooted && bootSeconds < options.BootTimeoutSeconds)) return;
 
-                    Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets, "
-                              + $"{builder.ShaderList.Count} shaders"
-                              + (fullyBooted ? "" : $" (after {bootSeconds:F0}s without the startup download finishing)"));
+                    // once per run: a -umaScanExport sweep comes back through this stage for every prop, and
+                    // the boot summary is about the run, not about the prop
+                    if (SessionState.GetInt(KeyBootReported, 0) == 0)
+                    {
+                        SessionState.SetInt(KeyBootReported, 1);
+                        Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets, "
+                                  + $"{builder.ShaderList.Count} shaders"
+                                  + (fullyBooted ? "" : $" (after {bootSeconds:F0}s without the startup download finishing)"));
+                    }
 
                     if (options.MorphNameMode >= 0)
                     {
@@ -491,6 +528,13 @@ public static class UmaHeadlessExport
                         return;
                     }
 
+                    if (options.ListTextures)
+                    {
+                        PrintTextures(options.ListTexturesFilter);
+                        Succeed();
+                        return;
+                    }
+
                     if (!string.IsNullOrEmpty(options.ScanProps))
                     {
                         int index = SessionState.GetInt(KeyScanIndex, 0);
@@ -502,7 +546,21 @@ public static class UmaHeadlessExport
                         }
                         if (index >= candidates.Count)
                         {
-                            Debug.Log($"{Tag} scanned {candidates.Count} prop(s)");
+                            int failures = SessionState.GetInt(KeyScanFailures, 0);
+                            if (!options.ScanExport)
+                            {
+                                Debug.Log($"{Tag} scanned {candidates.Count} prop(s)");
+                                Succeed();
+                                return;
+                            }
+                            Debug.Log($"{Tag} sweep: {candidates.Count - failures} of {candidates.Count} prop(s) "
+                                      + $"exported, {failures} failed"
+                                      + (failures > 0 ? " - the failures are named above" : ""));
+                            if (failures > 0)
+                            {
+                                Fail($"sweep: {failures} of {candidates.Count} prop(s) did not export");
+                                return;
+                            }
                             Succeed();
                             return;
                         }
@@ -511,6 +569,29 @@ public static class UmaHeadlessExport
                         SessionState.SetInt(KeyScanIndex, index + 1);
                         builder.UnloadProp();
                         builder.LoadProp(entry);
+
+                        if (options.ScanExport)
+                        {
+                            // straight on to the export stage with everything the export step reads set up,
+                            // exactly as the single -umaProp run does it
+                            string sweepPath = Path.Combine(SweepFolder(options),
+                                                            Path.GetFileName(entry.Name) + ".pmx");
+                            sweepPath = Path.GetFullPath(sweepPath);
+                            Directory.CreateDirectory(Path.GetDirectoryName(sweepPath));
+                            // A sweep writes every prop into ONE folder, so a second run finds the first
+                            // run's files. The success check below is File.Exists, which would then report
+                            // a scene that now fails to export as "exported" - at the old file's size - and
+                            // the run would exit 0. A sweep exists to find exactly those scenes, so the
+                            // target is cleared first and the check means what it says.
+                            if (File.Exists(sweepPath)) File.Delete(sweepPath);
+                            SessionState.SetString(KeyOutPath, sweepPath);
+                            SessionState.SetInt(KeyIsProp, 1);
+                            SessionState.SetString(KeyPropName, entry.Name);
+                            Debug.Log($"{Tag} [{index + 1}/{candidates.Count}] exporting {entry.Name}");
+                            CurrentStage = Stage.WaitModel;
+                            return;
+                        }
+
                         var container = builder.CurrentOtherContainer;
                         Debug.Log($"{Tag} [{index + 1}/{candidates.Count}] {entry.Name}  {SummarizeMaterials(container)}");
                         return;
@@ -870,10 +951,13 @@ public static class UmaHeadlessExport
                     }
                     if (!File.Exists(exportPath) || new FileInfo(exportPath).Length == 0)
                     {
-                        Fail($"export did not write {exportPath}");
+                        string missing = $"the export wrote no {exportPath}";
+                        if (options.ScanExport) { ContinueSweep(missing); return; }
+                        Fail(missing);
                         return;
                     }
                     Debug.Log($"{Tag} OK {exportPath} ({new FileInfo(exportPath).Length} bytes)");
+                    if (options.ScanExport) { ContinueSweep(null); return; }
                     Succeed();
                     return;
                 }
@@ -881,6 +965,13 @@ public static class UmaHeadlessExport
         }
         catch (Exception ex)
         {
+            // A sweep exists to find the scenes that throw, so one of them throwing is a result, not the end of
+            // the run: it is recorded and the next prop is loaded. Any other stage keeps the old behaviour.
+            if (CurrentOptions.ScanExport && CurrentStage == Stage.Export)
+            {
+                ContinueSweep($"{ex.GetType().Name}: {ex.Message}");
+                return;
+            }
             Fail($"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
     }
@@ -936,6 +1027,43 @@ public static class UmaHeadlessExport
         var row = UmaDatabaseController.Instance?.CharaData?.FirstOrDefault(item => Convert.ToInt32(item["id"]) == id);
         if (row == null) return null;
         return new CharaEntry { Id = id, Name = row["charaname"].ToString(), EnName = "" };
+    }
+
+    /// <summary>Where a -umaScanExport sweep writes its files.</summary>
+    private static string SweepFolder(Options options)
+    {
+        if (!string.IsNullOrEmpty(options.ScanOutDir)) return Path.GetFullPath(options.ScanOutDir);
+        return Path.Combine(Path.GetDirectoryName(Application.dataPath), "HeadlessExports", "scan");
+    }
+
+    /// <summary>
+    /// Ends one prop of a -umaScanExport sweep and starts the next.
+    ///
+    /// The per-prop state has to go with it: the out path, the "is a prop" flag and the prop name are what the
+    /// export stage reads, and a leftover value would make the next prop write over the last one's file, or
+    /// name it wrongly in the log. The stage goes back to <see cref="Stage.WaitStartup"/>, which is where the
+    /// scan list is walked.
+    /// </summary>
+    private static void ContinueSweep(string failure)
+    {
+        string name = SessionState.GetString(KeyPropName, "");
+        int done = SessionState.GetInt(KeyScanIndex, 0);
+        if (failure != null)
+        {
+            SessionState.SetInt(KeyScanFailures, SessionState.GetInt(KeyScanFailures, 0) + 1);
+            Debug.Log($"{Tag} [{done}] {name}: FAILED: {failure}");
+        }
+        else
+        {
+            string written = SessionState.GetString(KeyOutPath, "");
+            long bytes = File.Exists(written) ? new FileInfo(written).Length : 0;
+            Debug.Log($"{Tag} [{done}] {name}: exported ({bytes} bytes)");
+        }
+
+        SessionState.SetString(KeyOutPath, "");
+        SessionState.SetInt(KeyIsProp, 0);
+        SessionState.SetString(KeyPropName, "");
+        CurrentStage = Stage.WaitStartup;
     }
 
     /// <summary>Props/scenes to scan, most useful ones first, capped at <paramref name="count"/>.</summary>
@@ -1182,6 +1310,26 @@ public static class UmaHeadlessExport
                              + $"others: {string.Join(", ", matches.Skip(1).Take(8).Select(m => m.Name))}");
         }
         return matches.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Every texture asset in the character database whose name matches, filtered by name.
+    ///
+    /// This is how a variant set is *found* rather than assumed: the rain look exists because the game
+    /// ships a "..._wet" twin of every dry map, and that was established by reading names like this. Asking
+    /// for one character's textures and looking at the suffixes answers whether there is any other set (a
+    /// dirty one, a seasonal one) without guessing from a single prefab's material.
+    /// </summary>
+    private static void PrintTextures(string filter)
+    {
+        var textures = UmaViewerMain.Instance.AbChara
+            .Where(e => e != null && e.Name.Contains("/textures/"))
+            .Where(e => string.IsNullOrEmpty(filter) || e.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderBy(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+        Debug.Log($"{Tag} character textures ({textures.Count} matching '{filter}'):");
+        foreach (var entry in textures.Take(4000)) Debug.Log($"{Tag}   {entry.Name}");
+        if (textures.Count > 4000) Debug.Log($"{Tag}   ... and {textures.Count - 4000} more");
     }
 
     private static void PrintProps(string filter)

@@ -154,6 +154,16 @@ public class TextureExporter
                && (material.shader.name ?? string.Empty).IndexOf("Multiply", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
+    /// <summary>
+    /// A readable copy of a texture, written as PNG by the export.
+    ///
+    /// The copy keeps the source's name: the cheek bake names its output after the texture it was handed
+    /// (<see cref="BlushName"/>), and `new Texture2D(...)` starts out unnamed. Without the transfer, the first
+    /// export into a folder wrote the bake as `_blush.png` and listed `Texture2D/_blush.png` in the pmx, while
+    /// a second export into the same folder - which skips the write because the file is already there -
+    /// produced `tex_chr1001_00_cheek0_blush.png` instead. Same model, two different texture lists, one of
+    /// them pointing at a file named after nothing.
+    /// </summary>
     static public Texture2D duplicateTexture(Texture2D source)
     {
         RenderTexture renderTex = RenderTexture.GetTemporary(
@@ -167,6 +177,7 @@ public class TextureExporter
         RenderTexture previous = RenderTexture.active;
         RenderTexture.active = renderTex;
         Texture2D readableText = new Texture2D(source.width, source.height);
+        readableText.name = source.name;
         readableText.ReadPixels(new Rect(0, 0, renderTex.width, renderTex.height), 0, 0);
         readableText.Apply();
         RenderTexture.active = previous;

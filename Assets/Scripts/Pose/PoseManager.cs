@@ -42,6 +42,10 @@ public class PoseManager : MonoBehaviour
 
     private void Update()
     {
+        // H belongs to pose mode: outside it there is no help panel to show, and the key would toggle a
+        // panel nobody can see (and nothing else in the viewer answers to H, so it looked swallowed).
+        if (!PoseModeOn || HelpPanel == null) return;
+
         if (Input.GetKeyDown(KeyCode.H))
         {
             HelpPanel.SetActive(!HelpPanel.activeSelf);

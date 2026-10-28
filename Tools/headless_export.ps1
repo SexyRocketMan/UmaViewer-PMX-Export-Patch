@@ -22,6 +22,8 @@
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -ShotYaws 0,45,-45,90 `
         -Screenshot D:/out/game_face.png -ShotOnly
     ./Tools/headless_export.ps1 -ListProps home10001
+    # export every matching scene in one editor run, and report the ones that fail
+    ./Tools/headless_export.ps1 -ScanProps "3d/env/race" -ScanCount 40 -ScanExport -ScanOut D:/scan
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
 [CmdletBinding()]
@@ -37,8 +39,12 @@ param(
     [switch]$ListCostumes,
     [switch]$ListProps,
     [string]$ListPropsFilter = "",
+    [switch]$ListTextures,
+    [string]$ListTexturesFilter = "",
     [string]$ScanProps = "",
     [int]$ScanCount = 10,
+    [switch]$ScanExport,
+    [string]$ScanOut = "",
     [string]$Transcript = "",
     [string]$ExportAudio = "",
     [int]$ExportClip = 0,
@@ -135,7 +141,7 @@ if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -169,8 +175,17 @@ if ($ListProps) {
     $arguments += "-umaListProps"
     if ($ListPropsFilter) { $arguments += $ListPropsFilter }
 }
+if ($ListTextures) {
+    $arguments += "-umaListTextures"
+    if ($ListTexturesFilter) { $arguments += $ListTexturesFilter }
+}
 if ($ScanProps) {
     $arguments += @("-umaScanProps", $ScanProps, "-umaScanCount", $ScanCount)
+    if ($ScanExport) { $arguments += "-umaScanExport" }
+    if ($ScanOut) {
+        New-Item -ItemType Directory -Force -Path $ScanOut | Out-Null
+        $arguments += @("-umaScanOut", (Resolve-Path $ScanOut).Path)
+    }
 }
 if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
 if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }
@@ -227,11 +242,15 @@ $launcherExit = $LASTEXITCODE
 
 # Unity's launcher process can exit before the editor it spawned has finished, so the process exit
 # code is not proof of anything: wait for the runner's own result marker in the log instead.
+#
+# Only the *terminal* marker counts, which is why the pattern is anchored: a sweep logs `[7] name: exported
+# (...)` and `[8] name: FAILED: ...` per prop, and matching those as the result both reported a sweep with a
+# failed prop as a success and would have stopped the wait at the first prop that failed.
 $marker = $null
 $deadline = (Get-Date).AddSeconds($Timeout + 120)
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $LogPath) {
-        $marker = Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\] (OK|FAILED)" -ErrorAction SilentlyContinue |
+        $marker = Select-String -Path $LogPath -Pattern "^\[UmaHeadlessExport\] (OK\s*$|FAILED)" -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($marker) { break }
     }

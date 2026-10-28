@@ -384,6 +384,117 @@ public class UmaContainerCharacter : UmaContainer
         FaceOverrideData?.SetEnable(isOn);
     }
 
+    /// <summary>The game's wet maps are named after the dry map they replace ("..._diff_wet").</summary>
+    private const string WetSuffix = "_wet";
+
+    /// <summary>Every wet texture in the database, by asset name. Built once and shared by all characters.</summary>
+    private static Dictionary<string, UmaDatabaseEntry> _wetTextures;
+
+    /// <summary>The maps a wet swap replaced, so switching back puts the original objects back.</summary>
+    private readonly List<(Material Material, string Property, Texture Dry)> _dryTextures =
+        new List<(Material, string, Texture)>();
+
+    /// <summary>Whether this character currently wears the rain texture set.</summary>
+    public bool IsWetLook { get; private set; }
+
+    /// <summary>
+    /// The rain look: the game swaps a character's maps for a separately shipped wet set when a race is
+    /// rained on, and this does the same thing. The wet textures are assets of their own named after the
+    /// dry map ("tex_bdy1001_00_diff" -> "tex_bdy1001_00_diff_wet") while the dry ones live inside the
+    /// part prefabs, so every texture slot of every material is asked whether a wet twin of what it holds
+    /// exists - which ones a given shader takes is the shader's business, not this method's.
+    ///
+    /// Returns whether the character is wet afterwards: minis and the few costumes without a wet set
+    /// simply stay dry.
+    ///
+    /// <para><b>While wet, this character owns private copies of its materials.</b> The swap walks
+    /// <c>renderer.materials</c>, which instantiates copies on first touch, so everything that holds the
+    /// <i>shared</i> materials is no longer looking at what renders: the facial driven keys captured their
+    /// <c>BindProperty.BindMaterial</c> when the model loaded and set textures on those, and the material
+    /// panels read <c>sharedMaterials</c> too. A morph that swaps a face texture therefore does nothing
+    /// visible until the rain look is switched off, which puts the originals back. The copies also stay
+    /// when nothing was swapped - a character whose own parts ship no wet maps still owns them after one
+    /// call - so "asked once" is the trigger, not "is wet". Swapping the shared materials instead is not
+    /// the fix - it would repaint every character that shares them - so anything new that edits a material
+    /// has to tolerate a character having been asked.</para>
+    /// </summary>
+    public bool SetWetLook(bool wet)
+    {
+        if (wet == IsWetLook) return IsWetLook;
+
+        if (!wet)
+        {
+            foreach (var (material, property, dry) in _dryTextures)
+            {
+                if (material) material.SetTexture(property, dry);
+            }
+
+            int restored = _dryTextures.Count;
+            _dryTextures.Clear();
+            IsWetLook = false;
+            Debug.Log($"[Wet] {restored} map(s) back to the dry set");
+            return IsWetLook;
+        }
+
+        var wetTextures = WetTextureEntries();
+        // Ask before touching a renderer: reading renderer.materials below instantiates private copies, and
+        // a mini or a costume with no wet set would pay that for every material to learn it had no work to do.
+        if (wetTextures.Count == 0)
+        {
+            Debug.Log("[Wet] the database carries no wet textures at all, staying dry");
+            return IsWetLook;
+        }
+
+        int swapped = 0;
+
+        foreach (var renderer in GetComponentsInChildren<Renderer>(true))
+        {
+            foreach (var material in renderer.materials)
+            {
+                if (!material) continue;
+
+                foreach (var property in material.GetTexturePropertyNames())
+                {
+                    var dry = material.GetTexture(property);
+                    if (!dry) continue;
+                    if (!wetTextures.TryGetValue(dry.name + WetSuffix, out UmaDatabaseEntry entry)) continue;
+
+                    var texture = entry.GetAll<Texture2D>().FirstOrDefault();
+                    if (!texture) continue;
+
+                    _dryTextures.Add((material, property, dry));
+                    material.SetTexture(property, texture);
+                    swapped++;
+                }
+            }
+        }
+
+        IsWetLook = swapped > 0;
+        Debug.Log(swapped > 0
+            ? $"[Wet] {swapped} map(s) swapped for the wet set"
+            : "[Wet] this model ships no wet textures, staying dry");
+        return IsWetLook;
+    }
+
+    private static Dictionary<string, UmaDatabaseEntry> WetTextureEntries()
+    {
+        if (_wetTextures != null) return _wetTextures;
+
+        _wetTextures = new Dictionary<string, UmaDatabaseEntry>(StringComparer.Ordinal);
+        var main = UmaViewerMain.Instance;
+        if (main == null || main.AbChara == null) return _wetTextures;
+
+        foreach (var entry in main.AbChara)
+        {
+            if (entry == null || !entry.Name.EndsWith(WetSuffix, StringComparison.Ordinal)) continue;
+            if (!entry.Name.Contains("/textures/")) continue;
+            _wetTextures[entry.Name.Substring(entry.Name.LastIndexOf('/') + 1)] = entry;
+        }
+
+        Debug.Log($"[Wet] {_wetTextures.Count} wet texture(s) available");
+        return _wetTextures;
+    }
+
     private void FixedUpdate()
     {
         if (IsMini) return;

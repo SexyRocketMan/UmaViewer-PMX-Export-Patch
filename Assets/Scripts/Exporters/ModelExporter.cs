@@ -86,6 +86,24 @@ public class ModelExporter
     /// wraps its indices silently instead of failing. The character path used to rely on that default while the
     /// generic one computed the widths, which meant the *common* case was the unwatched one. Counts decide every
     /// width here, so a costume with more parts than usual cannot quietly corrupt the file.
+    ///
+    /// Every index in a pmx is *signed* at the one-byte width - -1 is how the format says "none", for a parent
+    /// bone or a texture - so a 1-byte index addresses 128 entries and not 256. That is the rule
+    /// `Tools/pmx_inspect.py integrity` checks (`capacity = 128 * 256 ** (size - 1)`), and it is what the
+    /// one-byte path of this project's own reader does: `MMDReaderWriteUtil.ReadIndex` reads one byte with
+    /// `ReadSByte`, but **two with `ReadUInt16`** and four with `ReadInt32` (see `PMXReader.PmxConfig` for
+    /// where it is called). The sign bit therefore only costs capacity at one byte; the 2-byte threshold below
+    /// stays far inside the unsigned range, so nothing hinges on which reading a consumer takes. Reading the
+    /// 1-byte threshold as unsigned is not a rounding error: a scene with 129 to 255 bones was written with
+    /// 1-byte bone indices, and every index past 127 came out negative on the way out (`(sbyte)213` is -43) -
+    /// which is what `pfb_env_race10006_cutt000_002`'s 230-bone export showed as vertices "skinned to bone
+    /// -27", and its 212 materials the same way. Scene skeletons are exactly where that range occurs; a
+    /// character's 437 bones are past it, and nothing else about the export fails, so the file looks fine until
+    /// a consumer reads it.
+    ///
+    /// The pmx *specification* does call the vertex index unsigned, so 128 to 255 vertices could legally use one
+    /// byte - but only a reader that agrees would get those indices right, and a 1-byte index is worth a few
+    /// hundred bytes at most here, so every index takes the signed width.
     /// </summary>
     private static PmxConfig PmxConfigFor(RawMMDModel model)
     {
@@ -94,13 +112,20 @@ public class ModelExporter
             Utf8Encoding = false,
             Encoding = Encoding.Unicode,
             ExtraUvNumber = 3, //include uv2 and color
-            VertexIndexSize = model.Vertices.Length > 65535 ? 4 : (model.Vertices.Length > 255 ? 2 : 1),
-            TextureIndexSize = model.TextureList.Count > 255 ? 2 : 1,
-            MaterialIndexSize = model.Parts.Length > 255 ? 2 : 1,
-            BoneIndexSize = model.Bones.Length > 65535 ? 4 : (model.Bones.Length > 255 ? 2 : 1),
-            MorphIndexSize = model.Morphs.Length > 65535 ? 4 : (model.Morphs.Length > 255 ? 2 : 1),
-            RigidBodyIndexSize = model.Rigidbodies.Length > 65535 ? 4 : (model.Rigidbodies.Length > 255 ? 2 : 1)
+            VertexIndexSize = IndexSize(model.Vertices.Length),
+            TextureIndexSize = IndexSize(model.TextureList.Count),
+            MaterialIndexSize = IndexSize(model.Parts.Length),
+            BoneIndexSize = IndexSize(model.Bones.Length),
+            MorphIndexSize = IndexSize(model.Morphs.Length),
+            RigidBodyIndexSize = IndexSize(model.Rigidbodies.Length)
         };
+    }
+
+    /// <summary>1, 2 or 4 bytes for a count of `count` entries addressed by a signed pmx index.</summary>
+    private static int IndexSize(int count)
+    {
+        if (count <= 128) return 1;
+        return count <= 32768 ? 2 : 4;
     }
 
     public static void ExportModel(UmaContainer container, string path)
@@ -791,6 +816,19 @@ public class ModelExporter
                              + "exported texture list, so that map is missing from the export");
         }
         return match;
+    }
+
+    /// <summary>
+    /// The texture a material is pointed at when its own is not in the export: the first one, which at least
+    /// gives the surface *a* texture instead of nothing. Null when the model carries no textures at all - a
+    /// scene the game colours entirely at runtime, `3d/env/live/common` and `3d/env/race/common` among them -
+    /// and null is what the writer turns into PMX's own "-1, no texture". Reading `TextureList[0]` blind on
+    /// such a model threw `ArgumentOutOfRangeException` out of the export, which is the same
+    /// "textures written, no model" symptom the missing normals produced.
+    /// </summary>
+    private static MMDTexture FirstTexture(RawMMDModel model)
+    {
+        return model.TextureList.Count > 0 ? model.TextureList[0] : null;
     }
 
     private static float PropertyFloat(Material material, string property, float fallback)
@@ -1510,11 +1548,19 @@ public class ModelExporter
             var materials = new List<Material>(renderer.sharedMaterials);
             for (int i = 0; i < mesh.subMeshCount; i++)
             {
-                var material = (i < materials.Count ? materials[i] : materials[materials.Count - 1]);
+                // a renderer can carry no material at all - a scene mesh whose material slot was never filled -
+                // and indexing `materials[Count - 1]` on that took the whole export down the same way the
+                // missing normals did. The submesh still becomes a part, because it does have geometry: it is
+                // named after the object it is drawn on and carries no texture.
+                var material = materials.Count == 0
+                    ? null
+                    : (i < materials.Count ? materials[i] : materials[materials.Count - 1]);
                 var part = new Part();
                 var mat = new MMDMaterial();
                 part.Material = mat;
-                mat.Name = mat.NameEn = material.name.Replace(" (Instance)","");
+                mat.Name = mat.NameEn = material != null
+                    ? material.name.Replace(" (Instance)", "")
+                    : renderer.name.Replace(" (Instance)", "");
                 mat.DiffuseColor = Color.white;
                 bool decal = restInvisible != null && restInvisible.Contains(renderer);
                 mat.SpecularColor = Color.clear;
@@ -1541,7 +1587,7 @@ public class ModelExporter
                 // so every material starts out with an empty one
                 mat.MetaInfo = string.Empty;
 
-                if (material.HasProperty("_MainTex") && material.mainTexture != null)
+                if (material != null && material.HasProperty("_MainTex") && material.mainTexture != null)
                 {
                     try
                     {
@@ -1559,21 +1605,25 @@ public class ModelExporter
                             Debug.LogWarning($"{Tag} {material.name}: texture '{material.mainTexture.name}' is not in the exported "
                                              + "texture list, substituting the first texture - the surface will not look right");
                         }
-                        mat.Texture = (tex ?? model.TextureList[0]);
+                        mat.Texture = (tex ?? FirstTexture(model));
                     }
                     catch (Exception e)
                     {
                         Debug.LogWarning($"{Tag} {material.name}: texture lookup failed ({e.Message}), "
                                          + "substituting the first texture");
-                        mat.Texture = model.TextureList[0];
+                        mat.Texture = FirstTexture(model);
                     }
                 }
                 else
                 {
                     // e.g. environment materials whose texture set is only assigned at runtime by the game
-                    Debug.LogWarning($"{Tag} {material.name}: no main texture at all, substituting the first texture - "
-                                     + "the surface will not look right (see UmaEnvTextureSet for environment scenes)");
-                    mat.Texture = model.TextureList[0];
+                    Debug.LogWarning($"{Tag} {mat.Name}: no main texture at all"
+                                     + (model.TextureList.Count > 0
+                                         ? ", substituting the first texture - the surface will not look right"
+                                           + " (see UmaEnvTextureSet for environment scenes)"
+                                         : ", and the model has no textures at all - the part is exported"
+                                           + " untextured (see UmaEnvTextureSet for environment scenes)"));
+                    mat.Texture = FirstTexture(model);
                 }
                 // The morph tokens belong to the extra-morphs feature, not to the uma-material one, so they are
                 // collected outside the `PmxUmaMaterialFields` branch: a model exported with plain MMD materials and
@@ -1643,6 +1693,7 @@ public class ModelExporter
         int vertexOffset = 0;
         // the bone a part with no bones of its own should ride: every decal in this model is a child of the head
         Transform headBone = FindHeadBone(bones);
+        _channelRepairs = 0;
 
         foreach (Renderer renderer in renderers)
         {
@@ -1678,6 +1729,7 @@ public class ModelExporter
                 var uv2 = mesh.uv3;
                 var colors = mesh.colors;
                 var triangles = mesh.triangles;
+                CompleteVertexChannels(renderer, mesh, vertices, triangles, ref normals, ref uv);
 
                 for (int i = 0; i < vertices.Length; i++)
                 {
@@ -1694,11 +1746,13 @@ public class ModelExporter
                     vertex.Normal = renderer.transform.TransformDirection(normals[i]).normalized;
                     vertex.UvCoordinate = new Vector2(uv[i].x, 1 - uv[i].y);
 
+                    // exact length rather than "> 0": a channel that is present but shorter than the vertex list
+                    // (see CompleteVertexChannels) throws just as hard as a missing one
                     vertex.ExtraUvCoordinate = new Vector4[3]
                     {
-                        uv1.Length > 0 ? new Vector2(uv1[i].x, 1 - uv1[i].y) : Vector2.zero,
-                        uv2.Length > 0 ? new Vector2(uv2[i].x, 1 - uv2[i].y) : Vector2.zero,
-                        colors.Length > 0 ? colors[i] : Color.clear
+                        uv1.Length == vertices.Length ? new Vector2(uv1[i].x, 1 - uv1[i].y) : Vector2.zero,
+                        uv2.Length == vertices.Length ? new Vector2(uv2[i].x, 1 - uv2[i].y) : Vector2.zero,
+                        colors.Length == vertices.Length ? colors[i] : Color.clear
                     };
 
                     vertex.SkinningOperator = new SkinningOperator() { Type = SkinningType.SkinningBdef1 };
@@ -1753,18 +1807,29 @@ public class ModelExporter
                 var weights = mesh.boneWeights;
                 var bakemesh = new Mesh();
                 smr.BakeMesh(bakemesh,true);
+                // The pmx needs one normal and one uv per vertex whatever the mesh holds, and a mesh with no
+                // normal channel bakes without one as well - so both the source arrays and the baked normals are
+                // completed here (see CompleteVertexChannels for what was thrown and why).
+                CompleteVertexChannels(renderer, mesh, vertices, mesh.triangles, ref normals, ref uv);
+                var bakedVertices = bakemesh.vertices;
+                var bakedNormals = bakemesh.normals;
+                if (bakedNormals.Length != bakedVertices.Length) bakedNormals = RebuiltNormals(bakedVertices, mesh.triangles);
+                // skin weights can be absent or short on a part that carries no skinning at all: read as "no
+                // bone count", which the switch below already treats as "ride the transform's own bone"
+                bool weightsPresent = weights.Length == vertices.Length;
+                bool boneCountsPresent = boneCounts.Length == vertices.Length;
 
                 for (int i = 0; i < vertices.Length; i++)
                 {
                     Vertex vertex = new Vertex();
-                    vertex.Coordinate = root.InverseTransformPoint(smr.transform.TransformPoint(bakemesh.vertices[i]));
+                    vertex.Coordinate = root.InverseTransformPoint(smr.transform.TransformPoint(bakedVertices[i]));
                     // the same chain as the position, so the normal lands in the space the position is in: the baked
                     // mesh carries skinned normals in the renderer's own frame, and they used to be written without
                     // the renderer's rotation at all - positions in the root's frame, normals in the part's
                     // `.normalized` because InverseTransformDirection divides by the root's scale, which is not 1:
                     // without it every normal in the file came out 0.9829 long instead of 1.0000.
                     Vector3 skinnedNormal = root.InverseTransformDirection(
-                        smr.transform.TransformDirection(bakemesh.normals[i]));
+                        smr.transform.TransformDirection(bakedNormals[i]));
                     // skinning can collapse a vertex to a point, and a collapsed normal bakes as zero (24 of them
                     // on 1001). A zero normal in the file shades as black, so fall back to the rest pose's own
                     // normal - which is exactly what these vertices were written with before.
@@ -1776,20 +1841,20 @@ public class ModelExporter
                     float headLocalY = 0f;
                     if (headBone != null)
                     {
-                        Vector3 world = smr.transform.TransformPoint(bakemesh.vertices[i]);
+                        Vector3 world = smr.transform.TransformPoint(bakedVertices[i]);
                         headLocalY = headBone.worldToLocalMatrix.MultiplyPoint(world).y;
                     }
                     vertex.ExtraUvCoordinate = new Vector4[3]
                     {
-                        uv1.Length > 0 ? new Vector2(uv1[i].x, 1 - uv1[i].y) : Vector2.zero,
-                        new Vector4(uv2.Length > 0 ? uv2[i].x : 0f,
-                                    uv2.Length > 0 ? 1 - uv2[i].y : 0f,
+                        uv1.Length == vertices.Length ? new Vector2(uv1[i].x, 1 - uv1[i].y) : Vector2.zero,
+                        new Vector4(uv2.Length == vertices.Length ? uv2[i].x : 0f,
+                                    uv2.Length == vertices.Length ? 1 - uv2[i].y : 0f,
                                     headLocalY, 0f),
-                        colors.Length > 0 ? colors[i] : Color.clear
+                        colors.Length == vertices.Length ? colors[i] : Color.clear
                     };
 
-                    var boneWeight = weights[i];
-                    var boneCount = boneCounts[i];
+                    var boneWeight = weightsPresent ? weights[i] : new BoneWeight();
+                    var boneCount = boneCountsPresent ? boneCounts[i] : (byte)0;
 
                     switch (boneCount)
                     {
@@ -1806,7 +1871,7 @@ public class ModelExporter
                         default:
                         case 1:
                             vertex.SkinningOperator = new SkinningOperator() { Type = SkinningType.SkinningBdef1 };
-                            vertex.SkinningOperator.Param = new Bdef1() { BoneId = SkinningBone(skinbone[boneWeight.boneIndex0], bones, headBone) };
+                            vertex.SkinningOperator.Param = new Bdef1() { BoneId = SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex0), bones, headBone) };
                             break;
 
                         case 2:
@@ -1814,8 +1879,8 @@ public class ModelExporter
                             vertex.SkinningOperator.Param = new Bdef2()
                             {
                                 BoneId = new int[]{
-                                    SkinningBone(skinbone[boneWeight.boneIndex0], bones, headBone),
-                                    SkinningBone(skinbone[boneWeight.boneIndex1], bones, headBone),
+                                    SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex0), bones, headBone),
+                                    SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex1), bones, headBone),
                                 },
                                 BoneWeight = boneWeight.weight0
                             };
@@ -1827,10 +1892,10 @@ public class ModelExporter
                             vertex.SkinningOperator.Param = new Bdef4()
                             {
                                 BoneId = new int[]{
-                                    SkinningBone(skinbone[boneWeight.boneIndex0], bones, headBone),
-                                    SkinningBone(skinbone[boneWeight.boneIndex1], bones, headBone),
-                                    SkinningBone(skinbone[boneWeight.boneIndex2], bones, headBone),
-                                    SkinningBone(skinbone[boneWeight.boneIndex3], bones, headBone),
+                                    SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex0), bones, headBone),
+                                    SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex1), bones, headBone),
+                                    SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex2), bones, headBone),
+                                    SkinningBone(SkinBoneAt(skinbone, boneWeight.boneIndex3), bones, headBone),
                                 },
                                 BoneWeight = new float[]
                                 {
@@ -1855,8 +1920,113 @@ public class ModelExporter
                 vertexOffset += vertices.Length;
             }
         }
+        if (_channelRepairs > 0)
+        {
+            Debug.Log($"{Tag} {_channelRepairs} mesh(es) had a missing normals/uv channel and were completed "
+                      + "rather than aborting the export (see the warnings above)");
+        }
         FlushVertexDump();
         return verticesList.ToArray();
+    }
+
+    /// <summary>
+    /// A mesh's normals and uvs, completed to one entry per vertex before the vertex loop reads them.
+    ///
+    /// A pmx vertex *is* a position, a normal and a uv, and the format has no way to say "this mesh had no
+    /// normals" - so the export has to produce one per vertex whatever the mesh holds, and not every mesh in
+    /// the game does. The race scenes are where this shows: `pfb_env_race10201_cutt000_002` (and its siblings)
+    /// carry meshes whose normal channel is missing or shorter than the vertex list, and the loop walked
+    /// `vertices.Length` while indexing `mesh.normals` and `mesh.uv`. That threw `IndexOutOfRangeException`
+    /// straight out of `ExportModel` - after the textures had been written (they are written first) and before
+    /// the pmx file was even opened, which is exactly the reported symptom: a `Texture2D/` folder, no model,
+    /// and a one-line "FAILED: IndexOutOfRangeException" that says nothing about which mesh or which scene
+    /// part.
+    ///
+    /// A missing normal is rebuilt from the mesh's own triangles, because a zero normal shades as black in MMD
+    /// and a pmx full of black normals reads as a broken import. A mesh whose triangles are unusable as well
+    /// keeps `up`, which at least shades as one flat colour instead of black. A missing uv is zeros: the
+    /// surface loses its texture, everything else about it stays right.
+    /// </summary>
+    private static void CompleteVertexChannels(Renderer renderer, Mesh mesh, Vector3[] vertices,
+                                               int[] triangles, ref Vector3[] normals, ref Vector2[] uv)
+    {
+        int vertexCount = vertices.Length;
+        int normalCount = normals != null ? normals.Length : 0;
+        int uvCount = uv != null ? uv.Length : 0;
+        if (normalCount == vertexCount && uvCount == vertexCount) return;
+
+        _channelRepairs++;
+        if (_channelRepairs <= ChannelWarningsLogged)
+        {
+            Debug.LogWarning($"{Tag} {renderer.name}: mesh '{mesh.name}' holds {vertexCount} vertices, "
+                             + $"{normalCount} normals and {uvCount} uvs. The missing normals are rebuilt from the "
+                             + "mesh's triangles (a zero normal shades as black), the missing uvs are zero");
+        }
+        else if (_channelRepairs == ChannelWarningsLogged + 1)
+        {
+            Debug.LogWarning($"{Tag} more meshes than that are missing a normal or uv channel; the rest are "
+                             + "completed the same way and not listed one by one");
+        }
+        if (normalCount != vertexCount) normals = RebuiltNormals(vertices, triangles);
+        if (uvCount != vertexCount) uv = Resized(uv, vertexCount);
+    }
+
+    /// <summary>
+    /// How many meshes the export has completed this run, and how many of those are named in the log.
+    ///
+    /// Named individually they buried everything else: a race scene's trees are one billboard mesh each, and
+    /// `pfb_env_race10201_cutt000_002` alone completes 688 of them (measured - 4 to 70 vertices each, no
+    /// normals at all). The count is reset by `ReadVerticesAndTriangles`, which runs exactly once per export.
+    /// </summary>
+    private static int _channelRepairs;
+    private const int ChannelWarningsLogged = 6;
+
+    /// <summary>
+    /// Area-weighted normals from a triangle list - the usual cross-product accumulation, which is what
+    /// `Mesh.RecalculateNormals` does, written out because the mesh this replaces is often unreadable (a
+    /// `Mesh` copy would need a fresh buffer for the same answer) and a vertex no triangle touches has no
+    /// normal to derive, for which `up` is the placeholder.
+    /// </summary>
+    private static Vector3[] RebuiltNormals(Vector3[] vertices, int[] triangles)
+    {
+        var normals = new Vector3[vertices.Length];
+        if (triangles != null)
+        {
+            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                int a = triangles[i], b = triangles[i + 1], c = triangles[i + 2];
+                if (a < 0 || b < 0 || c < 0) continue;
+                if (a >= vertices.Length || b >= vertices.Length || c >= vertices.Length) continue;
+                Vector3 face = Vector3.Cross(vertices[b] - vertices[a], vertices[c] - vertices[a]);
+                normals[a] += face;
+                normals[b] += face;
+                normals[c] += face;
+            }
+        }
+        for (int i = 0; i < normals.Length; i++)
+        {
+            normals[i] = normals[i].sqrMagnitude > 1e-20f ? normals[i].normalized : Vector3.up;
+        }
+        return normals;
+    }
+
+    /// <summary>An array of `count` entries: the original's values where it has them, zeros elsewhere.</summary>
+    private static Vector2[] Resized(Vector2[] source, int count)
+    {
+        var resized = new Vector2[count];
+        if (source != null && source.Length > 0) Array.Copy(source, resized, Mathf.Min(source.Length, count));
+        return resized;
+    }
+
+    /// <summary>
+    /// A skinned renderer's bone by the index a weight carries, or null when the weight names one the renderer
+    /// no longer has - the mesh and the `bones` array are not guaranteed to agree after an asset swap, and
+    /// indexing blind took the whole export down the same way the missing normals did. Null means "no such
+    /// bone", which <see cref="SkinningBone"/> turns into the head-bone fallback.
+    /// </summary>
+    private static Transform SkinBoneAt(Transform[] skinBones, int index)
+    {
+        return skinBones != null && index >= 0 && index < skinBones.Length ? skinBones[index] : null;
     }
 
     /// <summary>
