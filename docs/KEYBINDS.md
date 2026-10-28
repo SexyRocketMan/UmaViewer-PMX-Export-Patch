@@ -31,7 +31,6 @@ binding: the same key is a different thing in each mode, and that is not obvious
 | `ExportModel` | `UISettingsModel.ExportModel`, the same call the button makes | no |
 | `AutoRecord` | `UmaViewerUI.AutoRecordVMD`, the same call the button makes | no |
 | `RainLook` | `UISettingsModel.ToggleWetLook`, the wet texture set a rained-on race uses | no |
-| `DirtRates` | **a measurement knob, not a feature**: steps the shader global `_DirtRate` (three zones) through 0 / 0.25 / 0.5 / 0.75 / 1 and logs it. See the dirt section below | no |
 
 ## The modes, and what they suspend
 
@@ -75,7 +74,7 @@ Unity's own UI navigation also owns the arrow keys. `UIShortcuts.Fire` drops the
 (`EventSystem.current.SetSelectedGameObject(null)`) before running a binding, so the selection does not
 move at the same time - keep that if the dispatch is ever restructured.
 
-## The dirt set, and the knob for it
+## The dirt set, and why there is no key for it
 
 There is a dirt variant set, and it is **not** a wet-style swap: `tex_<body>_dirt` exists as an asset
 (`tex_bdy1001_00_dirt` beside `_diff`/`_base`/`_shad_c`), but the uma shader draws it from a dedicated slot
@@ -84,12 +83,17 @@ per-material `_DirtRate` (`Vector`, `(0,0,0,0)`). On top of that there is a glob
 (**float array of 3**, `_DirtRate_0..2` on `UmaViewerGlobalShader`) plus `_GlobalDirtColor`,
 `_GlobalDirtToonColor` and `_GlobalDirtRimSpecularColor`.
 
-`DirtRates` (default `D`) steps those three globals so the shader's response can be watched. It sets the
-shader global directly, because `UmaViewerGlobalShader` pushes its fields in `Start()` only, so moving
-them afterwards would not reach the shader. **A rate alone may show nothing** — the texture slot is empty
-on these materials — so what it measures is whether the game's shaders respond to the rate at all, before
-anything binds `_DirtTex` or picks a `_DirtScale`. Nothing is guessed into a real "dirty look" until that
-is seen; the handoff records what the pieces are.
+A `DirtRates` key used to step those three globals, as an instrument for finding values by eye. It is gone,
+and the measurement it produced is the reason: **stepping the global rate through its whole range changes
+nothing visible**, which is exactly what an unbound `_DirtTex` predicts - the shader has nothing to modulate.
+So a key on the global was never going to show a dirt look, and shipping a knob that provably does nothing is
+the pattern this repository keeps removing.
+
+What a dirt look actually needs is the *material* side: the exported `tex_*_dirt` map bound to `_DirtTex`, a
+`_DirtScale`, and the per-material `_DirtRate`. That is shading work, so it belongs with the wet/dirt wiring in
+the addon (the exporter already writes the maps when `Config.PmxTextureVariants` is on, and names them per
+material with `dirt=` tokens). Until then the maps are exported and unused - which is what the model comment's
+`texture variants:` line says.
 
 ## Related
 

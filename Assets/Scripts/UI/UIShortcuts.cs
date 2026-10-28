@@ -131,35 +131,8 @@ public class UIShortcuts
             // the rain look: the wet texture set the game uses when a race is rained on
             { "RainLook", new Definition { Run = () => ui.ModelSettings.ToggleWetLook(), Scope = Scope.Action } },
 
-            // a measurement knob, not a feature - see CycleDirtRates
-            { "DirtRates", new Definition { Run = CycleDirtRates, Scope = Scope.Action } },
         };
 
-    /// <summary>The steps the dirt knob walks: off, then quarters up to full.</summary>
-    private static readonly float[] DirtSteps = { 0f, 0.25f, 0.5f, 0.75f, 1f };
-
-    private int dirtStep = -1;
-
-    /// <summary>
-    /// A measurement knob, <b>not</b> the dirty look. The game's dirt is a shader slot - `_DirtTex`, unbound
-    /// on every material this project exports - plus a rate that exists twice: per material as a vector, and
-    /// globally as this three-float array. Nothing in the repo says what the rate should be, because nobody
-    /// has watched the game apply it, so this steps the globals through 0, 0.25, 0.5, 0.75 and 1 and logs
-    /// what it set. Once the response has been seen, a real `DirtyLook` action can pick numbers.
-    ///
-    /// Set here rather than through <see cref="UmaViewerGlobalShader"/> because that component pushes its
-    /// fields in `Start()` only - changing them later would not reach the shader.
-    /// </summary>
-    private void CycleDirtRates()
-    {
-        dirtStep = (dirtStep + 1) % DirtSteps.Length;
-        float rate = DirtSteps[dirtStep];
-        Shader.SetGlobalFloatArray("_DirtRate", new[] { rate, rate, rate });
-        Debug.Log($"[Dirt] global _DirtRate = {rate} (step {dirtStep + 1}/{DirtSteps.Length}, all three zones). "
-                  + "Materials keep _DirtTex unbound, so a rate alone may show nothing: the per-material "
-                  + "side is a Vector named _DirtRate plus a _DirtScale, and the map is the tex_*_dirt asset. "
-                  + "See docs/HANDOFF_OPTIONS_AND_RELEASE.md.");
-    }
 
     public void Update()
     {

@@ -47,7 +47,7 @@ public class Config
     public string LastMotionFolderTip = "Folder the VMD save dialogs open in. Updated after every save, so the next one starts where the last one went.";
     public string LastMotionFolder = "";
 
-    public string ViewerShortcutsTip = "Every keyboard shortcut in the viewer: Name is the action (PanelPrev, PanelNext, ListUp, ListDown, ExportModel, AutoRecord, RainLook, DirtRates), Key is a UnityEngine.KeyCode name (R, E, UpArrow, Keypad1, ...), Alt requires Alt to be held. One line per key, so an action can have several, and deleting a line removes that key. Neither is guessed at: an unknown Name or Key is named in the log and skipped rather than silently doing nothing. The keys do not fight the modes - a shortcut on a key the free camera flies with (WASD and the arrows) is inactive while the camera is in free mode, and in pose mode the list walk, the panel cycle and recording are inactive: the list walk because it loads whatever it lands on and would replace the model mid-pose, recording because pose mode disables the animator it samples. DirtRates is a measurement knob, not a feature: it steps the game's global dirt rate through 0, 0.25, 0.5, 0.75 and 1 and logs it, so the shader's dirt response can be seen before a real dirty look picks numbers.";
+    public string ViewerShortcutsTip = "Every keyboard shortcut in the viewer: Name is the action (PanelPrev, PanelNext, ListUp, ListDown, ExportModel, AutoRecord, RainLook), Key is a UnityEngine.KeyCode name (R, E, UpArrow, Keypad1, ...), Alt requires Alt to be held. One line per key, so an action can have several, and deleting a line removes that key. Neither is guessed at: an unknown Name or Key is named in the log and skipped rather than silently doing nothing. The keys do not fight the modes - a shortcut on a key the free camera flies with (WASD and the arrows) is inactive while the camera is in free mode, and in pose mode the list walk, the panel cycle and recording are inactive: the list walk because it loads whatever it lands on and would replace the model mid-pose, recording because pose mode disables the animator it samples.";
     public List<ShortcutConfig> ViewerShortcuts = DefaultViewerShortcuts();
 
     /// <summary>The shortcuts a fresh Config.json starts with - the viewer's own defaults.</summary>
@@ -63,8 +63,6 @@ public class Config
         new ShortcutConfig("ExportModel", "E"),
         new ShortcutConfig("AutoRecord", "A"),
         new ShortcutConfig("RainLook", "R"),
-        // a measurement knob for the dirt shader slot, not a feature - see docs/KEYBINDS.md
-        new ShortcutConfig("DirtRates", "D"),
     };
 
     public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and in the vmd motions recorded beside them - one setting for both, because a motion can only drive a model whose morphs are spelled the same way, and the two used to be independently selectable. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but that is 27-30 bytes and a vmd morph name field holds 15, so a model exported this way cannot be driven by any motion; 1 = short english names (Eye_2_L), fits a motion but says nothing about what the morph does; 2 = unified, descriptive and vmd sized (Brow_WaraiA_R). Bone names have no switch at all: a recorded vmd always carries the rig's own names, which are the names the exported pmx carries.";
