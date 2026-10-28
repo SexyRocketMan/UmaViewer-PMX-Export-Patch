@@ -201,8 +201,11 @@ after a second Shading run, `Dirt` 0 → 1 moves 25.6% of the opaque pixels (big
    render to copy. `DIRT_COLOUR` is a documented dusty brown and the node is editable per material. The knob that
    would have measured the game's response (`DirtRates`, default `D`) was removed from the viewer at the user's
    request, so measuring it now means binding `_DirtTex` in the viewer first.
-2. **No panel row** for `PmxTextureVariants` — `Config.json` and the CLI only, for now. Same shape as
-   `PmxExtraMorphs` had before its row (see `UI_HOOKUP.md`).
+2. **The panel row for `PmxTextureVariants` is half in**: `_textureVariants`, `EnablePmxTextureVariants` and the
+   `ApplySettings` sync exist and compile, but no scene object is assigned to the field, so `Config.json` and
+   `-TextureVariants` still switch it. `UI_HOOKUP.md` lists it as row 5 with the binding and a suggested label;
+   placing it means duplicating a GameObject inside `Version2.unity`, which is verified by looking at the panel
+   and collides with an open editor, so it is left as one editor job rather than done blind.
 
 ## The cheek blush: no more baked map, and the dirt knob is gone
 
