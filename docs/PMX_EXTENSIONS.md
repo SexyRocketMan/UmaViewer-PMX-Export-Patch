@@ -213,8 +213,9 @@ already carries +2.2 MB of variant files; `TextureExporter.DirtUpscaleFactor` is
 (1.0 on body and hair, 0.3 on the face), plus the globals `_DirtRate` (three floats, 0..1) and the three tints
 `_GlobalDirtColor`, `_GlobalDirtToonColor`, `_GlobalDirtRimSpecularColor`. `Gallop.CharaShaderEffectData`
 declares an effect index `DATA_SET_DIRT`, and its application is not in the decompile, so there is no reference
-maths to copy - a consumer that wants the look defines it. The add-on's version mixes toward one colour by
-`max(r, g, b)` times its own `Dirt` property, which is a choice, not a reconstruction.
+maths to copy - a consumer that wants the look defines it. The add-on's version multiplies a tint in -
+`colour * lerp(1, tint, max(r, g, b) * Dirt)` - so the tint reads as "how dark dirt is", white being no
+dirt at all; a choice, not a reconstruction.
 
 **The model comment** gains one line, so a reader can tell three states apart without scanning every material:
 
