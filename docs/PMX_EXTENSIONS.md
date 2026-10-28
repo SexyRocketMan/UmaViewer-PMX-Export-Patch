@@ -202,6 +202,12 @@ map tiles (the wrap seam stands out at 0.13 against 0.01 between neighbours), so
 The size is the game's own - 981 dirt maps ship, one per body/attachment part, all of this order - and it is the
 one map class where a hand-made replacement would beat the asset.
 
+Because it is the coarse asset in the set, the export **resamples it x4** on the way out (256 → 1024 on the body,
+128 → 512 on the face) with Catmull-Rom weights, one channel at a time, edges clamped. That adds no detail - nothing
+can - it removes the nearest-neighbour blockiness a consumer sees once the map is magnified past its resolution.
+Measured cost: 69 KB → 858 KB for the body's map and 1.7 KB → 19 KB for the face's, about +0.8 MB on an export that
+already carries +2.2 MB of variant files; `TextureExporter.DirtUpscaleFactor` is the one number to change.
+
 **Which channel is which layer, and what the shader does with them, is not known.** What the interface says:
 `_DirtTex` (unbound on every shipped material), a per-material `_DirtRate` **Vector4** and `_DirtScale` scalar
 (1.0 on body and hair, 0.3 on the face), plus the globals `_DirtRate` (three floats, 0..1) and the three tints

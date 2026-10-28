@@ -284,6 +284,13 @@ public class ModelExporter
         note.Append(" - the game's own variant maps, written into Texture2D/ under the game's names ("
                     + "<texture>_wet.png, <texture>_dirt.png). A pmx material has one texture slot, so each"
                     + " material names its own with a 'wet=' / 'dirt=' comment token; see docs/PMX_EXTENSIONS.md");
+        if (dirt > 0)
+        {
+            // the one asset class resampled on the way out, so a consumer is not surprised by the size
+            note.Append(". The dirt maps are the coarse ones the game ships (256x256 body, 128x128 face), resampled x")
+                .Append(TextureExporter.DirtUpscaleFactor)
+                .Append(" here: they are three independent masks in RGB, not a picture");
+        }
         return note.ToString();
     }
 

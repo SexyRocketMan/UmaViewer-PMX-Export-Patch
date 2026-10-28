@@ -257,7 +257,10 @@ public class TextureExporter
         files.Wet = WriteVariantFile(savePath, texName + WetSuffix, assets);
         if (texName.EndsWith(AlbedoSuffix, StringComparison.Ordinal))
         {
-            files.Dirt = WriteVariantFile(savePath, texName.Substring(0, texName.Length - AlbedoSuffix.Length) + DirtSuffix, assets);
+            // the dirt map is the one coarse asset in the set (256x256 on the body, 128x128 on the face), so it is
+            // resampled on the way out - see UpscaleBicubic for why nothing is lost by doing it
+            files.Dirt = WriteVariantFile(savePath, texName.Substring(0, texName.Length - AlbedoSuffix.Length) + DirtSuffix,
+                                          assets, upscale: DirtUpscaleFactor);
         }
 
         if (string.IsNullOrEmpty(files.Wet) && string.IsNullOrEmpty(files.Dirt)) return;
@@ -268,7 +271,8 @@ public class TextureExporter
     /// One variant file, under the game's own name, and only when that asset exists. Returns the name it
     /// was written as, or null - which is how a material with no twin is told apart from one with a twin.
     /// </summary>
-    static private string WriteVariantFile(string savePath, string name, Dictionary<string, UmaDatabaseEntry> assets)
+    static private string WriteVariantFile(string savePath, string name, Dictionary<string, UmaDatabaseEntry> assets,
+                                          int upscale = 1)
     {
         if (string.IsNullOrEmpty(name) || !assets.TryGetValue(name, out UmaDatabaseEntry entry)) return null;
 
@@ -282,7 +286,92 @@ public class TextureExporter
             return null;
         }
 
-        File.WriteAllBytes(path, duplicateTexture(texture).EncodeToPNG());
+        Texture2D output = duplicateTexture(texture);
+        if (upscale > 1) output = UpscaleBicubic(output, upscale);
+        File.WriteAllBytes(path, output.EncodeToPNG());
         return name;
+    }
+
+    /// <summary>
+    /// How far the dirt maps are resampled on the way out, 1 meaning "as the game ships it".
+    ///
+    /// Measured, the dirt set is the coarse one: `tex_bdy1001_00_dirt` is 256x256 and `tex_chr1001_00_face_dirt`
+    /// 128x128, against 1024-2048 for the maps around them, and 981 such maps ship for the cast - one per body and
+    /// attachment part. Four times is where the resample stops helping at normal viewing distance and starts to
+    /// cost: 256 -> 1024 and 128 -> 512, and because the maps are sparse masks the PNG stays small.
+    ///
+    /// This adds no detail it does not have - nothing can. What it removes is the *nearest-neighbour blockiness*
+    /// a consumer sees when the map is magnified past its resolution, which is the whole of the complaint.
+    /// Each channel is resampled on its own, so the three independent masks stay independent.
+    /// </summary>
+    public const int DirtUpscaleFactor = 4;
+
+    /// <summary>The largest side the resample may reach, so a future coarse-but-huge map cannot balloon an export.</summary>
+    const int DirtUpscaleLimit = 2048;
+
+    /// <summary>
+    /// A texture resampled by a whole factor with Catmull-Rom (bicubic) weights, one horizontal pass and one
+    /// vertical, edges clamped.
+    ///
+    /// Catmull-Rom rather than bilinear because the maps are near-binary masks: bilinear turns every edge into a
+    /// two-pixel ramp, and Catmull-Rom keeps the edge where it is with a tighter transition. Not Lanczos: the
+    /// masks are sparse dots and splatter, and Lanczos ringing puts pale halos around each one.
+    /// </summary>
+    static private Texture2D UpscaleBicubic(Texture2D source, int factor)
+    {
+        int width = Mathf.Min(source.width * factor, DirtUpscaleLimit);
+        int height = Mathf.Min(source.height * factor, DirtUpscaleLimit);
+        Color[] pixels = source.GetPixels();
+
+        Color[] rows = new Color[width * source.height];
+        for (int y = 0; y < source.height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float fx = (x + 0.5f) * source.width / width - 0.5f;
+                int x0 = Mathf.FloorToInt(fx);
+                float t = fx - x0;
+                Color sum = Color.black;
+                for (int k = -1; k <= 2; k++)
+                {
+                    int index = Mathf.Clamp(x0 + k, 0, source.width - 1);
+                    sum += pixels[y * source.width + index] * CatmullRom(t - k);
+                }
+                rows[y * width + x] = new Color(Mathf.Clamp01(sum.r), Mathf.Clamp01(sum.g), Mathf.Clamp01(sum.b), 1f);
+            }
+        }
+
+        Color[] result = new Color[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            float fy = (y + 0.5f) * source.height / height - 0.5f;
+            int y0 = Mathf.FloorToInt(fy);
+            float t = fy - y0;
+            for (int x = 0; x < width; x++)
+            {
+                Color sum = Color.black;
+                for (int k = -1; k <= 2; k++)
+                {
+                    int index = Mathf.Clamp(y0 + k, 0, source.height - 1);
+                    sum += rows[index * width + x] * CatmullRom(t - k);
+                }
+                result[y * width + x] = new Color(Mathf.Clamp01(sum.r), Mathf.Clamp01(sum.g), Mathf.Clamp01(sum.b), 1f);
+            }
+        }
+
+        Texture2D upscaled = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        upscaled.name = source.name;
+        upscaled.SetPixels(result);
+        upscaled.Apply();
+        return upscaled;
+    }
+
+    /// <summary>Catmull-Rom weight for the sample at integer offset `offset` from the one below `t`.</summary>
+    static private float CatmullRom(float offset)
+    {
+        float x = Mathf.Abs(offset);
+        if (x < 1f) return 1.5f * x * x * x - 2.5f * x * x + 1f;
+        if (x < 2f) return -0.5f * x * x * x + 2.5f * x * x - 4f * x + 2f;
+        return 0f;
     }
 }
