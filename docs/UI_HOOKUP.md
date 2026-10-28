@@ -36,10 +36,18 @@ bone names. Nothing to do, but do not go looking for a missing row.
 | 2 | Advanced morphs (decals as vertex morphs) | `Toggle` | Model tab, beside the naming dropdown | `UISettingsModel.EnablePmxExtraMorphs` | `_extraMorphs` | **on** |
 | 3 | Morph naming mode | `TMP_Dropdown` | Model tab, near the export button | `UISettingsModel.ChangeMorphNameMode` | `_morphNameMode` | Unified (index 2) |
 | 4 | VMD key reduction | `Slider` + label | Animation tab, under the record button | `UISettingsAnimation.ChangeVmdKeyReduction` | `_keyReduction`, `_keyReductionText` | 1 |
+| 5 | Export the game's wet and dirt maps | `Toggle` | Model tab, under "Advanced morphs" | `UISettingsModel.EnablePmxTextureVariants` | `_textureVariants` | off |
 
 The serialized fields are `[SerializeField] private`, so they show up in the inspector as `A Pose Rest
-Pose`, `Morph Name Mode`, `Key Reduction`, `Key Reduction Text`. They are all **optional**: an unassigned
-one only means that row does not reflect `Config.json` at startup, and nothing throws.
+Pose`, `Extra Morphs`, `Texture Variants`, `Morph Name Mode`, `Key Reduction`, `Key Reduction Text`. They are
+all **optional**: an unassigned one only means that row does not reflect `Config.json` at startup, and nothing
+throws.
+
+Row 5 is **code-only as of this writing**: `_textureVariants` and `EnablePmxTextureVariants` exist and
+`ApplySettings` syncs the toggle, but no scene object is assigned to the field yet, so `Config.json` and
+`-TextureVariants` are the way to switch it until the row is placed. Anything that places it needs nothing from
+`Config.json` beyond the field assignment - the setter writes the key and saves it, exactly like the two rows
+above it. Label suggestion: `Also export the wet and dirt maps (+80% size)`.
 
 There is also an optional `_textureSetRowPrefab` (`UmaUIContainer`) on `UISettingsModel` if you want the
 texture set rows to look different from the character/material toggle rows - leave it empty and they use

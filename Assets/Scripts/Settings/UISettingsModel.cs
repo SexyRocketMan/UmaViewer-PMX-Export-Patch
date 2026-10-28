@@ -23,6 +23,7 @@ public class UISettingsModel : MonoBehaviour
     /// </summary>
     [SerializeField] private Toggle _aPoseRestPose;
     [SerializeField] private Toggle _extraMorphs;
+    [SerializeField] private Toggle _textureVariants;
     [SerializeField] private TMP_Dropdown _morphNameMode;
 
     /// <summary>
@@ -161,6 +162,7 @@ public class UISettingsModel : MonoBehaviour
     {
         if (_aPoseRestPose != null) _aPoseRestPose.SetIsOnWithoutNotify(Config.Instance.PmxAPoseRestPose);
         if (_extraMorphs != null) _extraMorphs.SetIsOnWithoutNotify(Config.Instance.PmxExtraMorphs);
+        if (_textureVariants != null) _textureVariants.SetIsOnWithoutNotify(Config.Instance.PmxTextureVariants);
         if (_morphNameMode != null) _morphNameMode.SetValueWithoutNotify((int)Config.Instance.PmxMorphNameMode);
         if (_morphNameModeText != null) _morphNameModeText.text = MorphNameModeLabel(Config.Instance.PmxMorphNameMode);
     }
@@ -193,6 +195,24 @@ public class UISettingsModel : MonoBehaviour
         if (Config.Instance.PmxExtraMorphs == enable) return;
         Config.Instance.PmxExtraMorphs = enable;
         Debug.Log($"[Export] advanced morphs are {(enable ? "on, decals export as vertex morphs" : "off, decals stay where the game draws them")}");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    /// <summary>
+    /// Also export the game's wet and dirt maps beside the dry ones, named per material by `wet=`/`dirt=`
+    /// tokens in the material comments. Off by default because it is the one option that roughly doubles the
+    /// size of an export (measured on 1001: 13 files, +2.22 MB, +80%) and nothing in MMD reads the extra
+    /// files - they are for a shader that knows what they are, which is the uma addon.
+    ///
+    /// The option existed in <see cref="Config.json"/> and on the command line
+    /// (`-umaTextureVariants`/`-TextureVariants`) before it had a control, exactly like the advanced morphs
+    /// did; the row is the on/off test for it.
+    /// </summary>
+    public void EnablePmxTextureVariants(bool enable)
+    {
+        if (Config.Instance.PmxTextureVariants == enable) return;
+        Config.Instance.PmxTextureVariants = enable;
+        Debug.Log($"[Export] the game's wet and dirt maps are {(enable ? "exported beside the dry ones" : "left out")}");
         Config.Instance.UpdateConfig(false);
     }
 
