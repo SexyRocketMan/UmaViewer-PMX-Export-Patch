@@ -62,6 +62,8 @@ using UnityEngine.Rendering;
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short english, 2 unified)
 ///   -umaAPose            export models with the arms in the A-pose that recorded motions are relative to
+///   -umaTextureVariants  also export the game's wet and dirt maps beside the dry ones and name them per
+///                        material with wet=/dirt= tokens (off by default: about +80% texture payload)
 ///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
 ///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
 ///   -umaRecordMode &lt;m&gt;   deterministic (default, one pinned frame per sample) or realtime (the legacy
@@ -171,6 +173,8 @@ public static class UmaHeadlessExport
         public bool PlainMaterials;
         // the other opt-out: no deploy/tear morphs and none of the tokens that explain them
         public bool NoExtraMorphs;
+        /// <summary>Also export the game's wet and dirt variants of the maps (Config.PmxTextureVariants).</summary>
+        public bool TextureVariants;
         public string RecordVmd = "";
         public int RecordFps = 30;
         public int RecordReduction = 0;
@@ -267,6 +271,7 @@ public static class UmaHeadlessExport
                     case "-umaAPose": options.APoseRestPose = true; break;
                     case "-umaPlainMaterials": options.PlainMaterials = true; break;
                     case "-umaNoExtraMorphs": options.NoExtraMorphs = true; break;
+                    case "-umaTextureVariants": options.TextureVariants = true; break;
                     case "-umaRecordVmd": options.RecordVmd = Next(); break;
                     case "-umaRecordFps": options.RecordFps = int.Parse(Next()); break;
                     case "-umaRecordReduction": options.RecordReduction = int.Parse(Next()); break;
@@ -479,6 +484,13 @@ public static class UmaHeadlessExport
                         Config.Instance.PmxExtraMorphs = false;
                         Debug.Log($"{Tag} exporting without the extra morphs: no deploy or tear morphs, and none "
                                   + "of the morph tokens that describe them");
+                    }
+
+                    if (options.TextureVariants)
+                    {
+                        Config.Instance.PmxTextureVariants = true;
+                        Debug.Log($"{Tag} exporting the game's wet and dirt maps beside the dry ones, named per "
+                                  + "material by wet=/dirt= tokens");
                     }
 
                     if (options.Refine >= 0)

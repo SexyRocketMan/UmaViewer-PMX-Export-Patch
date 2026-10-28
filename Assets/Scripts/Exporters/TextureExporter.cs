@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using System.IO;
 using Newtonsoft.Json.Linq;
@@ -185,6 +186,36 @@ public class TextureExporter
         return readableText;
     }
 
+    /// <summary>The game's variant maps are named by changing the dry map's name, not by a table.</summary>
+    private const string WetSuffix = "_wet";
+
+    private const string DirtSuffix = "_dirt";
+
+    /// <summary>The albedo map is the only one the game ships a dirt version of.</summary>
+    private const string AlbedoSuffix = "_diff";
+
+    /// <summary>What variant files were written for one dry texture.</summary>
+    public struct VariantFiles
+    {
+        /// <summary>The file the rain look uses: the dry name plus "_wet", or null when the game ships none.</summary>
+        public string Wet;
+
+        /// <summary>The game's dirt overlay for this map, or null. Only albedo maps have one.</summary>
+        public string Dirt;
+    }
+
+    /// <summary>
+    /// The variant files the last <see cref="ExportAllTexture"/> wrote, keyed by the dry texture's name.
+    ///
+    /// Per-export state on purpose: the files are written while walking the materials, and the comment that
+    /// has to name them is built later in the same export (see <see cref="ModelExporter"/>), which cannot
+    /// re-derive them without walking the game's asset list again.
+    /// </summary>
+    static public IReadOnlyDictionary<string, VariantFiles> WrittenVariants => writtenVariants;
+
+    static private readonly Dictionary<string, VariantFiles> writtenVariants =
+        new Dictionary<string, VariantFiles>(StringComparer.Ordinal);
+
     /// <summary>
     /// Every texture the model's materials use, written to `Texture2D/` next to the export.
     ///
@@ -202,6 +233,11 @@ public class TextureExporter
         {
             Directory.CreateDirectory(savePath);
         }
+
+        // the variants are a separate pass over the same names, and only when they were asked for
+        writtenVariants.Clear();
+        Dictionary<string, UmaDatabaseEntry> variantAssets = null;
+        if (Config.Instance != null && Config.Instance.PmxTextureVariants) variantAssets = CharacterTextureAssets();
 
         void AddRenderer(Renderer renderer)
         {
@@ -228,6 +264,11 @@ public class TextureExporter
                             {
                                 textureNames.Add(dpath);
                             }
+                            // the game's wet and dirt twins, written beside the dry map whenever the export
+                            // was asked for them. Outside the File.Exists block on purpose: a second export
+                            // into the same folder skips the write but still has to record the pairing, or
+                            // the material comments would lose their tokens
+                            if (variantAssets != null) WriteVariants(savePath, tex_name, variantAssets);
                             if (!File.Exists(tex_path))
                             {
 
@@ -307,6 +348,7 @@ public class TextureExporter
                 string tex_path = savePath + tex_name + ".png";
                 var dpath = "Texture2D/" + tex_name + ".png";
                 if (!textureNames.Contains(dpath)) textureNames.Add(dpath);
+                if (variantAssets != null) WriteVariants(savePath, tex_name, variantAssets);
                 if (!File.Exists(tex_path))
                 {
                     var copy = duplicateTexture(texture);
@@ -328,6 +370,78 @@ public class TextureExporter
             }
         }
         Debug.Log($"Exported textures: {textureNames.ToArray()}");
+        if (variantAssets != null)
+        {
+            int wet = 0, dirt = 0;
+            foreach (var pair in writtenVariants)
+            {
+                if (!string.IsNullOrEmpty(pair.Value.Wet)) wet++;
+                if (!string.IsNullOrEmpty(pair.Value.Dirt)) dirt++;
+            }
+            Debug.Log($"[Variants] {wet} wet and {dirt} dirt map(s) written for {writtenVariants.Count} dry "
+                      + $"texture(s); named per material by 'wet='/'dirt=' tokens");
+        }
         return textureNames.ToArray();
+    }
+
+    /// <summary>
+    /// Every character texture asset, by name. The dry maps are not in here: they live inside the part
+    /// prefabs, and only the variants the game ships beside them are assets of their own - which is why this
+    /// list is exactly what a variant lookup needs and a dry-map lookup would not.
+    /// </summary>
+    static private Dictionary<string, UmaDatabaseEntry> CharacterTextureAssets()
+    {
+        var assets = new Dictionary<string, UmaDatabaseEntry>(StringComparer.Ordinal);
+        var main = UmaViewerMain.Instance;
+        if (main == null || main.AbChara == null) return assets;
+
+        foreach (var entry in main.AbChara)
+        {
+            if (entry == null || !entry.Name.Contains("/textures/")) continue;
+            assets[entry.Name.Substring(entry.Name.LastIndexOf('/') + 1)] = entry;
+        }
+        return assets;
+    }
+
+    /// <summary>
+    /// Writes the twins a dry map has, if the game ships any, and records them for the material comment.
+    /// The names come from the game's own convention - the rain set appends "_wet", the dirt map replaces
+    /// the albedo token ("..._diff" -> "..._dirt") - so nothing here needs a table of its own.
+    /// </summary>
+    static private void WriteVariants(string savePath, string texName, Dictionary<string, UmaDatabaseEntry> assets)
+    {
+        if (string.IsNullOrEmpty(texName)) return;
+
+        var files = new VariantFiles();
+        files.Wet = WriteVariantFile(savePath, texName + WetSuffix, assets);
+        if (texName.EndsWith(AlbedoSuffix, StringComparison.Ordinal))
+        {
+            files.Dirt = WriteVariantFile(savePath, texName.Substring(0, texName.Length - AlbedoSuffix.Length) + DirtSuffix, assets);
+        }
+
+        if (string.IsNullOrEmpty(files.Wet) && string.IsNullOrEmpty(files.Dirt)) return;
+        writtenVariants[texName] = files;
+    }
+
+    /// <summary>
+    /// One variant file, under the game's own name, and only when that asset exists. Returns the name it
+    /// was written as, or null - which is how a material with no twin is told apart from one with a twin.
+    /// </summary>
+    static private string WriteVariantFile(string savePath, string name, Dictionary<string, UmaDatabaseEntry> assets)
+    {
+        if (string.IsNullOrEmpty(name) || !assets.TryGetValue(name, out UmaDatabaseEntry entry)) return null;
+
+        string path = savePath + name + ".png";
+        if (File.Exists(path)) return name;
+
+        var texture = entry.GetAll<Texture2D>().FirstOrDefault();
+        if (texture == null)
+        {
+            Debug.LogWarning($"[Variants] {name} is listed but carries no readable texture; skipped");
+            return null;
+        }
+
+        File.WriteAllBytes(path, duplicateTexture(texture).EncodeToPNG());
+        return name;
     }
 }

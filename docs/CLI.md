@@ -299,6 +299,7 @@ uv run Tools/pmx_inspect.py integrity <file.pmx>   # exits non-zero on either fa
 | `-MorphNameMode 0\|1\|2` | Morph and shape-key spelling, for the model **and** the motion it is recorded with: `0` tagged (`Eye_20_R(XRange)[M_Face]`, what the **stock** Blender addon matches, but 27-30 bytes - too long for a vmd morph name field, so no motion can drive a model exported this way), `1` short (`Eye_20_R`), `2` unified (`Eye_XRange_R`) - the default, and what the patched addon in this fork resolves. Models and motions must use the same mode or the motion's morph tracks land on nothing, which is why there is no separate motion-side switch. `3` used to be a fourth mode ("both", tagged plus a short alias) and is rejected now. |
 | `-APose` | Exports the model with both upper arms rotated 38.5° into the A-pose that recorded motions are relative to, so a model and a motion line up in Blender without posing anything by hand. **Off by default** - rigging and retargeting tools expect a T-pose rest. |
 | `-PlainMaterials` | Writes plain MMD materials: no uma shader settings in the material comment, plain diffuse/specular/outline values. Use it for a model meant to be used *without* the uma addon. |
+| `-TextureVariants` | Also writes the game's **wet** and **dirt** maps beside the dry ones, under the game's own names (`<map>_wet.png`, `<map>_dirt.png`), and names them per material with `wet=` / `dirt=` comment tokens plus one `texture variants:` line in the model comment. Only a shader that knows what those maps are (the uma addon) uses them; MMD itself ignores them entirely. **Off by default** because it is not free: on character 1001 costume 00, 8 of 34 maps have a wet twin and 2 have a dirt map, about +2.1 MB on a 2.7 MB texture set. See [PMX_EXTENSIONS.md](PMX_EXTENSIONS.md#the-texture-variants) for the contract. |
 | `-NoExtraMorphs` | Writes no advanced morphs at all: no deploy or tear morphs, and none of the `morph=` / `blend=` / `scroll=` tokens that describe them. The morph *parts* then stay wherever the game draws them, so the decals are permanently visible - that is what `Config.PmxExtraMorphs = false` does, and it is the opposite of `-PlainMaterials`, which keeps the morphs and drops the shader values. |
 | `-DumpMaterials` | Before exporting, logs what every material resolved to - textureless slots, missing shaders, and every property of every shader the model uses. Use it when a model comes out white or oddly shaded. |
 
@@ -379,6 +380,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-APose` | off | Export the A-pose rest pose |
 | `-PlainMaterials` | off | Export plain MMD materials |
 | `-NoExtraMorphs` | off | Export without the advanced morphs and their tokens |
+| `-TextureVariants` | off | Export the game's wet and dirt maps and name them per material |
 | `-PlaySeconds <s>` | 0 | Let the motion play this long (wall clock) before exporting/recording |
 | `-ExtraFrames <n>` | 30 | Frames to let the model settle before the export or recording starts |
 | `-DumpMaterials` | off | Log material and shader diagnostics first |
@@ -506,6 +508,7 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-Out` / `-RecordVmd` / `-Screenshot` | `-umaOut` / `-umaRecordVmd` / `-umaScreenshot` |
 | `-MorphNameMode` / `-APose` / `-PlainMaterials` | `-umaMorphNameMode` / `-umaAPose` / `-umaPlainMaterials` |
 | `-NoExtraMorphs` | `-umaNoExtraMorphs` |
+| `-TextureVariants` | `-umaTextureVariants` |
 | `-RecordFps` / `-RecordReduction` / `-RecordMode` | `-umaRecordFps` / `-umaRecordReduction` / `-umaRecordMode` |
 | `-PlaySeconds` / `-ExtraFrames` / `-Timeout` | `-umaPlaySeconds` / `-umaExtraFrames` / `-umaTimeout` |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | `-umaListChars` / `-umaListCostumes` / `-umaListProps [filter]` |

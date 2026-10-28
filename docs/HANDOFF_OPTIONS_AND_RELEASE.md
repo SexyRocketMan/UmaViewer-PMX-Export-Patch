@@ -144,32 +144,59 @@ Not verified: the suspensions were reasoned from the code and the build is clean
 the camera with a nav key held since the change — the headless runs only prove the nine default bindings
 initialise (`[Shortcuts] 9 binding(s): ...`) and reach `Config.json`.
 
-## The dirt set — found, mechanism identified, not built
+## The wet and dirt sets: exported, not yet shaded
 
-The user asked whether there is a "dirty" set to go with the rain one. **There is**, and it is *not* the
-same mechanism as wet. Measured with `-ListTextures` (new CLI option, see `docs/CLI.md`):
+The user's call: instead of a viewer toggle for the looks, **export the maps with the model** so the addon can
+wire them into its shaders and hand the control to the user. The export half is built and verified; the addon
+half is the open work (`docs/PMX_EXTENSIONS.md#the-texture-variants` is the contract to implement).
 
-- **`_dirt` texture assets exist**: 33 in one alphabetical slice of the character assets, e.g.
-  `tex_bdy1001_00_dirt` beside `tex_bdy1001_00_diff`/`_base`/`_shad_c`, plus per-attachment ones
-  (`tex_attach1048_00_dirt`) and offline/zekken body variants. Character 1001 costume 00 has one
-  (`tex_bdy1001_00_dirt`) next to its 4 `_wet` twins.
-- **The shader already has a dirt slot, and the game does not bind it**: the uma shader exposes
-  `_DirtTex` (`Texture`, `<none>` on every material of 1001), `_DirtScale` (`Range`, 0.3 or 1.0 per
-  material) and `_DirtRate` (`Vector`, `(0,0,0,0)`). So dirt is *not* a same-property swap like the wet
-  set — it fills a dedicated slot whose rate is currently zero.
-- **There is also a global dirt channel**: `UmaViewerGlobalShader` pushes `_DirtRate` as a **float array
-  of 3** (`_DirtRate_0..2`, inspector fields, default 0) plus `_GlobalDirtColor`,
-  `_GlobalDirtToonColor`, `_GlobalDirtRimSpecularColor`. The repo's own community shaders
-  (`Assets/Resources/NarsShader/*.shader`) never mention dirt, so only the game's own shaders (loaded
-  from the bundles) consume it. `CharaShaderEffectData.DATA_SET_DIRT = 11` is a dead constant from the
-  decompile — declared, never read.
+What the investigation established first, because it decides the design:
 
-**Open question, deliberately not guessed at:** what a dirt toggle should actually set. The pieces are
-`_DirtTex` ← the `_dirt` asset, `_DirtScale`, the per-material `_DirtRate` vector, and the three globals.
-Choosing values without watching the game apply them would be a guess dressed as a feature, and this
-repo's standard is measurement. The cheap way to measure: expose the global `_DirtRate_0..2` (already
-serialized on `UmaViewerGlobalShader`, so they can be moved in the Inspector today) and watch what the
-game's shaders do with them, then wire a `DirtyLook` action beside `RainLook`.
+- **`_dirt` assets exist** — 33 in one alphabetical slice, e.g. `tex_bdy1001_00_dirt` beside
+  `tex_bdy1001_00_diff`/`_base`/`_shad_c`, plus per-attachment (`tex_attach1048_00_dirt`), offline and
+  zekken variants. Found with the new `-ListTextures` probe, not by reading a prefab.
+- **The dry maps are not assets at all**: they live inside the part prefabs, while the variants are separate
+  DB entries. That is why the export can pair them by name (`<dry>_wet`, `_diff`→`_dirt`) with no table —
+  and why `AbChara` filtered to `/textures/` is exactly the variant list.
+- **Dirt is not a wet-style swap**: the shader draws it from its own `_DirtTex` slot (unbound,
+  `_DirtScale`, `_DirtRate` vector), and there is a *separate* global `_DirtRate` (float array of 3) plus
+  three dirt tint colours on `UmaViewerGlobalShader`. `CharaShaderEffectData.DATA_SET_DIRT = 11` is a dead
+  constant from the decompile. So the wet maps replace their dry counterparts, the dirt maps are an overlay.
+
+**`Config.PmxTextureVariants`** (off by default, `-umaTextureVariants` / `-TextureVariants`) writes the variant
+files under the game's own names and carries the contract in two places:
+
+- model comment, one line: `texture variants: wet 11, dirt 2 - …`. Three states, and the addon must handle
+  all three: **no line** = not requested (no files), **`texture variants: none (requested, …)`** = requested
+  and this model ships none, **a count** = requested and these are the family sizes.
+- material comment: `wet=<file>,<file> dirt=<file>`, because a pmx material has one texture slot and a second
+  map can only be named in text — the same reason `morph=`/`blend=` exist. `wet=` files replace the dry map
+  named by the token minus `_wet`; `dirt=` is the overlay. Written in both the uma-fields and plain-MMD
+  paths, since it describes files rather than shader values.
+
+**Measured on character 1001 costume 00** (the numbers the default-off decision rests on): 34 textures /
+2.79 MB → **47 textures / 5.01 MB**, i.e. **13 files, +2.22 MB (+80%)** — 11 wet and 2 dirt. Three of the wet
+ones are *tail* maps that a `1001_00` name filter misses, which is why the lookup runs at export time against
+the whole asset list. The pmx grew 2,474 bytes (the tokens).
+
+**Verified:** export with the option on (13 files, 7 materials with `wet=`, 5 with `dirt=`, model line
+`wet 11, dirt 2`); the same export with it off is **byte-identical** to the pre-option baseline
+(5,798,573 B, zero tokens, no model line); a **prop** with the option on gives `texture variants: none
+(requested, …)`. `Tools/probe_texture_usage.py` was taught about the token and now reports the 13 files as
+"referenced by a comment token, not by the table", leaving only the pre-existing `eye0_all` as unreferenced —
+without that it called all 13 leftovers, which is exactly the trap this repo documents.
+
+**What is left, in order:**
+
+1. **The addon half.** `MorphDrivers.py:155` already collects every material's comment for `morph=`/`blend=`;
+   a `wet=`/`dirt=` reader joins it, then a shading pass binds the files to the uma shader's wet and dirt
+   inputs and drives them from a custom property. Nothing reads the tokens today, so MMD users see files
+   nothing uses — acceptable only because the option is off by default.
+2. **The dirt look's values are still unmeasured.** `DirtRates` (default `D`) steps the *global* `_DirtRate`
+   so the shaders' response can be watched; once it is known, that knob becomes a real `DirtyLook` action
+   (and the per-material `_DirtTex`/`_DirtScale` numbers get picked rather than guessed).
+3. **No panel row** for `PmxTextureVariants` — `Config.json` and the CLI only, for now. Same shape as
+   `PmxExtraMorphs` had before its row (see `UI_HOOKUP.md`).
 
 ## Scene work — done, with two leftovers fixed
 

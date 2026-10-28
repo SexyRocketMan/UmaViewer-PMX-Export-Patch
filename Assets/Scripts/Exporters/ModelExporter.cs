@@ -201,22 +201,90 @@ public class ModelExporter
         UmaViewerUI.Instance.ShowMessage($"FBX Save at {path}", UIMessageType.Success);
     }
 
+    /// <summary>
+    /// The model-level half of the texture-variant contract, so a reader can tell three states apart
+    /// without scanning every material comment:
+    ///
+    ///   * no line at all - this export did not ask for the variants (`PmxTextureVariants` is off), or it
+    ///     predates the option, so there are no variant files beside it;
+    ///   * `texture variants: none` - they were asked for, and this character or prop ships none;
+    ///   * `texture variants: wet N, dirt M` - they were asked for and these are the family sizes.
+    ///
+    /// It states names and counts only. Which files belong to which material is the per-material
+    /// `wet=`/`dirt=` token, because one line cannot say that and a material has no second texture slot.
+    /// </summary>
+    private static string TextureVariantsNote()
+    {
+        if (Config.Instance == null || !Config.Instance.PmxTextureVariants) return string.Empty;
+
+        int wet = 0, dirt = 0;
+        foreach (var pair in TextureExporter.WrittenVariants)
+        {
+            if (!string.IsNullOrEmpty(pair.Value.Wet)) wet++;
+            if (!string.IsNullOrEmpty(pair.Value.Dirt)) dirt++;
+        }
+
+        if (wet == 0 && dirt == 0)
+            return "\ntexture variants: none (requested, but this model ships neither a wet nor a dirt map)";
+
+        var note = new StringBuilder("\ntexture variants: ");
+        note.Append("wet ").Append(wet).Append(", dirt ").Append(dirt);
+        note.Append(" - the game's own variant maps, written into Texture2D/ under the game's names ("
+                    + "<texture>_wet.png, <texture>_dirt.png). A pmx material has one texture slot, so each"
+                    + " material names its own with a 'wet=' / 'dirt=' comment token; see docs/PMX_EXTENSIONS.md");
+        return note.ToString();
+    }
+
+    /// <summary>
+    /// The variant files this material's maps have twins for, as the `wet=` / `dirt=` tokens a reader
+    /// needs. `wet=` lists files that *replace* their dry map - the dry name is the token's name minus
+    /// "_wet" - and `dirt=` lists the game's dirt maps, which are an overlay rather than a replacement.
+    ///
+    /// A pmx material has one texture slot, so a second map can only be named in text; that is the same
+    /// reason `morph=` and `blend=` exist. The files themselves are written by
+    /// <see cref="TextureExporter.ExportAllTexture"/>, which records the pairing as it goes.
+    /// </summary>
+    private static string TextureVariantComment(Material material)
+    {
+        if (material == null || Config.Instance == null || !Config.Instance.PmxTextureVariants) return string.Empty;
+
+        var wet = new List<string>();
+        var dirt = new List<string>();
+        foreach (string property in material.GetTexturePropertyNames())
+        {
+            var texture = material.GetTexture(property);
+            if (texture == null) continue;
+            if (!TextureExporter.WrittenVariants.TryGetValue(texture.name, out TextureExporter.VariantFiles files)) continue;
+
+            if (!string.IsNullOrEmpty(files.Wet) && !wet.Contains(files.Wet)) wet.Add(files.Wet);
+            if (!string.IsNullOrEmpty(files.Dirt) && !dirt.Contains(files.Dirt)) dirt.Add(files.Dirt);
+        }
+
+        if (wet.Count == 0 && dirt.Count == 0) return string.Empty;
+
+        var tokens = new StringBuilder();
+        if (wet.Count > 0) tokens.Append(" wet=").Append(string.Join(",", wet));
+        if (dirt.Count > 0) tokens.Append(" dirt=").Append(string.Join(",", dirt));
+        return tokens.ToString();
+    }
+
     public static RawMMDModel ReadPMXModel(UmaContainer container, string[] textures, CharaEntry entry = null)
     {
         RawMMDModel model = new RawMMDModel();
         var character = container as UmaContainerCharacter;
         string morphNote = ExtraMorphsNote(character);
+        string variantNote = TextureVariantsNote();
         if (entry != null)
         {
             model.Name = entry.Name;
             model.NameEn = entry.GetName();
-            model.Description = model.DescriptionEn = $"{entry.GetName()}\n{modelInfo}{morphNote}";
+            model.Description = model.DescriptionEn = $"{entry.GetName()}\n{modelInfo}{morphNote}{variantNote}";
         }
         else
         {
             model.Name = container.gameObject.name;
             model.NameEn = container.gameObject.name;
-            model.Description = model.DescriptionEn = $"{container.gameObject.name}\n{modelInfo}{morphNote}";
+            model.Description = model.DescriptionEn = $"{container.gameObject.name}\n{modelInfo}{morphNote}{variantNote}";
         }
 
         //Rean Bones
@@ -1634,11 +1702,16 @@ public class ModelExporter
                                    + ExtraMorphBlend(material)
                                    + ExtraMorphGrid(character, renderer);
 
+                // The variant files exist whether or not the uma fields are written, so they are collected
+                // here too: `wet=`/`dirt=` says what a *reader* finds beside the pmx, not what this
+                // material's shader values are.
+                string variantTokens = TextureVariantComment(material);
+
                 // Opt out for models that are meant to be used without the Blender addon: the plain MMD
                 // material values set above are then left alone, which is what an unadorned export looks like
                 if (Config.Instance == null || Config.Instance.PmxUmaMaterialFields)
                 {
-                    mat.MetaInfo = UmaMaterialComment(material, model) + morphTokens;
+                    mat.MetaInfo = UmaMaterialComment(material, model) + morphTokens + variantTokens;
 
                     // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
                     //
@@ -1673,8 +1746,9 @@ public class ModelExporter
                 else
                 {
                     // plain MMD materials, but the advanced morphs are still on: the tokens that explain them
-                    // survive, the shader values do not
-                    mat.MetaInfo = morphTokens;
+                    // survive, the shader values do not. The variant tokens are not a shader value either -
+                    // they describe files that are on disk - so they survive with them.
+                    mat.MetaInfo = morphTokens + variantTokens;
                 }
                 part.BaseShift = baseShift + mesh.GetSubMesh(i).indexStart;
                 part.TriangleIndexNum = mesh.GetSubMesh(i).indexCount;

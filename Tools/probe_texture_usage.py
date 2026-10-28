@@ -5,6 +5,10 @@
 The pmx keeps its own texture table, so "is this file used" is a lookup rather than a guess: every name in the table is
 referenced by the model, and anything in the folder that no table entry names is a leftover - from an earlier export,
 an older bake, or a setting that has since changed. Those are the only files that are safe to delete.
+
+A `PmxTextureVariants` export adds a second kind of reference: the game's wet and dirt maps are files a *comment
+token* names (`wet=`, `dirt=` on a material), because a pmx material has one texture slot and no way to hold a second
+map. They are referenced, just not by the table, so they are reported separately and never called leftovers.
 """
 import os
 import sys
@@ -31,7 +35,29 @@ def normalise(name):
     return os.path.basename(text.replace("\\", "/"))
 
 
+# The tokens a material comment can name a file with. See docs/PMX_EXTENSIONS.md: a material has one
+# texture slot, so a variant map (the game's wet and dirt sets) can only be named in text.
+TOKEN_KEYS = ("wet=", "dirt=")
+
+def token_references():
+    names = set()
+    for material in (model.materials or []):
+        comment = str(getattr(material, "comment", "") or "")
+        for token in comment.split():
+            for key in TOKEN_KEYS:
+                if not token.startswith(key):
+                    continue
+                for value in token[len(key):].split(","):
+                    value = value.strip()
+                    if not value:
+                        continue
+                    names.add(value if value.lower().endswith(".png") else value + ".png")
+    return names
+
+
 referenced_basenames = {normalise(name) for name in referenced if name}
+token_basenames = token_references()
+all_referenced = referenced_basenames | token_basenames
 
 lines = []
 lines.append("pmx: %s" % pmx_path)
@@ -40,12 +66,18 @@ lines.append("")
 lines.append("referenced by the model (%d unique file names):" % len(referenced_basenames))
 for name in sorted(referenced_basenames):
     lines.append("  %s" % name)
+lines.append("")
+lines.append("referenced by a comment token, not by the table (%d):" % len(token_basenames))
+for name in sorted(token_basenames):
+    lines.append("  %s" % name)
+if not token_basenames:
+    lines.append("  none - this export carries no wet/dirt variant maps")
 
 present = []
 if os.path.isdir(folder):
     present = sorted(name for name in os.listdir(folder) if name.lower().endswith(".png"))
-unused = [name for name in present if name not in referenced_basenames]
-missing = sorted(name for name in referenced_basenames if name not in set(present))
+unused = [name for name in present if name not in all_referenced]
+missing = sorted(all_referenced - set(present))
 lines.append("")
 lines.append("files in Texture2D: %d" % len(present))
 lines.append("")

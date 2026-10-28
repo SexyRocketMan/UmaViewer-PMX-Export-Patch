@@ -28,6 +28,8 @@ object morphs: Manga_Ctrl:Enable:ScaX:pfb_eff_chr_emo_eye_000>mtl_eff_chr_emo_ey
 
 The first two lines are the old model info. `extra morphs:` and `object morphs:` appear only when
 `Config.PmxExtraMorphs` is on (it is on by default), and only when the character has such morphs.
+`texture variants:` appears only when `Config.PmxTextureVariants` is on (off by default) - see
+[the texture variants](#the-texture-variants).
 
 `object morphs:` is a `;`-separated list of `morph:bind type:locator part:objects`:
 
@@ -86,6 +88,52 @@ object morphs: Manga_Ctrl:EyeSelect:ScaY:pfb_eff_chr_emo_eye_000,pfb_eff_chr_emo
 
 and for the animated tears (`Tear{n}_Ctrl`), `TearWeight` on `ScaX`, `TearSide` on `PosY`, `TearSelect` on
 `ScaY` and `TearSpeed` on `ScaZ`, with no objects — the game applies those to its own particle system.
+
+## The texture variants
+
+When `Config.PmxTextureVariants` is on (it is **off** by default), the export also writes the game's own
+variant sets beside the dry maps and says so in two places. Measured on character 1001 costume 00: **8 of the
+34 exported maps** have a wet twin and **2** have a dirt map, about **+2.1 MB** on a 2.7 MB texture set - which
+is why the option is off.
+
+**The files.** The game ships these as assets of their own, named after the map they belong to, while the dry
+maps live inside the part prefabs. That is why a lookup by name is all they need, and why the export can find
+them without a table:
+
+| set | named | what a consumer does with it |
+|---|---|---|
+| wet | `<dry>_wet` - `tex_bdy1001_00_diff` → `tex_bdy1001_00_diff_wet` | **replaces** the dry map; the game swaps the whole set when a race is rained on |
+| dirt | the albedo token changes: `…_diff` → `…_dirt` | an **overlay**, not a replacement: the uma shader draws it from its own `_DirtTex` slot, scaled by `_DirtScale` and `_DirtRate` |
+
+Only albedo maps have a dirt version, so a material can carry a wet twin and no dirt map. Files keep the
+game's own names, in the same `Texture2D/` folder as everything else.
+
+**The model comment** gains one line, so a reader can tell three states apart without scanning every material:
+
+```
+texture variants: wet 8, dirt 2 - the game's own variant maps, written into Texture2D/ under the game's names (<texture>_wet.png, <texture>_dirt.png). A pmx material has one texture slot, so each material names its own with a 'wet=' / 'dirt=' comment token; see docs/PMX_EXTENSIONS.md
+```
+
+| what it says | means |
+|---|---|
+| no `texture variants:` line at all | the export did not ask for them (`PmxTextureVariants` off), or predates the option: there are no variant files beside it |
+| `texture variants: none (requested, but …)` | they were asked for, and this character or prop ships none |
+| `texture variants: wet N, dirt M` | they were asked for, and these are the family sizes |
+
+**The material comment** gains `wet=` and `dirt=`, each a comma separated list of file names (no folder, no
+extension):
+
+```
+uma1 ... wet=tex_bdy1001_00_base_wet,tex_bdy1001_00_ctrl_wet,tex_bdy1001_00_diff_wet,tex_bdy1001_00_shad_c_wet dirt=tex_bdy1001_00_dirt
+```
+
+A pmx material has exactly **one** texture, so a second map cannot be a material texture: the token is the
+only place it can be named, for the same reason `morph=` and `blend=` exist. `wet=` lists files that replace
+their dry counterpart — the dry map is the token's name minus `_wet` — and `dirt=` lists the dirt overlays.
+
+**What reads them.** Nothing in MMD. They are for a shader that knows what the maps are: the uma addon binds
+them to its own wet and dirt inputs and lets the user drive them. An export with the option off is byte for
+byte what it was before the option existed: no files, no tokens, no model line.
 
 ## The deploy morphs
 
