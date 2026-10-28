@@ -352,6 +352,28 @@ The user wired the panel in the editor; four things are worth knowing about the 
 
 ### 1. The decal winding defect (shader side, still open)
 
+**Two fix attempts made no difference at all, and both were reverted** (`ac51b88` then `42488c4`). What they
+established is worth more than the patches were:
+
+* the defect is real and reproduces: `Tools/probe_decal_normals.py` on a current export reports
+  `mtl_eff_chr_emo_eye_002.001` and `_003.001` at `normal . outward = -0.705 / -0.704`, and
+  `mtl_chr_tear001.001` at `-0.793`, where every other decal reads `+0.70` to `+0.95`;
+* **the exporter's own vertex normals are already outward for those parts.** Instrumenting
+  `OrientDecalPart` at read time and, separately, testing in the deploy step printed a positive dot for every
+  single decal part - so a flip gated on "the vertex normals sum inward" never fires, and that is why both
+  attempts produced byte-identical files (5,798,905 B before and after);
+* therefore **the two quantities the probe and the exporter look at are not the same thing**, and the next step
+  is to pin that down rather than patch around it: the probe reports an average *normal* per material after
+  deploying the decal, and if that value comes from the polygons' geometric normal (i.e. the **winding**)
+  rather than from the stored shading normals, then the file carries outward shading normals with inward
+  winding - a mixed state a normals-shaped fix cannot correct. A quick attempt to measure both at once
+  (`polygon.normal` versus `corner_normals`) was inconclusive because deploying *every* deploy key together
+  collapses parts of the geometry again; the probe has to be extended to print the two separately, part by
+  part, before any further code change.
+
+Everything else in the item below is the original diagnosis, which still reads correctly.
+
+
 Right-eye instances of two of the four manga prefabs (`mtl_eff_chr_emo_eye_002.001` Shut, `…_003.001` Wide)
 and one tear sheet (`mtl_chr_tear001.001`) have polygons facing **into** the head —
 `normal · outward = −0.705` / `−0.793` where their left twins read `+0.705` / `+0.793` — and the exporter
