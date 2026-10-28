@@ -12,6 +12,19 @@ reads as darker, and (being behind the surface) disappears when the face is edit
 So this measures, per decal material: the part's polygon count, its average normal in world space, and whether that
 normal points **away from the head** (positive dot with the direction from the head bone's position to the part).
 
+Two normals are reported, because a file can disagree with itself:
+
+- `winding` - Newell's normal of each *polygon*, which is decided by the order the triangles index their vertices.
+  This is the one a mirrored instance flips, and the one that was measured at -0.705 / -0.704 / -0.793 on
+  `1001_nostream.pmx` before `ModelExporter` learned to reverse a part's winding.
+- `shading` - the average of the file's own corner normals (`mesh.corner_normals`). These were **already outward**
+  for those parts, which is why the fix had to be the winding and not the normals: a fix gated on the vertex
+  normals is a fix that cannot fire.
+
+A part whose corners are all still collapsed has no area and therefore no normal of either kind; it is reported as
+`collapsed`, not as facing in. Those are the tears beyond `Tear_Static_*` / `Tear_Pool_*`, which have no deploy key
+because the game drives them by weight and a pmx cannot.
+
 The decals are collapsed onto a point inside the head at rest, where every quad has zero area and no normal at all, so
 each deploy key is set to 1 first (`Manga_*`, `Tear_*`, `Cheek_Blush`).
 """
@@ -102,36 +115,51 @@ def newell_normal(points):
 
 
 def report(material, index):
-    """(polygons, centre, average normal, dot with the direction away from the head) for one material slot."""
+    """(polygons, centre, winding normal, shading normal, dot of the winding normal) for one material slot."""
     polygons = [polygon for polygon in mesh.data.polygons if polygon.material_index == index]
     if not polygons:
-        return polygons, None, None, None
+        return polygons, None, None, None, None
     corner_sets = [deployed_corners(polygon) for polygon in polygons]
     centre = sum((world @ (sum(points, Vector((0.0, 0.0, 0.0))) / len(points))
                   for points in corner_sets), Vector((0.0, 0.0, 0.0))) / len(corner_sets)
-    normals = Vector((0.0, 0.0, 0.0))
+    winding = Vector((0.0, 0.0, 0.0))
     for points in corner_sets:
-        normals += world.to_3x3() @ newell_normal(points)
-    normal = normals.normalized() if normals.length > 1e-9 else Vector((0.0, 0.0, 0.0))
+        winding += world.to_3x3() @ newell_normal(points)
+    winding = winding.normalized() if winding.length > 1e-9 else Vector((0.0, 0.0, 0.0))
+    shading = Vector((0.0, 0.0, 0.0))
+    for polygon in polygons:
+        for loop_index in polygon.loop_indices:
+            shading += world.to_3x3() @ mesh.data.corner_normals[loop_index].vector
+    shading = shading.normalized() if shading.length > 1e-9 else Vector((0.0, 0.0, 0.0))
     outward = centre - head
     outward = outward.normalized() if outward.length > 1e-9 else Vector((0.0, 0.0, 0.0))
-    return polygons, centre, normal, normal.dot(outward)
+    return polygons, centre, winding, shading, winding.dot(outward)
 
-say("%-34s %5s  %-28s %-28s %6s %s" % ("material", "polys", "centre", "avg normal", "dot", "verdict"))
+
+def verdict(dot, winding):
+    """A collapsed part has no area, so no winding and nothing to judge - it is not facing the wrong way."""
+    if winding.length < 1e-9:
+        return "collapsed (no deploy key)"
+    return "faces out" if dot > 0.0 else "FACES IN (behind the face)"
+
+say("%-32s %5s  %-26s %-24s %-24s %6s %s"
+    % ("material", "polys", "centre", "winding normal", "shading normal", "dot", "verdict"))
 for index, slot in enumerate(mesh.material_slots):
     material = slot.material
     if material is None:
         continue
     if not any(material.name == name or material.name.startswith(name + ".") for name in decal_names):
         continue
-    polygons, centre, normal, dot = report(material, index)
+    polygons, centre, winding, shading, dot = report(material, index)
     if not polygons:
-        say("%-34s %5d  (no polygons on this mesh)" % (material.name, 0))
+        say("%-32s %5d  (no polygons on this mesh)" % (material.name, 0))
         continue
-    verdict = "faces out" if dot > 0.0 else "FACES IN (behind the face)"
-    say("%-34s %5d  %-28s %-28s %6.3f %s"
+    say("%-32s %5d  %-26s %-24s %-24s %6.3f %s"
         % (material.name, len(polygons),
-           tuple(round(value, 3) for value in centre), tuple(round(value, 3) for value in normal), dot, verdict))
+           tuple(round(value, 3) for value in centre),
+           tuple(round(value, 3) for value in winding),
+           tuple(round(value, 3) for value in shading),
+           dot, verdict(dot, winding)))
 
 say()
 say("pairing, so the two eyes can be compared:")
@@ -139,11 +167,12 @@ for index, slot in enumerate(mesh.material_slots):
     material = slot.material
     if material is None or "emo_eye" not in material.name and "_mayu" not in material.name:
         continue
-    polygons, centre, normal, dot = report(material, index)
+    polygons, centre, winding, shading, dot = report(material, index)
     if not polygons:
         continue
-    say("  %-32s x=%+.3f  normal=%s  dot=%+.3f" % (material.name, centre.x,
-                                                   tuple(round(value, 3) for value in normal), dot))
+    say("  %-32s x=%+.3f  winding=%s  shading=%s  dot=%+.3f" % (material.name, centre.x,
+                                                               tuple(round(value, 3) for value in winding),
+                                                               tuple(round(value, 3) for value in shading), dot))
 
 with open(out, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")

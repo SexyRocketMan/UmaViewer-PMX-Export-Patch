@@ -463,6 +463,44 @@ public class ModelExporter
                 radius /= (end - range.start);
                 float clearance = DecalClearanceFraction * radius;
 
+                // A part's facing from its **winding**, not from its vertex normals.
+                //
+                // The mirrored right-hand instances arrive with their triangles reversed while the normals they
+                // carry still point outward, so the file ends up holding a part whose polygons face into the
+                // head and whose shading normals face out. Measured with `Tools/probe_decal_normals.py`, whose
+                // "avg normal" is Newell's normal of each *deployed polygon*: two of the four eye manga and one
+                // tear sheet read -0.705 / -0.704 / -0.793 where their twins read +0.70 / +0.79.
+                //
+                // A fix gated on the vertex normals therefore cannot see it - that version was written, changed
+                // nothing at all (byte-identical file), and was reverted - so the test here is the geometric
+                // one: sum the triangles' cross products (the same right-hand convention Newell's normal uses)
+                // and compare with the direction away from the head. The winding is reversed on a part that
+                // fails, which is the same surface with correct facing; the normals are left alone precisely
+                // because they were already right.
+                //
+                // Done before the collapse below: a collapsed triangle has no area, and therefore no winding.
+                Vector3 winding = Vector3.zero;
+                for (int t = 0; t + 2 < model.TriangleIndexes.Length; t += 3)
+                {
+                    int first = model.TriangleIndexes[t];
+                    if (first < range.start || first >= end) continue;
+                    Vector3 a = model.Vertices[first].Coordinate;
+                    Vector3 b = model.Vertices[model.TriangleIndexes[t + 1]].Coordinate;
+                    Vector3 c = model.Vertices[model.TriangleIndexes[t + 2]].Coordinate;
+                    winding += Vector3.Cross(b - a, c - a);
+                }
+                if (winding.sqrMagnitude > 1e-18f && Vector3.Dot(winding, partCentre - collapsePoint) < 0f)
+                {
+                    for (int t = 0; t + 2 < model.TriangleIndexes.Length; t += 3)
+                    {
+                        int first = model.TriangleIndexes[t];
+                        if (first < range.start || first >= end) continue;
+                        int swap = model.TriangleIndexes[t + 1];
+                        model.TriangleIndexes[t + 1] = model.TriangleIndexes[t + 2];
+                        model.TriangleIndexes[t + 2] = swap;
+                    }
+                }
+
                 for (int i = range.start; i < end; i++)
                 {
                     Vector3 where = model.Vertices[i].Coordinate;

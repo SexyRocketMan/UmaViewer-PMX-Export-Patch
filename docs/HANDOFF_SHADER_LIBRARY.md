@@ -318,10 +318,10 @@ and ruled out or confirmed:
   linking A at index 0 put the map where the knob goes and key 0/key 1 rendered identically; and A/B the other way
   round made the knob do the opposite of its name.
 
-  **Still open on this front**: the backdrop problem proper is the manga and the tears, and they cannot be measured from
-  a front camera until the winding defect below is fixed - they deploy onto the face piece and are then drawn *behind*
-  the eyeball. `Manga_Wide_R` being darker and vanishing in edit mode is that same defect, so the black key and the
-  winding fix are one piece of work from the user's point of view.
+  **Still open on this front**: the backdrop problem proper is the manga and the tears. `Manga_Wide_R` being darker and
+  vanishing in edit mode was the **winding** defect, which the exporter now fixes (see
+  `HANDOFF_OPTIONS_AND_RELEASE.md`, "The decal winding defect"); re-measuring these from a front camera on a fresh
+  export is the next step, and should be done before assuming the black key is the remaining cause.
 
 **E. The black key blanked the eye manga** (reported right after it shipped, fixed in `69342f4`). The manga's art *is*
 black line work, so keying the black out deletes the drawing and leaves the light background: the wide-eye sprite came

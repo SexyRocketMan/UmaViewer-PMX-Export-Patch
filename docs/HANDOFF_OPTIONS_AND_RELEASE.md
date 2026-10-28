@@ -350,37 +350,54 @@ The user wired the panel in the editor; four things are worth knowing about the 
 
 ## Open work, in order
 
-### 1. The decal winding defect (shader side, still open)
+### 1. The decal winding defect (fixed; the shaders still have to be checked against it)
 
-**Two fix attempts made no difference at all, and both were reverted** (`ac51b88` then `42488c4`). What they
-established is worth more than the patches were:
+**Fixed in `ModelExporter`**: a decal part whose polygons face into the head now has its winding reversed. What it
+took was realising that the probe and the exporter were never looking at the same quantity - three attempts' worth
+of context, so it is written down here:
 
-* the defect is real and reproduces: `Tools/probe_decal_normals.py` on a current export reports
-  `mtl_eff_chr_emo_eye_002.001` and `_003.001` at `normal . outward = -0.705 / -0.704`, and
-  `mtl_chr_tear001.001` at `-0.793`, where every other decal reads `+0.70` to `+0.95`;
-* **the exporter's own vertex normals are already outward for those parts.** Instrumenting
-  `OrientDecalPart` at read time and, separately, testing in the deploy step printed a positive dot for every
-  single decal part - so a flip gated on "the vertex normals sum inward" never fires, and that is why both
-  attempts produced byte-identical files (5,798,905 B before and after);
-* therefore **the two quantities the probe and the exporter look at are not the same thing**, and the next step
-  is to pin that down rather than patch around it: the probe reports an average *normal* per material after
-  deploying the decal, and if that value comes from the polygons' geometric normal (i.e. the **winding**)
-  rather than from the stored shading normals, then the file carries outward shading normals with inward
-  winding - a mixed state a normals-shaped fix cannot correct. A quick attempt to measure both at once
-  (`polygon.normal` versus `corner_normals`) was inconclusive because deploying *every* deploy key together
-  collapses parts of the geometry again; the probe has to be extended to print the two separately, part by
-  part, before any further code change.
+* the defect is real and reproduces: `Tools/probe_decal_normals.py` reported `mtl_eff_chr_emo_eye_002.001` and
+  `_003.001` at `normal . outward = -0.705 / -0.704`, and `mtl_chr_tear001.001` at `-0.793`, where every other
+  decal reads `+0.70` to `+0.95`;
+* **the exporter's own vertex normals are already outward for those parts.** Instrumenting `OrientDecalPart` at
+  read time and, separately, testing in the deploy step printed a positive dot for every single decal part. Two
+  fixes gated on "the vertex normals sum inward" therefore never fired, and produced byte-identical files
+  (5,798,905 B before and after); both were reverted (`ac51b88`, `42488c4`);
+* the probe's "avg normal" is **Newell's normal of the deployed polygon**, i.e. the *winding*, not the stored
+  shading normals. The file carried outward normals with inward winding for those three parts - a mixed state
+  that no normals-shaped fix can correct. The probe now prints both columns side by side so this cannot be
+  confused again (`winding` from Newell, `shading` from `mesh.corner_normals`);
+* **the probe's argument order is a trap**: `-- <report.txt> [<file.pmx>]`. Passing only a path writes the report
+  *to* that path and measures the default `1001_nostream.pmx`, which is how two earlier runs "changed nothing" in
+  the probe - they were not measuring the file under test at all.
 
-Everything else in the item below is the original diagnosis, which still reads correctly.
+The fix sums the triangles' cross products for the part (the same right-hand convention Newell's normal uses),
+compares with the direction away from the head, and reverses the winding of a part that fails. It runs **before**
+the collapse, because a collapsed triangle has no area and therefore no winding. The normals are left alone
+precisely because they were already right. Measured before/after on the same model:
 
+| part | before | after |
+| --- | --- | --- |
+| `mtl_eff_chr_emo_eye_002.001` | `-0.705` | `+0.705` |
+| `mtl_eff_chr_emo_eye_003.001` | `-0.704` | `+0.704` |
+| `mtl_chr_tear001.001` | `-0.793` | `+0.793` |
+| the other eleven deployed parts | `+0.510` … `+0.947` | unchanged |
 
-Right-eye instances of two of the four manga prefabs (`mtl_eff_chr_emo_eye_002.001` Shut, `…_003.001` Wide)
-and one tear sheet (`mtl_chr_tear001.001`) have polygons facing **into** the head —
-`normal · outward = −0.705` / `−0.793` where their left twins read `+0.705` / `+0.793` — and the exporter
-lifts every decal **along its own normal**, so those parts sit behind the face. That is the user's "most
-manga invisible" and "Wide lost its black rim". Agreed fix, unwritten: flip the winding (and with it the
-lift direction) for a decal part whose normal opposes the outward direction; the addon-side stopgap would be
-the same test at shading time.
+The file size is identical (only the index order inside decal parts changes), and the collapsed parts
+(`mtl_chr_tear001.002` / `.003`, which have no deploy key because the game drives them by weight and a pmx cannot)
+are now reported as `collapsed` instead of being called inward.
+
+**Still open, and now visible**: the pmx's stored normals for the decals are not the parts' facing at all - the
+probe reads them as `(0, 0, ±1)` while the parts face `-Y`, i.e. roughly 90 degrees off. Reversing the winding
+makes the two agree in *sign* (every deployed part is outward by both measures) but not in direction. That matters
+only to a consumer that shades from the stored normals rather than from the polygons; the materials are all
+double-sided (`DrawDoubleFace`), so nothing here renders differently today. Diagnose it before shipping a shading
+path that trusts the normals.
+
+The original diagnosis, which still reads correctly and is what the user's "most manga invisible" / "Wide lost its
+black rim" referred to: right-eye instances of two of the four manga prefabs (`mtl_eff_chr_emo_eye_002.001` Shut,
+`…_003.001` Wide) and one tear sheet (`mtl_chr_tear001.001`) had polygons facing **into** the head, and the
+exporter lifts every decal **along its own normal**, so those parts sat behind the face.
 
 ### 2. Small ones
 

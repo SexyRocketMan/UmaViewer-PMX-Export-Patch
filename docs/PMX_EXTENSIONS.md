@@ -295,10 +295,11 @@ This is the idiom MMD models use for a hidden accessory: the reference model `Ap
 hides two eye highlights with `HL消1` and `HL消2`, which move 58 and 116 vertices onto a single point each.
 It needs nothing but MMD itself - no addon, no drivers, no bones.
 
-The parts stay drawn by their own materials (alpha 1, double sided because the eye manga arrive through
-mirrored instances whose reversed winding would cull one eye, no outline, no self shadow, no ground shadow),
-so what hides them at rest is the geometry, not the material. A collapsed decal is behind the face surface at
-rest anyway, so even a viewer that drew degenerate triangles would show nothing.
+The parts stay drawn by their own materials (alpha 1, no outline, no self shadow, no ground shadow), so what hides
+them at rest is the geometry, not the material. They are double sided, which is now a belt rather than the
+braces: the exporter reverses the winding of a decal part whose polygons face into the head (the mirrored
+right-hand instances used to arrive that way - see `HANDOFF_OPTIONS_AND_RELEASE.md`, "The decal winding defect"),
+so both eyes face out of the file, but a consumer that culls is still better off not culling a decal.
 
 ## How a consumer drives them
 
