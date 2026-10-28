@@ -187,16 +187,21 @@ the whole asset list. The pmx grew 2,474 bytes (the tokens).
 is no longer written at all — see "Small ones") — without that the probe called all 13 leftovers, which is exactly
 the trap this repo documents.
 
-**What is left, in order:**
+**The addon half is built** (addon commit `623f6f0`): `Umashader.bind_wet_maps` mixes each `wet=` file over the
+map it replaces, and `bind_dirt_maps` mixes each `dirt=` map toward a dirt colour — both driven by a property on
+the character's root (`Wet`, `Dirt`), both idempotent. The dirt design changed on measurement: the maps are
+**masks** (mean luminance 0.080 / 0.006, >98% of pixels below 0.5), so the rain pass's "mix over the twin" would
+have blackened the body. Verified on a shaded 1001 with variants: 15 materials wired, 60 dirt nodes before and
+after a second Shading run, `Dirt` 0 → 1 moves 25.6% of the opaque pixels (biggest channel delta 0.263).
 
-1. **The addon half.** `MorphDrivers.py:155` already collects every material's comment for `morph=`/`blend=`;
-   a `wet=`/`dirt=` reader joins it, then a shading pass binds the files to the uma shader's wet and dirt
-   inputs and drives them from a custom property. Nothing reads the tokens today, so MMD users see files
-   nothing uses — acceptable only because the option is off by default.
-2. **The dirt look's values are still unmeasured.** `DirtRates` (default `D`) steps the *global* `_DirtRate`
-   so the shaders' response can be watched; once it is known, that knob becomes a real `DirtyLook` action
-   (and the per-material `_DirtTex`/`_DirtScale` numbers get picked rather than guessed).
-3. **No panel row** for `PmxTextureVariants` — `Config.json` and the CLI only, for now. Same shape as
+**What is left:**
+
+1. **The dirt look's colour is the add-on's own, not the game's.** The game's would be `_GlobalDirtColor` with
+   `_DirtRate`; the viewer ships `(0,0,0,0)` and `0,0,0` and never binds `_DirtTex`, so there is no reference
+   render to copy. `DIRT_COLOUR` is a documented dusty brown and the node is editable per material. The knob that
+   would have measured the game's response (`DirtRates`, default `D`) was removed from the viewer at the user's
+   request, so measuring it now means binding `_DirtTex` in the viewer first.
+2. **No panel row** for `PmxTextureVariants` — `Config.json` and the CLI only, for now. Same shape as
    `PmxExtraMorphs` had before its row (see `UI_HOOKUP.md`).
 
 ## The cheek blush: no more baked map, and the dirt knob is gone
