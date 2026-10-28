@@ -198,6 +198,30 @@ without that it called all 13 leftovers, which is exactly the trap this repo doc
 3. **No panel row** for `PmxTextureVariants` — `Config.json` and the CLI only, for now. Same shape as
    `PmxExtraMorphs` had before its row (see `UI_HOOKUP.md`).
 
+## The cheek blush: no more baked map, and the dirt knob is gone
+
+Two decisions from the user's first real export of this work:
+
+- **The alpha-only blush bake is removed** (`ee44ea7`). The cheek decal now names the game's own multiply map
+  and `blend=multiply` is the instruction to a shade pass. It could go because the addon already solves the
+  identical defect for minis: its **"Fix mini umamusume model"** operator (`AddonOperators.FixMini.fixblush`)
+  builds a `MULTIPLY` Mix node (factor 1, second colour `(1, 0.799, 0.597)`, clamped) and wires a colour ramp
+  of the map's own value - white up to 0.85, black at 1.0 - into the shader's alpha, so the white "no blush"
+  area is what becomes transparent. That recipe is written into `docs/PMX_EXTENSIONS.md`, and it is the
+  addon-side half still to implement for big umas. Measured after the change: 2 cheek files instead of 4, the
+  material points at `tex_chr1001_00_cheek0.png`, no `_blush` entry in the texture table, tokens intact.
+  **The cost, stated not hidden:** a model exported *for MMD alone* shows a white shell if the cheek morph is
+  deployed, because MMD cannot multiply. That is the trade the user chose over shipping a degraded duplicate.
+- **`DirtRates` is removed** (`113b5cd`), after the user measured that stepping the global `_DirtRate` through
+  its whole range changes nothing - which is what an unbound `_DirtTex` predicts, since there is no texture to
+  modulate. A dirt look needs the *material* side (`_DirtTex` bound to the exported map, `_DirtScale`, the
+  per-material `_DirtRate`), so it is shading work for the same addon pass, not a viewer knob.
+- **A note on the user's export**: wet maps came through, and no dirt maps appeared - dirt is
+  **per-character** (character 1001 costume 00 ships `tex_bdy1001_00_dirt` and `tex_chr1001_00_face_dirt`, and
+  those are the only two of its 34 maps that have one). The model comment's `texture variants: … dirt N` line
+  says whether a given export had any; `-ListTextures -ListTexturesFilter <bdy id>` shows what the game ships
+  for that body.
+
 ## The export settings line, and where the contract lives
 
 Every export now also states the switches that shaped it, on one model-comment line:
