@@ -229,6 +229,16 @@ beside it. What the docs say a reader must do: verify each file it is about to u
 degrade to "no variant wiring" rather than failing an import. `Tools/probe_texture_usage.py` already knows a
 token is a reference; the addon side of that check is part of the queued compatibility report.
 
+**One claim measured wrong while writing the addon's report, and corrected.** `Config.PmxExtraMorphsTip` said
+that `false` "leaves the decals where the game draws them (blush and pool tears visible at rest)". It does not:
+with the option off the decal parts are **not in the model at all**. Character 1001 costume 00 measures 27
+materials / 14,492 vertices with it on and **8 / 13,968** with it off, and the eight decal material families
+(the cheek, the two tears, the four manga eyes twice each) are simply absent. The code is deliberate - a card
+collapsed against the head with no deploy morph to show it is invisible junk, and the tokens that would explain
+it are written by the same option - so the tip was corrected to say so rather than the behaviour changed. If
+`false` *should* mean "decals present and visible at rest", that is a different code path and a decision, not a
+typo.
+
 ## The metadata format now has a version
 
 `ModelExporter.MetadataVersion` (currently **2**) is written as `metadata format: 2` on its own model-comment
