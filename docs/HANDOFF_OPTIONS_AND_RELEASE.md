@@ -269,6 +269,33 @@ it are written by the same option - so the tip was corrected to say so rather th
 `false` *should* mean "decals present and visible at rest", that is a different code path and a decision, not a
 typo.
 
+## What the addon half now does with the maps
+
+Addon repo, three commits after the exporter stopped baking the cheek: 8c3740 (the multiply decal takes its
+transparency from its own map, via the ramp the mini-fix operator uses), 1e81683 (its tint is the mini-fix
+rose and its 128x128 map is sampled Cubic - the first real render came out **white and pixelated**, and both
+had a specific cause: the library's generic decal tint is white, and Linear magnification of a 128 map that the
+game hides behind a 6% multiply), and 7b0befe (the wet= maps bound, driven by a Wet property).
+
+Numbers worth keeping: the deepest blush texel measures luminance 0.954, the ramp gives it 0.31 alpha, it emits
+(1.0, 0.752, 0.567), and over a 1.0/0.94/0.94 skin texel that is a **6.1% green drop against the game's 5-6%**
+and 12.1% in blue - warmer than the game's plain multiply, which is the price of approximating one with a tint,
+and one editable value (MULTIPLY_TINT; a game-exact desaturation would be (1, 0.84, 0.83)).
+
+**A bug the wet work exposed, bigger than the feature**: a shaded material is a copy of the library master and
+the copy dropped the pmx comment, so after the first Shading run *every* token reader was blind on that file -
+wet=, scroll=, morph=, and MorphDrivers' own compatibility report. The shaded path now carries the comment
+like the decal path already did. Measured: the wet pass found 0 materials before, 8 after.
+
+Wet wiring measured on 1001 costume 00: 17 maps across 8 materials (body x2, face x2, hair, brows, tail), a
+Wet property with 0..1 bounds on the root, 17 valid single-property drivers, and every factor reading 0.0 at
+Wet=0 / 1.0 at Wet=1 on the evaluated depsgraph.
+
+**Dirt is still not wired, and it is not a pass like this one**: the wet set replaces inputs the shader already
+has, while the uma shader has no dirt slot at all (the game's _DirtTex/_DirtScale/_DirtRate belong to the
+game shader). Wiring dirt means adding an input to the shader *library* - a .blend plus manifest change, i.e.
+the shader handoff's territory - and only then can a pass drive it.
+
 ## The metadata format now has a version
 
 `ModelExporter.MetadataVersion` (currently **2**) is written as `metadata format: 2` on its own model-comment
