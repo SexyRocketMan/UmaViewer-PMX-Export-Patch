@@ -402,16 +402,16 @@ exporter lifts every decal **along its own normal**, so those parts sat behind t
 
 ### 2. Small ones
 
-- **Morph-setup guard**: `setup_advanced_morphs` reports `"<root>: the mesh carries no deploy morphs"` for a
-  model that predates the advanced morphs — it does not crash, but "old model" and "setup failed" read
-  identically.
 - **Decals stay on the body** (the user's call): `split_face_into_object` only moves face+eye polygons, so
   the cheek and tear quads and their morphs remain on the body. They are bone-parented, so they follow the
   head — accepted.
 
 Done since this list was written: `BakeBlush` and `BakeHighlight` are both gone (the cheek keeps the game's own
 map, the highlight maps are thresholded by the consumer), so the "a multiply material would bake a blush per
-textured slot" item died with them.
+textured slot" item died with them; `tex_*_eye0_all.png` is no longer written (32 textures → 31, pmx bytes
+unchanged); and the morph-setup guard now says which of the four cases a model is in
+(`extra_morphs=off`, pre-2.34, stripped comment, or a real setup failure) instead of one sentence for all of
+them - the add-on's `docs/PMX_METADATA_CONTRACT.md` lists the four sentences.
 
 ## How to verify — the loop that makes this repo workable
 
