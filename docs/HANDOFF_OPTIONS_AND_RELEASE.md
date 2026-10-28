@@ -271,29 +271,34 @@ typo.
 
 ## What the addon half now does with the maps
 
-Addon repo, three commits after the exporter stopped baking the cheek: 8c3740 (the multiply decal takes its
-transparency from its own map, via the ramp the mini-fix operator uses), 1e81683 (its tint is the mini-fix
-rose and its 128x128 map is sampled Cubic - the first real render came out **white and pixelated**, and both
-had a specific cause: the library's generic decal tint is white, and Linear magnification of a 128 map that the
-game hides behind a 6% multiply), and 7b0befe (the wet= maps bound, driven by a Wet property).
+Addon repo, after the exporter stopped baking the cheek. **The blush is deliberately untouched** - the user's
+call after two attempts, both of which failed in instructive ways, and both reverted:
 
-Numbers worth keeping: the deepest blush texel measures luminance 0.954, the ramp gives it 0.31 alpha, it emits
-(1.0, 0.752, 0.567), and over a 1.0/0.94/0.94 skin texel that is a **6.1% green drop against the game's 5-6%**
-and 12.1% in blue - warmer than the game's plain multiply, which is the price of approximating one with a tint,
-and one editable value (MULTIPLY_TINT; a game-exact desaturation would be (1, 0.84, 0.83)).
+| attempt | result | why |
+|---|---|---|
+| an alpha ramp from the map's own value (the recipe "Fix mini umamusume model" uses) | **white** | the library's generic decal tint is white, and a multiply map carries no colour of its own - it is the 5% green/blue drop that *is* the blush, so `map x white = white` |
+| that ramp plus the mini-fix rose tint | **skin coloured** | the tint then dominates a map that barely drops, so the decal reads as skin rather than blush |
+
+The measurements that went with them, in case someone picks it up: the map spans luminance 0.954 to 1.000, the
+ramp at 0.85 puts the deepest texel at 0.31 alpha, the tinted version emitted (1.0, 0.752, 0.567) and over a
+skin texel that was a 6.1% green drop against the game's 5-6% - green right, blue at 12.1%, i.e. warmer than a
+real multiply. A real multiply, or a decal built for this map, is the community's fix to make; until then the
+deployed cheek shows the game's white-background map, which is what it always was. Reverts: `5df7da3`,
+`0754c2d`; the work itself is in `b8c3740`, `1e81683`.
+
+**The rain maps are wired** (`7b0befe`) and stay: each `wet=` token loads its file as a second image and mixes
+over the map it replaces, driven by one `Wet` property (0 dry, 1 rain) on the character's root. Measured on 1001
+costume 00: 17 maps over 8 materials (body x2, face x2, hair, brows, tail), 17 valid single-property drivers,
+every factor 0.0 at `Wet=0` and 1.0 at `Wet=1`.
 
 **A bug the wet work exposed, bigger than the feature**: a shaded material is a copy of the library master and
 the copy dropped the pmx comment, so after the first Shading run *every* token reader was blind on that file -
-wet=, scroll=, morph=, and MorphDrivers' own compatibility report. The shaded path now carries the comment
+`wet=`, `scroll=`, `morph=`, and MorphDrivers' own compatibility report. The shaded path now carries the comment
 like the decal path already did. Measured: the wet pass found 0 materials before, 8 after.
 
-Wet wiring measured on 1001 costume 00: 17 maps across 8 materials (body x2, face x2, hair, brows, tail), a
-Wet property with 0..1 bounds on the root, 17 valid single-property drivers, and every factor reading 0.0 at
-Wet=0 / 1.0 at Wet=1 on the evaluated depsgraph.
-
 **Dirt is still not wired, and it is not a pass like this one**: the wet set replaces inputs the shader already
-has, while the uma shader has no dirt slot at all (the game's _DirtTex/_DirtScale/_DirtRate belong to the
-game shader). Wiring dirt means adding an input to the shader *library* - a .blend plus manifest change, i.e.
+has, while the uma shader has no dirt slot at all (the game's `_DirtTex`, `_DirtScale` and `_DirtRate` belong to
+the game shader). Wiring dirt means adding an input to the shader *library* - a .blend plus manifest change, i.e.
 the shader handoff's territory - and only then can a pass drive it.
 
 ## The metadata format now has a version
