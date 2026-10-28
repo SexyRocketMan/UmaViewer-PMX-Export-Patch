@@ -9,106 +9,6 @@ using System;
 public class TextureExporter
 {
     /// <summary>
-    /// A multiply overlay turned into one an MMD material can draw: the same blush, as a colour and an alpha.
-    ///
-    /// The game's cheek map is white where the face shows through and only drops the green and blue channels
-    /// where the blush is - it is *multiplied* into the face. An MMD material can only alpha blend, so drawn
-    /// as it is the decal paints a white shell over the cheeks.
-    ///
-    /// The map's channel drop is the blush's *shape*, and it is a very small number: the strongest texel of the
-    /// reference cheek map drops under 6%, which as an alpha is invisible. Solving `s(1-a) + c*a = s*t` per texel
-    /// reproduces the game exactly but gives every texel that has any drop at all its own fully saturated colour
-    /// (`c = (t - 1 + a) / a` divides by that small alpha), and the result is a garish red where the blush is
-    /// faint. So the solve is used only for the colour's *hue*, and the texture is rebuilt as one soft rose at a
-    /// strength a viewer actually sees: the drop normalised to the map's own maximum, raised to a curve so the
-    /// middle of the blush does not collapse, and an alpha ceiling the blush never exceeds.
-    ///
-    /// All three numbers are conversion choices, not game data, so they are named here.
-    /// </summary>
-    //: the blush colour the overlay fades to - a muted rose, dark enough to read as blush over skin
-    static readonly Color BlushTint = new Color(0.86f, 0.44f, 0.46f, 1f);
-    //: the strongest alpha the blush reaches, at the map's own strongest texel
-    const float BlushMaxAlpha = 0.55f;
-    //: how the drop maps onto alpha; below 1 the faint outer edge of the blush reaches further
-    const float BlushCurve = 0.7f;
-
-    /// <summary>
-    /// The bake: the game's multiply cheek map turned into the alpha-blended rose an MMD material can draw
-    /// (the numbers behind it, and why they are conversion choices rather than game data, are documented on
-    /// <see cref="BlushTint"/> above).
-    ///
-    /// <paramref name="name"/> overrides what the bake is called. Pass the name the export already writes the
-    /// source under: a texture object can reach a call site unnamed - <see cref="duplicateTexture"/> copies
-    /// the source's name, and the source may have none to copy - and naming the bake after that produces
-    /// `_blush.png`, a file the pmx then lists under a name that says nothing about what it is. That is the
-    /// defect this parameter fixes. When neither name is usable the bake is skipped rather than written: an
-    /// unnamed artifact is worse than no artifact, which is why the highlight bake is gone from the export.
-    /// </summary>
-    static public Texture2D BakeBlush(Texture2D source, string name = null)
-    {
-        if (source == null) return null;
-        string sourceName = !string.IsNullOrWhiteSpace(name) ? name : source.name;
-        if (string.IsNullOrWhiteSpace(sourceName)) return null;
-        Texture2D readable = duplicateTexture(source);
-        Color[] pixels = readable.GetPixels();
-
-        float strongest = 0f;
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            strongest = Mathf.Max(strongest, 1f - Mathf.Min(pixels[i].g, pixels[i].b));
-        }
-        // a map with no drop at all is not a blush; leave it alone rather than write a fully transparent copy
-        if (strongest <= 0.004f) return null;
-
-        // the map is small and its gradient is quantised: the raw channel drop comes in a few dozen steps, which an
-        // alpha of 0.55 turns into a few dozen visible rings. Ring the field with a light 3x3 average first - the
-        // blush has no detail worth keeping at that scale, only its shape.
-        int width = readable.width, height = readable.height;
-        float[] drop = new float[pixels.Length];
-        for (int i = 0; i < pixels.Length; i++) drop[i] = 1f - Mathf.Min(pixels[i].g, pixels[i].b);
-        float[] smoothed = new float[pixels.Length];
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                float sum = 0f;
-                int count = 0;
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    int yy = y + dy;
-                    if (yy < 0 || yy >= height) continue;
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        int xx = x + dx;
-                        if (xx < 0 || xx >= width) continue;
-                        sum += drop[yy * width + xx];
-                        count++;
-                    }
-                }
-                smoothed[y * width + x] = sum / count;
-            }
-        }
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            Color p = pixels[i];
-            float strength = smoothed[i] / strongest;
-            float alpha = Mathf.Pow(Mathf.Clamp01(strength), BlushCurve) * BlushMaxAlpha;
-            // an 8 bit alpha has 256 steps, and a blush that spans a few centimetres of face across 0.55 of them
-            // shows every step as a ring. A fixed per texel offset of a fraction of a step, hashed so it does not
-            // line up with the texture's own grid, turns the rings into grain.
-            uint hash = (uint)(i * 2654435761u);
-            float dither = ((hash >> 8) % 256u) / 255f - 0.5f;
-            alpha = Mathf.Clamp01(alpha + dither / 255f * 1.5f);
-            pixels[i] = new Color(BlushTint.r, BlushTint.g, BlushTint.b, alpha);
-        }
-        Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
-        baked.name = BlushName(sourceName);
-        baked.SetPixels(pixels);
-        baked.Apply();
-        return baked;
-    }
-
-    /// <summary>
     /// A highlight map turned into one an MMD material can draw: white where the highlight is, transparent
     /// everywhere else.
     ///
@@ -142,12 +42,6 @@ public class TextureExporter
         return sourceName + "_mask";
     }
 
-    /// <summary>The name the baked copy is written under; the exporter looks it up by this.</summary>
-    static public string BlushName(string sourceName)
-    {
-        return sourceName + "_blush";
-    }
-
     /// <summary>Whether a material is one the game draws by multiplying - the blush decal is.</summary>
     static public bool IsMultiply(Material material)
     {
@@ -158,12 +52,13 @@ public class TextureExporter
     /// <summary>
     /// A readable copy of a texture, written as PNG by the export.
     ///
-    /// The copy keeps the source's name: the cheek bake names its output after the texture it was handed
-    /// (<see cref="BlushName"/>), and `new Texture2D(...)` starts out unnamed. Without the transfer, the first
-    /// export into a folder wrote the bake as `_blush.png` and listed `Texture2D/_blush.png` in the pmx, while
-    /// a second export into the same folder - which skips the write because the file is already there -
-    /// produced `tex_chr1001_00_cheek0_blush.png` instead. Same model, two different texture lists, one of
-    /// them pointing at a file named after nothing.
+    /// The copy keeps the source's name, because `new Texture2D(...)` starts out unnamed and every caller
+    /// writes the copy under the name it was handed. That transfer is not cosmetic: before it, a derived file
+    /// was written as `_blush.png` and listed in the pmx under that name, while a second export into the same
+    /// folder - which skips the write because the file already exists - produced
+    /// `tex_chr1001_00_cheek0_blush.png` instead. Same model, two texture lists, one of them pointing at a
+    /// file named after nothing. (Nothing is derived any more - the cheek keeps the game's own map - but the
+    /// rule holds for whatever comes next.)
     /// </summary>
     static public Texture2D duplicateTexture(Texture2D source)
     {
@@ -290,13 +185,9 @@ public class TextureExporter
                                 byte[] bytes = mat_texture.EncodeToPNG();
                                 File.WriteAllBytes(tex_path, bytes);
                             }
-                            // a multiply decal also gets the bake that lets an MMD material draw it (see
-                            // BakeBlush); written beside the original, which stays for anyone who wants the
-                            // game's own map
-                            // A texture with no name bakes to "_mask.png"/"_blush.png" - artifacts beside every export
-                            // that nothing references (measured: 3 unreferenced files in a 40-file folder, two of them
-                            // these). Skip the bake instead of naming it after nothing.
-                            bool named = !string.IsNullOrWhiteSpace(tex_name);
+                            // A multiply decal (the cheek) needs no baked copy any more: the game's own map is written
+                            // as it is, and the addon derives the alpha from it at shade time with the multiply node and
+                            // luminance ramp its "Fix mini umamusume model" operator already uses. lend=multiply says so.
                             // **The highlight mask bake is gone** (2.34), after measuring what wanted it. It wrote
                             // `eyehi00_mask.png` and its siblings for a consumer that thresholds *outside* a shader,
                             // so a plain MMD material could draw the game's colour-masked highlights without painting
@@ -305,21 +196,6 @@ public class TextureExporter
                             // either - it binds the raw `eyehi00`/`01`/`02` and thresholds in `Uma Eyes` with its two
                             // `SmoothThreshold` groups. They were in the pmx's texture table only because this block
                             // registered them as dependencies. A dead end: kept in history, not in every user's folder.
-                            if (named && IsMultiply(mat))
-                            {
-                                // named after `tex_name`, not after the texture object: the bake used to name
-                                // itself from its source, which is empty often enough to have shipped `_blush.png`
-                                Texture2D blush = BakeBlush(mat_texture, tex_name);
-                                if (blush != null)
-                                {
-                                    string blushPath = savePath + blush.name + ".png";
-                                    string blushDep = "Texture2D/" + blush.name + ".png";
-                                    if (!textureNames.Contains(blushDep)) textureNames.Add(blushDep);
-                                    // always rewritten: it is derived, and a batch of blushes written by an older bake would
-                                    // otherwise stay on disk and be what the export ships
-                                    File.WriteAllBytes(blushPath, blush.EncodeToPNG());
-                                }
-                            }
                         }
                     }
                 }
@@ -354,19 +230,8 @@ public class TextureExporter
                     var copy = duplicateTexture(texture);
                     File.WriteAllBytes(tex_path, copy.EncodeToPNG());
                 }
-                // the cheek pair is a multiply map either way, so both get the MMD bake
-                if (tex_name.IndexOf("cheek", System.StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    Texture2D blush = BakeBlush(texture, tex_name);
-                    if (blush != null)
-                    {
-                        string blushPath = savePath + blush.name + ".png";
-                        string blushDep = "Texture2D/" + blush.name + ".png";
-                        if (!textureNames.Contains(blushDep)) textureNames.Add(blushDep);
-                        // always rewritten: it is derived (see above)
-                        File.WriteAllBytes(blushPath, blush.EncodeToPNG());
-                    }
-                }
+                // the cheek pair is a multiply map either way, and both are written as the game ships them:
+                // no alpha-only bake of either (see the note beside the decal material in ModelExporter)
             }
         }
         Debug.Log($"Exported textures: {textureNames.ToArray()}");

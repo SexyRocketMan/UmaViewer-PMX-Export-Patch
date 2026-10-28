@@ -1179,18 +1179,21 @@ public class ModelExporter
     ///
     /// The cheek decal is a *multiply* overlay: its texture is white where the face shows through and tinted
     /// where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD material
-    /// has no multiply blend, so exported as it is the decal paints a white shell over the cheeks. The token
-    /// says what the part is, so a consumer that understands it - the uma addon - can multiply it instead;
-    /// plain MMD still draws the texture with its own alpha, which is why the part is hidden by geometry at
-    /// rest rather than by zeroing the material.
+    /// has no multiply blend, so drawn as it is the decal paints a white shell over the cheeks. The map is
+    /// exported exactly as the game ships it and the token says what the part is, so a consumer that
+    /// understands it - the uma addon - multiplies it and takes the transparency from the same map (its
+    /// "Fix mini umamusume model" operator does precisely this for minis, which ship the same defect: a
+    /// multiply map with no alpha). The exporter used to bake an alpha-only copy of the map instead; that
+    /// copy is gone, because it was a degraded duplicate of what a shade pass can do exactly.
+    ///
+    /// Plain MMD still draws the texture with its own alpha, which is a white shell on a deployed cheek -
+    /// which is why the part is hidden by geometry at rest rather than by zeroing the material, and why a
+    /// model exported for MMD alone should leave the cheek morph alone.
     /// </summary>
     private static string ExtraMorphBlend(Material material)
     {
         if (Config.Instance != null && !Config.Instance.PmxExtraMorphs) return string.Empty;
-        if (material == null || material.shader == null) return string.Empty;
-        string shader = material.shader.name ?? string.Empty;
-        if (shader.IndexOf("Multiply", System.StringComparison.OrdinalIgnoreCase) >= 0) return " blend=multiply";
-        return string.Empty;
+        return TextureExporter.IsMultiply(material) ? " blend=multiply" : string.Empty;
     }
 
     /// <summary>
@@ -1714,14 +1717,16 @@ public class ModelExporter
                 {
                     try
                     {
-                        // a multiply decal is drawn with the baked copy instead: it carries the blush as an
-                        // alpha mask, which an MMD material can draw, while the game's own map would paint a
-                        // white shell over the cheeks (see TextureExporter.BakeBlush)
+                        // The texture this material is drawn with, named exactly as the game names it.
+                        //
+                        // A multiply decal (the cheek) keeps the game's **own** map. It used to be drawn with
+                        // a baked alpha-only copy instead, `<map>_blush.png`, because MMD cannot multiply and
+                        // the raw map paints a white shell over the cheeks. That copy is gone: the addon
+                        // derives the alpha from the game map at shade time with a multiply node and a
+                        // luminance ramp - the recipe its "Fix mini umamusume model" operator already uses
+                        // for exactly this defect on minis - and `blend=multiply` is the token that tells it
+                        // to. The bake was a degraded duplicate of that map, and every 2x2 of it was invented.
                         string textureName = material.mainTexture.name;
-                        if (decal && TextureExporter.IsMultiply(material))
-                        {
-                            textureName = TextureExporter.BlushName(textureName);
-                        }
                         var tex = model.TextureList.Find(t => t.TexturePath.Contains($"/{textureName}.png"));
                         if (tex == null)
                         {

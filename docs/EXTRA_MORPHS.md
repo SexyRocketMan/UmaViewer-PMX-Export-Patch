@@ -284,8 +284,10 @@ spelling - the emoticons `@_@_L`, `✦_✦_L`, `>_<_L`, `o_o_L`, then `Tear_L`/`
 * `Manga_Spin_L/R`, `Manga_Star_L/R`, `Manga_Shut_L/R`, `Manga_Wide_L/R` - the eye manga, one per expression
   (`@_@`, `✦_✦`, `>_<`, `o_o`).
 * The five `morph=` / `object morphs:` token groups in the comments, for the parts a vertex morph cannot hold.
-* `Texture2D/tex_chr1001_00_cheek0_blush.png` and `…cheek1_blush.png` - the blush baked for alpha blending,
-  beside the game's own maps.
+* The cheek's maps exactly as the game ships them. A second pair of alpha-only bakes (`…cheek0_blush.png`,
+  `…cheek1_blush.png`) used to sit beside them; they are gone - the addon multiplies the game's own map and
+  derives the transparency from it at shade time, the same recipe its "Fix mini umamusume model" operator
+  uses for minis. See the `blend=multiply` section of [`PMX_EXTENSIONS.md`](PMX_EXTENSIONS.md).
 
 **There are no UV morphs any more**, and character 1001 exports **205** morphs, all of them vertex morphs: 192
 ordinary facial ones and 13 deploy morphs. Two uv-morph stacks used to ride along - 14 rotation steps for the `@_@` turn

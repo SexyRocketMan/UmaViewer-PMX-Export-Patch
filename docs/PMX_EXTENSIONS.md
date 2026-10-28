@@ -128,13 +128,28 @@ that shows or hides an object is in the model comment instead, since no material
 One more token can appear on a material: `blend=multiply`, on a part the game draws by *multiplying* rather
 than by blending. The cheek decal is the one that has it - its texture is white where the face shows through
 and only drops the green and blue channels where the blush is, and the game's `MultiplyCheek` shader multiplies
-it into the face. An MMD material can only alpha blend, so the material is drawn with a **baked copy of that
-map** instead, `<map>_blush.png`, written beside the original: `alpha = 1 - min(g, b)` and the colour that alpha
-implies (`(t - 1 + alpha) / alpha`, a saturated pink at the deepest blush, fully transparent where the map is
-white). Alpha blending that reproduces the multiply, so plain MMD draws the blush correctly - subtle by nature,
-the reference map drops under 6% on its strongest texel - and a consumer that can multiply (the uma addon)
-still has the original map beside it. The morph that shows it is a vertex morph like the others (see below),
-so the part needs no addon at all.
+it into the face. An MMD material can only alpha blend, so drawn as it is the decal paints a white shell over
+the cheeks.
+
+**The map is exported exactly as the game ships it**, and the token is the whole instruction: a consumer that
+can multiply does so, and takes the transparency from the same map. The recipe is not a guess - the addon's
+"Fix mini umamusume model" operator already does it for minis, which ship the same defect (a multiply map with
+no alpha):
+
+* a Mix node in `MULTIPLY` mode, factor 1, second colour a warm tint (`(1, 0.799, 0.597)`), clamped;
+* a colour ramp on the map's own value - white up to 0.85, black at 1.0 - into the shader's alpha, so the
+  white "no blush" area becomes transparent and the tinted blush stays opaque;
+* the multiply result into the base colour.
+
+The exporter used to bake an alpha-only copy of that map instead (`<map>_blush.png`, `alpha = 1 - min(g, b)`
+with a reconstructed colour) and draw the decal with it. That is gone: it was a degraded duplicate of what a
+shade pass can compute exactly from the same texels, it doubled the files a cheek costs, and it had to be kept
+in step with the shading recipe by hand. Two consequences worth knowing: a model exported **for MMD alone** will
+show the white shell if its cheek morph is deployed (MMD cannot multiply - leave that morph alone or use the
+addon), and the addon must implement the recipe above for the token to mean anything.
+
+The morph that shows the decal is a vertex morph like the others (see below), so the part needs no addon at
+all - only its *shading* does.
 
 Worked example, the head of a normal character:
 
