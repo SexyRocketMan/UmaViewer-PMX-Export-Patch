@@ -439,7 +439,9 @@ blender --background --factory-startup --python Tools\verify_decals.py -- <out.t
 ```
 
 `Tools\probe_texture_usage.py <out.txt> <folder-or-pmx>` answers "is this file used" from the pmx's own
-texture table; `Tools\probe_decal_normals.py` measures which way each decal part faces.
+texture table; `Tools\probe_decal_normals.py <report.txt> [<file.pmx>]` measures which way each decal part faces
+(winding and stored normals side by side - and mind the argument order: a single path is taken as the *report*
+destination, and the default model is measured instead).
 
 ## Traps that cost time
 
