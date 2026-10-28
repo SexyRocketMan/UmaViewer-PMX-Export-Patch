@@ -9,9 +9,10 @@ file that reads the textures a UmaViewer export writes, so the maths in it is th
 
 ## The three layers, and the fifth parameter
 
-The eye material carries **four** texture inputs: `_MainTex` (the iris plate, `tex_*_eye0_all`) and three
-highlight maps `_High0Tex`/`_High1Tex`/`_High2Tex` = `tex_*_eyehi00/01/02`. A single `_High0Tex` *sampler* is
-shared by all three, but each is fetched with **its own UV**, computed in the vertex shader.
+The eye material carries **four** texture inputs: `_MainTex` (the iris plate, `tex_*_eye0` - the *left quarter* of
+the game's four-plate atlas, see below) and three highlight maps `_High0Tex`/`_High1Tex`/`_High2Tex` =
+`tex_*_eyehi00/01/02`. A single `_High0Tex` *sampler* is shared by all three, but each is fetched with **its own
+UV**, computed in the vertex shader.
 
 The parameters are what matters:
 
@@ -30,6 +31,13 @@ The parameters are what matters:
 46 properties and none of those names are among them (see "Measured", below). So the port is faithfully
 reproducing the *maths* while inventing the *interface*, and a value read from the port is not evidence about
 what the game's material holds.
+
+**The four-plate atlas.** `.w` of `_MainParam` as the port declares it is the eye *type*, 0–3, and that matches
+the asset: `tex_*_eye0` is 512×256 on 1001, four 128×256 plates side by side, and the mesh UVs are **plate-local**
+(measured on an export: `u 0.135..0.865`, `v 0.025..0.975`). The exporter therefore writes the left plate as
+`tex_*_eye0.png` and keeps the UVs unchanged, which draws type 0; the full sheet used to be written beside it as
+`tex_*_eye0_all.png` and nothing ever named that file. Selecting another type would be a per-material offset, and
+a pmx has no place to carry that.
 
 ## The motion, per vertex
 
@@ -60,8 +68,9 @@ colour += max(0, saturate(intensity));           // per layer, three times
 ```
 
 i.e. **luminance above a threshold, scaled by the layer's own intensity, added to the eye**. That is why the
-maps are black-background rather than alpha-masked, and why an MMD-style alpha blend of them draws black
-(`export` notes: `TextureExporter.BakeHighlight` exists for exactly that reason).
+maps are black-background rather than alpha-masked, and why an MMD-style alpha blend of them draws black. The
+exporter used to bake `<map>_mask.png` for exactly that reason; the bake is gone (`TextureExporter`, 2.34), since
+it produced files no material named on a 1001 export - a consumer thresholds the raw maps instead.
 
 ## Measured: what the shipped material exposes
 

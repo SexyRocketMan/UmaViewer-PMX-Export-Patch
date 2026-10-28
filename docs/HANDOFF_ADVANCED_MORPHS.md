@@ -250,7 +250,9 @@ properties and defaults are readable, **source is not**. The decompile remains t
 * **Scripted insertion inside a method body** (inserting a method after a signature line, or a call between an
   `if` and its `{`) compiles into nonsense — insert *before* the doc comment, or after the whole block.
 * **The stale-bake trap**: derived textures (`<map>_blush.png`, `<map>_mask.png`) are written into the shared
-  `Texture2D/` folder and must be **rewritten every export**, or an older bake ships.
+  `Texture2D/` folder and must be **rewritten every export**, or an older bake ships. Nothing is baked any more
+  (both `BakeBlush` and `BakeHighlight` are gone, and the pmx names no derived file), but the trap returns with
+  the first derived texture that comes back.
 * **`bmesh.ops.duplicate`** with faces+verts+edges in `geom` throws; pass faces only.
 * **mmd_tools and UV morphs**: they import (`mmd_root.uv_morphs`, as vertex groups) and can be viewed/applied by
   the UV Morph operators, but they never deform on their own — Blender cannot animate a UV layer. That is the reason
@@ -267,8 +269,9 @@ open items (brows role, panel rows, Spork's new version, decal lighting, the fac
 * `docs/PMX_EXTENSIONS.md` — the comment grammar and the deploy/UV morph tables
 * `docs/UMA_EYE_SHADER.md` — the eye shader ground truth, uniforms and maths
 * `docs/MORPHS.md` — the original analysis of the five non-vertex morphs
-* `ModelExporter.cs`: `DeployMorphs`, `SpinMorphs`, `TearMorphs`, `MorphPartRenderers`, `MorphPartTextures`,
-  `BakeBlush`, `BakeHighlight`
+* `ModelExporter.cs`: `DeployMorphs`, `SpinMorphs`, `TearMorphs`, `MorphPartRenderers`, `MorphPartTextures`
+  (no bake of any kind any more: `BakeBlush` and `BakeHighlight` were both removed, the cheek keeps the game's map
+  and the highlight maps are thresholded by the consumer)
 * addon `MorphDrivers.py`: `decal_materials`, `build_spin`, `build_tear_scroll`, `build_highlights`,
   `setup_advanced_morphs`, `report_export`
 

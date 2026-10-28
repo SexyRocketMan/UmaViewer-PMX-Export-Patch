@@ -108,11 +108,11 @@ What changed in code:
 | after the scene edit | 5,798,573 B, byte-identical to the pre-edit default run; log has no `Failed to call`, no `NullReference`, no exception |
 | bone-switch retirement | `dotnet build` 0 errors; a parse of the file confirms `EnglishBoneNameMap` covers **52 of 52** recordable `BoneNames` members (only `None` is unmapped, and it never reaches the recorder), so the new `LogError` fallback is unreachable. No reference to the switch survives in any `.cs` |
 
-**`_blush.png` is gone and the bakes are named**: both bakes are on disk as
-`tex_chr1001_00_cheek0_blush.png` / `…cheek1_blush.png` and both are named by the pmx's texture table. A
-folder scan (pmx texture table vs. the files) reports exactly one file written and never referenced, in both
-exports: **`tex_chr1001_00_eye0_all.png`** — the pre-existing item below, not a regression. No `eyehi*_mask.png`
-anywhere, and nothing the pmx names is missing from disk.
+**No derived texture is written at all now**: the blush bake and the highlight mask bake are both gone (the cheek
+keeps the game's own map, the highlight maps are thresholded by their consumer), and the full eye atlas
+`tex_*_eye0_all.png` - the one file a folder scan used to report as written and never referenced - is no longer
+written either (see "Small ones"). A folder scan should now find **no** written-but-unreferenced file, and
+nothing the pmx names missing from disk.
 
 ## Keybinds and the modes they collide with
 
@@ -183,8 +183,9 @@ the whole asset list. The pmx grew 2,474 bytes (the tokens).
 `wet 11, dirt 2`); the same export with it off is **byte-identical** to the pre-option baseline
 (5,798,573 B, zero tokens, no model line); a **prop** with the option on gives `texture variants: none
 (requested, …)`. `Tools/probe_texture_usage.py` was taught about the token and now reports the 13 files as
-"referenced by a comment token, not by the table", leaving only the pre-existing `eye0_all` as unreferenced —
-without that it called all 13 leftovers, which is exactly the trap this repo documents.
+"referenced by a comment token, not by the table", leaving only the pre-existing `eye0_all` as unreferenced (which
+is no longer written at all — see "Small ones") — without that the probe called all 13 leftovers, which is exactly
+the trap this repo documents.
 
 **What is left, in order:**
 
@@ -401,23 +402,16 @@ exporter lifts every decal **along its own normal**, so those parts sat behind t
 
 ### 2. Small ones
 
-- **A multiply material would bake a blush per textured slot.** `AddRenderer` walks every texture property
-  and calls `BakeBlush` for each one on a multiply material, while `ModelExporter` only ever references
-  `BlushName(mainTexture.name)`. Measured on 1001 the two bakes are `cheek0_blush` and `cheek1_blush` and
-  **both** are named by the pmx, so it orphans nothing today — but the code is slot-agnostic while the
-  reference is `mainTexture` only, so a multiply material with two textured slots would leave second-class
-  files behind. Bake from `_MainTex` only if it ever bites.
-- **`BakeHighlight` is now uncalled** (the mask bake was removed in `920843e` but the function stayed) and
-  carries the same unnamed-artifact bug the new `BakeBlush` parameter fixes. Delete it, or give it the same
-  `name` parameter, before anything calls it again. `docs/UMA_EYE_SHADER.md:64` still refers to it.
-- **`tex_chr1001_00_eye0_all.png`** is written and referenced by nothing (42 KB/character). The user said to
-  keep the four eye textures; this fifth one is a separate question.
 - **Morph-setup guard**: `setup_advanced_morphs` reports `"<root>: the mesh carries no deploy morphs"` for a
   model that predates the advanced morphs — it does not crash, but "old model" and "setup failed" read
   identically.
 - **Decals stay on the body** (the user's call): `split_face_into_object` only moves face+eye polygons, so
   the cheek and tear quads and their morphs remain on the body. They are bone-parented, so they follow the
   head — accepted.
+
+Done since this list was written: `BakeBlush` and `BakeHighlight` are both gone (the cheek keeps the game's own
+map, the highlight maps are thresholded by the consumer), so the "a multiply material would bake a blush per
+textured slot" item died with them.
 
 ## How to verify — the loop that makes this repo workable
 

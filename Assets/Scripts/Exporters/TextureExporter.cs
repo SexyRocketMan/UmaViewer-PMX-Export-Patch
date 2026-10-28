@@ -8,40 +8,6 @@ using System;
 
 public class TextureExporter
 {
-    /// <summary>
-    /// A highlight map turned into one an MMD material can draw: white where the highlight is, transparent
-    /// everywhere else.
-    ///
-    /// The eye shader does not carry the highlight in the map's alpha - it carries it in the *colour* and masks
-    /// it with `step(_Show, texture)`, so drawn as it is the layer paints black over the eye wherever there is no
-    /// highlight. The mask is that step, softened a little at the edge so the shape is not aliased: alpha from
-    /// the luminance, thresholded, and the colour forced to white because a highlight is light.
-    /// </summary>
-    static public Texture2D BakeHighlight(Texture2D source)
-    {
-        if (source == null) return null;
-        Texture2D readable = duplicateTexture(source);
-        Color[] pixels = readable.GetPixels();
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            Color p = pixels[i];
-            float lum = Mathf.Max(p.r, Mathf.Max(p.g, p.b));
-            float alpha = Mathf.Clamp01((lum - 0.18f) / (0.45f - 0.18f));
-            pixels[i] = new Color(1f, 1f, 1f, alpha);
-        }
-        Texture2D baked = new Texture2D(readable.width, readable.height, TextureFormat.RGBA32, false);
-        baked.name = HighlightName(source.name);
-        baked.SetPixels(pixels);
-        baked.Apply();
-        return baked;
-    }
-
-    /// <summary>The name the baked highlight is written under.</summary>
-    static public string HighlightName(string sourceName)
-    {
-        return sourceName + "_mask";
-    }
-
     /// <summary>Whether a material is one the game draws by multiplying - the blush decal is.</summary>
     static public bool IsMultiply(Material material)
     {
@@ -169,17 +135,21 @@ public class TextureExporter
 
                                 mat_texture = duplicateTexture(mat_texture);
 
+                                // The eye's `_MainTex` is a four-plate atlas (512x256 on 1001) and the mesh UVs are
+                                // plate-local: `_Offset` selects the plate and the shipped value is (0,0,0,0), so the
+                                // left plate is the one this export draws, and cropping to it keeps the UVs valid as
+                                // they stand (measured: the eye samples u 0.135..0.865, v 0.025..0.975 - a plate-local
+                                // range, not a whole-sheet one). The full sheet used to be written beside it as
+                                // `<name>_all.png`; nothing named it - not the pmx's texture table, not a material, not
+                                // the add-on - and it cost 42 KB per character, so it is not written any more.
                                 if (tex_name.EndsWith("eye0"))
                                 {
                                     var clip_texture = duplicateTexture(mat_texture);
                                     var pixels = clip_texture.GetPixels(0, 0, clip_texture.width / 4, clip_texture.height);
                                     clip_texture.Reinitialize(clip_texture.width / 4, clip_texture.height);
                                     clip_texture.SetPixels(pixels);
-
-
-                                    byte[] clip = clip_texture.EncodeToPNG();
-                                    File.WriteAllBytes(tex_path, clip);
-                                    tex_path = savePath + tex_name + "_all" + ".png";
+                                    File.WriteAllBytes(tex_path, clip_texture.EncodeToPNG());
+                                    continue;
                                 }
 
                                 byte[] bytes = mat_texture.EncodeToPNG();
