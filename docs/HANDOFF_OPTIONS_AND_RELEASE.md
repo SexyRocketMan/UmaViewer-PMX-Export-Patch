@@ -109,10 +109,10 @@ What changed in code:
 | bone-switch retirement | `dotnet build` 0 errors; a parse of the file confirms `EnglishBoneNameMap` covers **52 of 52** recordable `BoneNames` members (only `None` is unmapped, and it never reaches the recorder), so the new `LogError` fallback is unreachable. No reference to the switch survives in any `.cs` |
 
 **No derived texture is written at all now**: the blush bake and the highlight mask bake are both gone (the cheek
-keeps the game's own map, the highlight maps are thresholded by their consumer), and the full eye atlas
-`tex_*_eye0_all.png` - the one file a folder scan used to report as written and never referenced - is no longer
-written either (see "Small ones"). A folder scan should now find **no** written-but-unreferenced file, and
-nothing the pmx names missing from disk.
+keeps the game's own map, the highlight maps are thresholded by their consumer). One file is written and named by
+nothing, deliberately: `tex_*_eye0_all.png`, the four-plate eye sheet, because it is a superset a user may prefer
+over the single plate the material binds (the plate recipe is in `UMA_EYE_SHADER.md`). A folder scan reports
+exactly that file, and nothing the pmx names is missing from disk.
 
 ## Keybinds and the modes they collide with
 
@@ -183,9 +183,9 @@ the whole asset list. The pmx grew 2,474 bytes (the tokens).
 `wet 11, dirt 2`); the same export with it off is **byte-identical** to the pre-option baseline
 (5,798,573 B, zero tokens, no model line); a **prop** with the option on gives `texture variants: none
 (requested, …)`. `Tools/probe_texture_usage.py` was taught about the token and now reports the 13 files as
-"referenced by a comment token, not by the table", leaving only the pre-existing `eye0_all` as unreferenced (which
-is no longer written at all — see "Small ones") — without that the probe called all 13 leftovers, which is exactly
-the trap this repo documents.
+"referenced by a comment token, not by the table", leaving only `eye0_all` as unreferenced - which ships on
+purpose, see "Small ones" - without that the probe called all 13 leftovers, which is exactly the trap this repo
+documents.
 
 **The addon half is built** (addon commit `623f6f0`): `Umashader.bind_wet_maps` mixes each `wet=` file over the
 map it replaces, and `bind_dirt_maps` mixes each `dirt=` map toward a dirt colour — both driven by a property on
@@ -413,11 +413,15 @@ exporter lifts every decal **along its own normal**, so those parts sat behind t
 - **Decals stay on the body** (the user's call): `split_face_into_object` only moves face+eye polygons, so
   the cheek and tear quads and their morphs remain on the body. They are bone-parented, so they follow the
   head — accepted.
+- **`tex_*_eye0_all.png` ships and is named by nothing** (the user's call): the four-plate sheet is a superset -
+  the plates are the character's eye options, one of them with the highlights baked out - so a user can bind it
+  in place of the single plate and pick a plate with an image-node x scale of 0.25 and an x offset of plate ×
+  0.25 (0, 0.25, 0.5, 0.75). The bound map stays the single plate because a pmx material has one texture slot
+  and no place for a UV offset. `Tools/probe_texture_usage.py` reports it as unreferenced, which is correct.
 
 Done since this list was written: `BakeBlush` and `BakeHighlight` are both gone (the cheek keeps the game's own
 map, the highlight maps are thresholded by the consumer), so the "a multiply material would bake a blush per
-textured slot" item died with them; `tex_*_eye0_all.png` is no longer written (32 textures → 31, pmx bytes
-unchanged); and the morph-setup guard now says which of the four cases a model is in
+textured slot" item died with them; and the morph-setup guard now says which of the four cases a model is in
 (`extra_morphs=off`, pre-2.34, stripped comment, or a real setup failure) instead of one sentence for all of
 them - the add-on's `docs/PMX_METADATA_CONTRACT.md` lists the four sentences.
 

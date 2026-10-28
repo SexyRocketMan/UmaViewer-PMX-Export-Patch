@@ -35,9 +35,15 @@ what the game's material holds.
 **The four-plate atlas.** `.w` of `_MainParam` as the port declares it is the eye *type*, 0–3, and that matches
 the asset: `tex_*_eye0` is 512×256 on 1001, four 128×256 plates side by side, and the mesh UVs are **plate-local**
 (measured on an export: `u 0.135..0.865`, `v 0.025..0.975`). The exporter therefore writes the left plate as
-`tex_*_eye0.png` and keeps the UVs unchanged, which draws type 0; the full sheet used to be written beside it as
-`tex_*_eye0_all.png` and nothing ever named that file. Selecting another type would be a per-material offset, and
-a pmx has no place to carry that.
+`tex_*_eye0.png` and keeps the UVs unchanged, which draws type 0 - that is what a pmx material can name, since it
+has one texture slot and no place for a per-material UV offset.
+
+**The whole sheet ships beside it as `tex_*_eye0_all.png`**, and it is worth having: the four plates are the
+character's eye options, including a variant with the highlights baked out. To draw one of the others, point the
+material's image node at `_all` and put a **Mapping** (or a Vector Math scale+add) in front of its Vector input:
+**x scale 0.25**, **x offset = plate × 0.25** — so 0, 0.25, 0.5, 0.75 pick the four plates in order, with the y
+axis untouched. That is the same maths the game's `_MainParam.w` does with a uniform, done by hand because a pmx
+cannot carry it.
 
 ## The motion, per vertex
 

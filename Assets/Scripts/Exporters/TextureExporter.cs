@@ -137,11 +137,17 @@ public class TextureExporter
 
                                 // The eye's `_MainTex` is a four-plate atlas (512x256 on 1001) and the mesh UVs are
                                 // plate-local: `_Offset` selects the plate and the shipped value is (0,0,0,0), so the
-                                // left plate is the one this export draws, and cropping to it keeps the UVs valid as
-                                // they stand (measured: the eye samples u 0.135..0.865, v 0.025..0.975 - a plate-local
-                                // range, not a whole-sheet one). The full sheet used to be written beside it as
-                                // `<name>_all.png`; nothing named it - not the pmx's texture table, not a material, not
-                                // the add-on - and it cost 42 KB per character, so it is not written any more.
+                                // left plate is the one this export draws. Cropping to it keeps the UVs valid as they
+                                // stand (measured: the eye samples u 0.135..0.865, v 0.025..0.975 - a plate-local range,
+                                // not a whole-sheet one).
+                                //
+                                // The whole sheet is written beside it as `<name>_all.png`, under the file name it had
+                                // before this crop existed, because it is a *superset* a user may prefer: the plates are
+                                // the character's eye options (a variant with the highlights baked out among them), so
+                                // binding `_all` and setting the image node's Vector to scale x = 0.25 with an x offset
+                                // of plate * 0.25 selects any of them - offsets 0, 0.25, 0.5, 0.75. Nothing in a pmx can
+                                // name it (one texture slot per material, and the plate is chosen by a shader uniform),
+                                // so it ships as an extra rather than as the bound map.
                                 if (tex_name.EndsWith("eye0"))
                                 {
                                     var clip_texture = duplicateTexture(mat_texture);
@@ -149,7 +155,7 @@ public class TextureExporter
                                     clip_texture.Reinitialize(clip_texture.width / 4, clip_texture.height);
                                     clip_texture.SetPixels(pixels);
                                     File.WriteAllBytes(tex_path, clip_texture.EncodeToPNG());
-                                    continue;
+                                    tex_path = savePath + tex_name + "_all" + ".png";
                                 }
 
                                 byte[] bytes = mat_texture.EncodeToPNG();

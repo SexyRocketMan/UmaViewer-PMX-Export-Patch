@@ -43,11 +43,12 @@ Pose`, `Extra Morphs`, `Texture Variants`, `Morph Name Mode`, `Key Reduction`, `
 all **optional**: an unassigned one only means that row does not reflect `Config.json` at startup, and nothing
 throws.
 
-Row 5 is **code-only as of this writing**: `_textureVariants` and `EnablePmxTextureVariants` exist and
-`ApplySettings` syncs the toggle, but no scene object is assigned to the field yet, so `Config.json` and
-`-TextureVariants` are the way to switch it until the row is placed. Anything that places it needs nothing from
-`Config.json` beyond the field assignment - the setter writes the key and saves it, exactly like the two rows
-above it. Label suggestion: `Also export the wet and dirt maps (+80% size)`.
+Row 5 is **placed and wired**: the `ExportTextureVariants` toggle's `onValueChanged` calls
+`EnablePmxTextureVariants`, and `UISettingsModel._textureVariants` is assigned to that toggle, so `ApplySettings`
+shows `Config.json`'s value at startup and a click writes the key back. That assignment was the missing half for
+a while - a toggle whose call list is empty of a *target* only fires on a click, so the row could look on while
+`Config.json` stayed false and the export wrote no variant files (measured, exactly how the "I cannot see the dirt
+textures" report came in). A row like this needs both ends; the inspector shows the field as `Texture Variants`.
 
 There is also an optional `_textureSetRowPrefab` (`UmaUIContainer`) on `UISettingsModel` if you want the
 texture set rows to look different from the character/material toggle rows - leave it empty and they use
