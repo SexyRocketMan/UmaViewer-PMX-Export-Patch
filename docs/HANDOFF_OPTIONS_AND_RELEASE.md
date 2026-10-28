@@ -198,6 +198,37 @@ without that it called all 13 leftovers, which is exactly the trap this repo doc
 3. **No panel row** for `PmxTextureVariants` — `Config.json` and the CLI only, for now. Same shape as
    `PmxExtraMorphs` had before its row (see `UI_HOOKUP.md`).
 
+## The export settings line, and where the contract lives
+
+Every export now also states the switches that shaped it, on one model-comment line:
+
+```
+export settings: morph_names=unified extra_morphs=on texture_variants=off a_pose=on uma_material_fields=on
+```
+
+Why it earns its place: the metadata *version* describes the text format and nothing else, so it cannot say
+why two exports of one character differ. `morph_names` renames every morph, `extra_morphs` and
+`texture_variants` decide whether those features exist at all, `a_pose` changes the rest pose, and
+`uma_material_fields` decides whether the material comments carry shader values. The values are **words, not
+numbers**, because the enum's numbering has already moved once (`Both` retired, `Unified` 3 → 2).
+
+**The contract now has two halves, one per repository, and they must be kept in step:**
+
+| side | file | owns |
+|---|---|---|
+| written | this repo, `docs/PMX_EXTENSIONS.md` | what the exporter writes: the version rule, every line and token, the changelog, and where the textures live |
+| relied on | `uma_addon/docs/PMX_METADATA_CONTRACT.md` | what a reader may assume, the three unversioned content contracts, what to ignore, and what to do when the texture folder did not travel |
+
+The addon's `MorphDrivers.py` docstring points at both. Change one side and update the other in the same
+breath - that is the whole reason the second file exists.
+
+**The texture caveat is documented, not solved.** A pmx never embeds its textures, and the `wet=`/`dirt=`
+files are named *only* by comment tokens, so a "delete what nothing references" pass - or a user copying the
+`.pmx` alone - takes them. A model can therefore claim `texture variants: wet 11, dirt 2` with none of them
+beside it. What the docs say a reader must do: verify each file it is about to use, name each missing one, and
+degrade to "no variant wiring" rather than failing an import. `Tools/probe_texture_usage.py` already knows a
+token is a reference; the addon side of that check is part of the queued compatibility report.
+
 ## The metadata format now has a version
 
 `ModelExporter.MetadataVersion` (currently **2**) is written as `metadata format: 2` on its own model-comment

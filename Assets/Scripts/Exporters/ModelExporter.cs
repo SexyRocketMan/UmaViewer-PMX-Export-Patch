@@ -215,6 +215,45 @@ public class ModelExporter
     }
 
     /// <summary>
+    /// The export settings that decide what is in the file, always written so a reader - the uma addon, or a
+    /// person with a text editor - can tell why two exports of the same character differ, instead of
+    /// inferring it from the content:
+    ///
+    ///   * `morph_names` renames every morph, so it decides whether the tokens and shape keys a reader looks
+    ///     for exist at all. This line is how a naming-mode change shows itself without a metadata bump -
+    ///     the names cannot say which mode wrote them, but this can.
+    ///   * `extra_morphs`, `texture_variants` decide whether the advanced morphs and the variant maps exist.
+    ///   * `a_pose` changes the rest pose the model stands in.
+    ///   * `uma_material_fields` decides whether the material comments carry the uma shader values at all.
+    ///
+    /// Values are **names, not numbers**: the enum's numbering is implementation detail and has already
+    /// moved once (Both retired, Unified 3 -> 2), so a reader keying on `2` would have read the wrong mode.
+    /// </summary>
+    private static string ExportSettingsLine()
+    {
+        var config = Config.Instance;
+        string flag(bool on) => on ? "on" : "off";
+        var mode = config != null ? config.PmxMorphNameMode : PmxMorphNameMode.Unified;
+
+        return "export settings: morph_names=" + MorphNameModeToken(mode)
+             + " extra_morphs=" + flag(config == null || config.PmxExtraMorphs)
+             + " texture_variants=" + flag(config != null && config.PmxTextureVariants)
+             + " a_pose=" + flag(config == null || config.PmxAPoseRestPose)
+             + " uma_material_fields=" + flag(config == null || config.PmxUmaMaterialFields);
+    }
+
+    /// <summary>The naming mode as a word. <see cref="PmxMorphNameMode"/>'s numbers are not the contract.</summary>
+    private static string MorphNameModeToken(PmxMorphNameMode mode)
+    {
+        switch (mode)
+        {
+            case PmxMorphNameMode.BlenderCompatible: return "blender_compatible";
+            case PmxMorphNameMode.ShortEnglish: return "short_english";
+            default: return "unified";
+        }
+    }
+
+    /// <summary>
     /// The model-level half of the texture-variant contract, so a reader can tell three states apart
     /// without scanning every material comment:
     ///
@@ -287,17 +326,20 @@ public class ModelExporter
         var character = container as UmaContainerCharacter;
         string morphNote = ExtraMorphsNote(character);
         string variantNote = TextureVariantsNote();
+        // always, and before the optional lines: two exports of one character can differ completely because of
+        // these switches, and the alternative to saying so is a reader inferring it from the file's contents
+        string settingsNote = "\n" + ExportSettingsLine();
         if (entry != null)
         {
             model.Name = entry.Name;
             model.NameEn = entry.GetName();
-            model.Description = model.DescriptionEn = $"{entry.GetName()}\n{modelInfo}{morphNote}{variantNote}";
+            model.Description = model.DescriptionEn = $"{entry.GetName()}\n{modelInfo}{settingsNote}{morphNote}{variantNote}";
         }
         else
         {
             model.Name = container.gameObject.name;
             model.NameEn = container.gameObject.name;
-            model.Description = model.DescriptionEn = $"{container.gameObject.name}\n{modelInfo}{morphNote}{variantNote}";
+            model.Description = model.DescriptionEn = $"{container.gameObject.name}\n{modelInfo}{settingsNote}{morphNote}{variantNote}";
         }
 
         //Rean Bones
