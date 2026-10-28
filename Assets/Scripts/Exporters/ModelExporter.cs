@@ -395,7 +395,8 @@ public class ModelExporter
         }
         List<int> triangles = new List<int>();
         var vertexRanges = new List<(Renderer renderer, int start, int count)>();
-        model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform, vertexRanges);
+        model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform, vertexRanges,
+                                                  restInvisible);
         model.TriangleIndexes = triangles.ToArray();
 
         // The decal parts are collapsed onto one point inside the head, and a deploy morph per part puts each
@@ -1819,9 +1820,60 @@ public class ModelExporter
         return parts.ToArray();
     }
 
+    /// <summary>
+    /// Turn a decal part around when its own normals point into the head.
+    ///
+    /// The mirrored right-hand instances arrive with reversed winding, so their normals face *into* the head
+    /// while their left twins face out. That is not cosmetic: the exporter's clearance offset follows the
+    /// part's normal, and any consumer that culls or shades by normal reads the part backwards. Measured on
+    /// character 1001 costume 00 (`Tools/probe_decal_normals.py`): two of the four eye manga and one tear sheet
+    /// read `normal . outward = -0.70 / -0.79` where their twins read `+0.70 / +0.79`.
+    ///
+    /// The test is the one the deploy-morph step already uses - the part's averaged normal against the
+    /// direction from the head bone to the part - and the fix is the same surface, turned around: normals
+    /// negated and each triangle's last two indices swapped. Nothing else changes, so the part keeps its
+    /// position, its uv and its materials.
+    ///
+    /// A part with no usable normal is left alone rather than guessed at, and `headBone == null` skips the
+    /// whole thing: without it there is no "outward". Returns whether the part was turned around, because a
+    /// caller may hold a second copy of the same normals (the skinned path keeps the unbaked ones as its
+    /// fallback for collapsed vertices, and those have to agree).
+    /// </summary>
+    private static bool OrientDecalPart(Renderer renderer, Transform headBone, Vector3[] positions,
+                                        Vector3[] normals, int[] triangles)
+    {
+        if (renderer == null || headBone == null) return false;
+        if (positions == null || normals == null || triangles == null) return false;
+        if (normals.Length != positions.Length) return false;
+
+        Vector3 normalSum = Vector3.zero;
+        Vector3 centre = Vector3.zero;
+        for (int i = 0; i < positions.Length; i++)
+        {
+            normalSum += renderer.transform.TransformDirection(normals[i]).normalized;
+            centre += renderer.transform.TransformPoint(positions[i]);
+        }
+        if (positions.Length == 0) return false;
+        centre /= positions.Length;
+
+        // a part whose normals cancel out says nothing about which way it faces
+        if (normalSum.sqrMagnitude < 1e-12f) return false;
+        if (Vector3.Dot(normalSum, centre - headBone.position) >= 0f) return false;
+
+        for (int i = 0; i < normals.Length; i++) normals[i] = -normals[i];
+        for (int t = 0; t + 2 < triangles.Length; t += 3)
+        {
+            int swap = triangles[t + 1];
+            triangles[t + 1] = triangles[t + 2];
+            triangles[t + 2] = swap;
+        }
+        return true;
+    }
+
     private static Vertex[] ReadVerticesAndTriangles(List<Renderer> renderers, List<Transform> bones,
                                                      ref List<int> triangleList, Transform root,
-                                                     List<(Renderer renderer, int start, int count)> ranges)
+                                                     List<(Renderer renderer, int start, int count)> ranges,
+                                                     HashSet<Renderer> decalParts = null)
     {
         List<Vertex> verticesList = new List<Vertex>();
         int vertexOffset = 0;
@@ -1864,6 +1916,8 @@ public class ModelExporter
                 var colors = mesh.colors;
                 var triangles = mesh.triangles;
                 CompleteVertexChannels(renderer, mesh, vertices, triangles, ref normals, ref uv);
+                if (decalParts != null && decalParts.Contains(renderer))
+                    OrientDecalPart(renderer, headBone, vertices, normals, triangles);
 
                 for (int i = 0; i < vertices.Length; i++)
                 {
@@ -1901,7 +1955,7 @@ public class ModelExporter
 
 
                 if (ranges != null) ranges.Add((renderer, vertexOffset, vertices.Length));
-                foreach (var triangle in mesh.triangles)
+                foreach (var triangle in triangles)
                 {
                     triangleList.Add(triangle + vertexOffset);
                 }
@@ -1948,6 +2002,13 @@ public class ModelExporter
                 var bakedVertices = bakemesh.vertices;
                 var bakedNormals = bakemesh.normals;
                 if (bakedNormals.Length != bakedVertices.Length) bakedNormals = RebuiltNormals(bakedVertices, mesh.triangles);
+                var skmTriangles = mesh.triangles;
+                if (decalParts != null && decalParts.Contains(renderer)
+                    && OrientDecalPart(renderer, headBone, bakedVertices, bakedNormals, skmTriangles))
+                {
+                    // the fallback array for collapsed vertices has to face the same way as the baked one
+                    for (int i = 0; i < normals.Length; i++) normals[i] = -normals[i];
+                }
                 // skin weights can be absent or short on a part that carries no skinning at all: read as "no
                 // bone count", which the switch below already treats as "ride the transform's own bone"
                 bool weightsPresent = weights.Length == vertices.Length;
@@ -2047,7 +2108,7 @@ public class ModelExporter
                 }
 
                 if (ranges != null) ranges.Add((renderer, vertexOffset, vertices.Length));
-                foreach (var triangle in mesh.triangles)
+                foreach (var triangle in skmTriangles)
                 {
                     triangleList.Add(triangle + vertexOffset);
                 }
