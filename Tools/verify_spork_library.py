@@ -70,7 +70,10 @@ check("has the five eye rows", len([row for row in rows if row.get("material") =
       "%d" % len([row for row in rows if row.get("material") == "eye"]))
 check("has the weather rows", {"uma_shader_wet", "uma_shader_dirt", "uma_shader_dirt_colour"}
       <= {row["key"] for row in rows}, "%s" % [row["key"] for row in rows])
-check("12 rows in total", len(rows) == 12, "%d" % len(rows))
+check("exposes his three light sockets",
+      {"spork_highlight_color", "spork_light_intensity", "spork_colored_light"} <= {row["key"] for row in rows},
+      "%s" % [row["key"] for row in rows])
+check("15 rows in total", len(rows) == 15, "%d" % len(rows))
 eye_rules = [rule["node"] for rule in manifest["textures"]["eye"]]
 check("textures.eye addresses our node names",
       eye_rules == ["Iris Map", "Highlight Map 0", "Highlight Map 1", "Highlight Map 2"], "%s" % (eye_rules,))
@@ -117,12 +120,29 @@ if check("the general group is there", main_group is not None):
                     "Light Intensity", "Colored Light", "Dirt Map", "Dirt", "Dirt Tint"}, "%s" % (sorted(names),))
     dirt = [node for node in main_group.nodes if node.name.startswith("Dirt ")]
     check("the dirt chain is in it", len(dirt) == 7, "%s" % [node.name for node in dirt])
+    # a Mix with the default MIX blend fades the surface towards the tint instead of multiplying by it
+    taps = [main_group.nodes.get(name) for name in ("Dirt Diffuse", "Dirt Shaded")]
+    check("its dirt multiplies rather than fades",
+          all(node is not None and node.blend_type == 'MULTIPLY' for node in taps),
+          "%s" % [getattr(node, "blend_type", None) for node in taps])
 if check("the FACE variant is there", face_group is not None):
-    check("it is his 34 nodes plus the dirt chain (41)", len(face_group.nodes) == 41, "%d" % len(face_group.nodes))
+    check("it is his 34 nodes plus the dirt chain (40)", len(face_group.nodes) == 40, "%d" % len(face_group.nodes))
     names = {item.name for item in face_group.interface.items_tree
              if getattr(item, "in_out", None) == 'INPUT'}
     check("it has no Base or Highlight Color, as his does",
           "Base" not in names and "Highlight Color" not in names, "%s" % (sorted(names),))
+    # his FACE group's output is a plain colour, and `Colored Light` can route round the colour taps - so the dirt
+    # has to sit on whatever the output actually is (see Tools/spork_dirt_fix.py)
+    dirt_out = face_group.nodes.get("Dirt Colour")
+    output = next((node for node in face_group.nodes if node.type == 'GROUP_OUTPUT'), None)
+    check("its dirt multiplies the group's own output colour",
+          dirt_out is not None and dirt_out.blend_type == 'MULTIPLY' and output is not None
+          and bool(output.inputs["Color"].links)
+          and output.inputs["Color"].links[0].from_node.name == "Dirt Colour",
+          "%s" % (output.inputs["Color"].links[0].from_node.name if output is not None
+                  and output.inputs["Color"].links else "unlinked",))
+    check("and the old colour taps are gone, so it lands once",
+          face_group.nodes.get("Dirt Diffuse") is None and face_group.nodes.get("Dirt Shaded") is None)
 
 eye = bpy.data.materials.get("Spork Eye")
 kept = bpy.data.materials.get("Spork Eye (Spork's own)")

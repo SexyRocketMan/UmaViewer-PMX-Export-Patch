@@ -334,6 +334,26 @@ asserts the three settings so a re-ported master cannot quietly bring the artefa
 `show_transparent_back`) are part of its look, and copies inherit them. If the library's graph can produce alpha, those
 settings decide whether the whole character lands in EEVEE's depth-writing pass or its sorted one.
 
+**Dirt: multiply, and on the branch the face group actually outputs (after the user's second round).** Two corrections,
+both from `Tools/spork_dirt_fix.py`:
+
+- the ported groups built their dirt taps as a Mix with the default *MIX* blend, i.e. `lerp(colour, tint, f)` - a fade
+  towards the tint, which washes the surface out (a light tint brightened it: measured +7.39/255 on 1063). The
+  documented maths is `colour * lerp(1, tint, mask * Dirt)`, which is `blend_type` **MULTIPLY** and what the Looper
+  library's own fallback group uses. Switched, and measured: Dirt 1 now darkens the bust by 1.66/255.
+- `Simple Diff + Shaded FACE`'s output is a *plain colour* (`Mix.004.Result`), and that node picks between the
+  tap-mixed colour and an `RGB Curves` light ramp by `Colored Light` - so the face's dirt lived on whichever branch
+  that factor chose, while in the main group the taps sit on the colour path the output uses. The face group's dirt
+  now multiplies the **end** of its colour path (one `Dirt Colour` node, the two taps removed so it lands once).
+  The export's face mask is nearly empty (mean 0.014 of its texels, 3.5% above 0.05), so the real map cannot show
+  whether the wiring works: fed a white mask and Dirt 1, the face moves 6.2% of a close-up (5.8% by more than
+  12/255), which is the wiring test that matters.
+
+**His three light sockets are rows now** (`spork_highlight_color`, `spork_light_intensity`, `spork_colored_light`, in a
+`Light` section). Measured on 1063 with the `Uma Sun` property moved and everything else fixed: Light Intensity -2
+moves 61.7% of a bust, +0.9 moves 65.5%, Colored Light 0 moves 61.8%, a green Highlight Color 2.9% (the highlight pass
+is a small part of the surface). 15 rows, 155 drivers over 23 copies, `verify()` clean.
+
 Both libraries' manifests still expose the same `uma_shader_wet`/`uma_shader_dirt`/`uma_shader_dirt_colour` keys, so a
 scene wearing both shaders keeps one set of weather globals.
 

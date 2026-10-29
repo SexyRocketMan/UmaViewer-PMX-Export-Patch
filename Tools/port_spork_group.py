@@ -24,6 +24,11 @@ The socket names the add-on's apply step and settings rows rely on are unchanged
 `Shadow Softness`, `Emission Strength`, `Dirt Map`, `Dirt`, `Dirt Tint` (plus his new `Base`, `Highlight Color`,
 `Light Intensity`, `Colored Light`). `Dirt Map` as an *image node* on the masters is what `_bind_one_dirt` fills.
 
+Two follow-up tools correct what this one cannot know on its own, and both are idempotent:
+`Tools/spork_dirt_fix.py` moves the FACE group's dirt to the end of its colour path (his face group's output is a
+plain colour chosen by `Colored Light`, so the taps do not always reach it) and `Tools/spork_render_settings.py` puts
+the masters on the Looper library's dithered-opaque render settings.
+
     blender --background --factory-startup --python Tools/port_spork_group.py -- [<library.blend> [<his.blend>]]
 """
 import os
@@ -148,7 +153,9 @@ def inject_dirt(group):
     for socket_name in ("Diffuse", "Shaded"):
         mix = make('ShaderNodeMix', "Dirt " + socket_name, -420.0, y - 160.0 * len(taps))
         mix.data_type = 'RGBA'
-        mix.blend_type = 'MIX'
+        # MULTIPLY, not the default MIX: the documented maths is `colour * lerp(1, tint, mask * Dirt)`, and MIX
+        # would fade towards the tint instead (`Tools/spork_dirt_fix.py` corrects a library built before this line)
+        mix.blend_type = 'MULTIPLY'
         colours = [socket for socket in mix.inputs if socket.type == 'RGBA']
         factor = next(socket for socket in mix.inputs if socket.name == "Factor" and socket.type == 'VALUE')
         tree.links.new(group_input.outputs[socket_name], colours[0])
