@@ -303,7 +303,16 @@ expectations from the current names).
 every decal kept mmd_tools' lit material: wrong brightness beside a character lighting from the `Uma Sun`, and none of
 the spin/extension handling. Measured: **45 decal copies under `umashader-0.2.6`, 0 under `spork-1.0`**; both are 45
 now (`Tools/add_spork_decal.py` appends the Looper library's `Uma Decal`, which is shader-independent by construction,
-and the manifest gains `materials.decal`, `textures.decal` and the same `shipped_textures.blush`).
+and the manifest gains `materials.decal`, `textures.decal`, the same `shipped_textures.blush` and the same
+`uma_shader_decal_opacity`/`_tint` rows - the master itself rests at opacity 1.0 and a white tint, because the Looper
+library leaves those at 0.5/black knowing its manifest drives them, and a manifest without the rows would have painted
+every decal at half strength).
+
+One measurement to keep: with the decal copies' opacity set to 0 and back in the render harness, **the image does not
+change at all** - for the Looper library too. So this harness cannot see decals (the quads are coplanar with the face
+and the alpha-blended emission does not survive `--background`), and "the decals look right" has to be judged in the
+GUI. What the checks prove is what can be proven headlessly: 45 copies, each bound to its own map, the blush on the
+multiply decal, CLIP on the spinning eyes, 125 drivers over 23 copies.
 
 Both libraries' manifests still expose the same `uma_shader_wet`/`uma_shader_dirt`/`uma_shader_dirt_colour` keys, so a
 scene wearing both shaders keeps one set of weather globals.

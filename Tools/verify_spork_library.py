@@ -70,7 +70,7 @@ check("has the five eye rows", len([row for row in rows if row.get("material") =
       "%d" % len([row for row in rows if row.get("material") == "eye"]))
 check("has the weather rows", {"uma_shader_wet", "uma_shader_dirt", "uma_shader_dirt_colour"}
       <= {row["key"] for row in rows}, "%s" % [row["key"] for row in rows])
-check("10 rows in total", len(rows) == 10, "%d" % len(rows))
+check("12 rows in total", len(rows) == 12, "%d" % len(rows))
 eye_rules = [rule["node"] for rule in manifest["textures"]["eye"]]
 check("textures.eye addresses our node names",
       eye_rules == ["Iris Map", "Highlight Map 0", "Highlight Map 1", "Highlight Map 2"], "%s" % (eye_rules,))
@@ -97,6 +97,11 @@ check("has a decal texture recipe naming its own node",
 check("ships the blush for multiply decals",
       (manifest.get("shipped_textures") or {}).get("blush") == "shipped_textures/blush.png",
       repr((manifest.get("shipped_textures") or {}).get("blush")))
+decal_rows = [row for row in rows if row.get("material") == "decal"]
+check("drives the decal's opacity and tint, at the Looper manifest's keys and defaults",
+      sorted(row["key"] for row in decal_rows) == ["uma_shader_decal_opacity", "uma_shader_decal_tint"]
+      and [row["default"] for row in decal_rows if row["key"] == "uma_shader_decal_opacity"] == [1.0],
+      "%s" % ([(row["key"], row["default"]) for row in decal_rows],))
 
 say()
 say("2. the library file")

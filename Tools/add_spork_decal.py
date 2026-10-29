@@ -42,26 +42,32 @@ def main():
         shutil.copy2(LIBRARY, backup)
 
     bpy.ops.wm.open_mainfile(filepath=LIBRARY)
-    if bpy.data.materials.get(DECAL) is not None:
-        print("%s: already carries %r, nothing to do" % (os.path.basename(LIBRARY), DECAL))
-        return
+    material = bpy.data.materials.get(DECAL)
+    created = material is None
+    if created:
+        with bpy.data.libraries.load(SOURCE, link=False) as (data_from, data_to):
+            if DECAL not in data_from.materials:
+                raise SystemExit("%r has no %r material" % (SOURCE, DECAL))
+            data_to.materials = [DECAL]
+        material = bpy.data.materials[DECAL]
+        if material is None:
+            raise SystemExit("the append produced no material")
+        # a library is copied *from*: no tag that says a scene is shaded with it, and no images
+        if "uma_shader_source" in material.keys():
+            del material["uma_shader_source"]
+        for node in material.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and node.image is not None:
+                node.image = None
 
-    with bpy.data.libraries.load(SOURCE, link=False) as (data_from, data_to):
-        if DECAL not in data_from.materials:
-            raise SystemExit("%r has no %r material" % (SOURCE, DECAL))
-        data_to.materials = [DECAL]
-    material = bpy.data.materials[DECAL]
-    if material is None:
-        raise SystemExit("the append produced no material")
-
-    # a library is copied *from*: no tag that says a scene is shaded with it, and no images
-    if "uma_shader_source" in material.keys():
-        del material["uma_shader_source"]
-    unbound = 0
-    for node in material.node_tree.nodes:
-        if node.type == 'TEX_IMAGE' and node.image is not None:
-            node.image = None
-            unbound += 1
+    # The Looper library leaves these two at 0.5 / black and *drives* them from the manifest rows (opacity default
+    # 1.0, tint white). A manifest without those rows - which is what this one had - would paint every decal at half
+    # strength and in the master's tint, so the rest state is asserted here instead of inherited.
+    opacity = material.node_tree.nodes.get("UMA Decal Opacity")
+    if opacity is not None:
+        opacity.outputs["Value"].default_value = 1.0
+    tint = material.node_tree.nodes.get("UMA Decal Tint")
+    if tint is not None:
+        tint.outputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
 
     carrier = bpy.data.objects.get(CARRIER)
     if carrier is None:
@@ -74,9 +80,9 @@ def main():
     bpy.ops.wm.save_mainfile(filepath=LIBRARY)
     if os.path.exists(LIBRARY + "1"):
         os.remove(LIBRARY + "1")
-    print("%s: appended %r (%d node(s), %d image node(s) unbound, slotted=%s), now %d byte(s)"
-          % (os.path.basename(LIBRARY), DECAL, len(material.node_tree.nodes), unbound, slotted,
-             os.path.getsize(LIBRARY)))
+    print("%s: %s %r (%d node(s)), opacity 1.0, tint white, slotted=%s, now %d byte(s)"
+          % (os.path.basename(LIBRARY), "appended" if created else "re-asserted", DECAL,
+             len(material.node_tree.nodes), slotted, os.path.getsize(LIBRARY)))
     print("carrier slots: %s" % [slot.material.name for slot in carrier.material_slots if slot.material])
 
 
