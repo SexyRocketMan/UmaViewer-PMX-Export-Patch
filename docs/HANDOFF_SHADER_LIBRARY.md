@@ -314,6 +314,26 @@ and the alpha-blended emission does not survive `--background`), and "the decals
 GUI. What the checks prove is what can be proven headlessly: 45 copies, each bound to its own map, the blush on the
 multiply decal, CLIP on the spinning eyes, 125 drivers over 23 copies.
 
+**The see-through the port let through, and the settings that cause it.** Shading with `spork-1.0` made a character
+look inside-out - parts behind a surface painted over the front of it, and unplugging either of a body's two coplanar
+material slots made it go away. Not geometry: the Spork masters were copied in 2.34 from his own wrapper material and
+kept its render settings (`blend_method` BLEND, `surface_render_method` BLENDED, `show_transparent_back` True), so
+**every** copy of the shader - body, face, hair, tail, brows - was drawn in EEVEE's *blended* pass, which does not
+write depth; two coplanar body slots then composite in whatever order EEVEE picks and the later one wins. It stayed
+invisible until 2.35.18 because the old group ended in a flat colour, so the alpha was 1 and the ordering could not be
+seen; his ported group mixes a Transparent BSDF into the surface and the ordering became the picture.
+
+Measured against the same materials forced `OPAQUE` (same geometry, shading, lights - a depth-correct reference): the
+blended setting is off on **54.8%** of the silhouette on 1063 and **57.7%** on 1001, 44/255 darker; the Looper
+masters' setting - `HASHED`, `DITHERED`, `show_transparent_back` False, no backface culling - is off on **0 pixels**,
+on both. `Tools/spork_render_settings.py` applies it to `Spork Shader`, `Spork Shader Face` and `Uma Brows`; the eyes,
+the decals and the outline stay blended, exactly as the Looper library ships them, and `verify_spork_library.py` now
+asserts the three settings so a re-ported master cannot quietly bring the artefact back.
+
+**What to check when a shader library changes**: a master's render settings (`blend_method` / `surface_render_method` /
+`show_transparent_back`) are part of its look, and copies inherit them. If the library's graph can produce alpha, those
+settings decide whether the whole character lands in EEVEE's depth-writing pass or its sorted one.
+
 Both libraries' manifests still expose the same `uma_shader_wet`/`uma_shader_dirt`/`uma_shader_dirt_colour` keys, so a
 scene wearing both shaders keeps one set of weather globals.
 

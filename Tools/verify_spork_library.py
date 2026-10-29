@@ -165,6 +165,16 @@ for name, wanted_group, wanted_nodes in (("Spork Shader", "Simple Diff + Shaded"
         check("  and no base map, as the eye binds none", base is None, "Base Map present")
     else:
         check("  and its base-map chain", base is not None, "Base Map missing")
+    if name != "Spork Eye Inner":
+        # The see-through fix (2.35.18): a blended master puts every copy of the shader in EEVEE's blended pass,
+        # which does not write depth, and a character's coplanar body slots then composite over each other in
+        # whatever order EEVEE picks. Measured against the same materials forced OPAQUE, the blended setting is off
+        # on 57.7% of the silhouette (44/255 darker); this setting is off on 0.
+        check("  renders dithered-opaque like the Looper masters",
+              (material.blend_method, material.surface_render_method, material.show_transparent_back)
+              == ('HASHED', 'DITHERED', False),
+              "%s" % ((material.blend_method, material.surface_render_method,
+                       material.show_transparent_back),))
 inner = bpy.data.materials.get("Spork Eye Inner")
 if inner is not None:
     node = next(node for node in inner.node_tree.nodes if node.type == 'GROUP' and node.node_tree is not None)
