@@ -1,22 +1,23 @@
-"""Verify the Spork port: his eye is our highlight graph, and the matcher no longer confuses his two groups.
+"""Verify the Spork library: his ported eye, the ported group(s), and that shading a character reaches all of them.
 
     blender --background --factory-startup --python Tools/verify_spork_library.py -- <out.txt> [<file.pmx>]
 
-There is no Spork character in `.pmx` anywhere on this machine (checked: his project file is a `.blend`, and no
-export names 1063), so the *character* half is exercised on the reference export shaded with `spork-1.0`: the part
-rules, the texture recipe, the copies and the drivers are the code under test, and the images happen to be 1001's.
-The library half is checked on the file itself.
+There is no Spork `.pmx` anywhere on this machine (checked: his project files are `.blend`s), so the *character* half
+is exercised on a reference export shaded with `spork-1.0`: the part rules, the texture recipes, the copies and the
+drivers are the code under test, and the images happen to be 1001's. The library half is checked on the file itself.
 
-What it has to prove:
+What it has to prove, as of 2.35.18 (his current group ported by `Tools/port_spork_group.py`):
 
-1. `spork-1.0` validates with the five new eye rows, and its `textures.eye` names nodes the ported material has;
-2. `SporkShaders.blend` holds `Spork Eye` = the 39-node highlight graph with `NoiseGenerator`/`SmoothThreshold`
-   alongside it, `CrySwitch` 0, no images, no shader tag, and his own eye kept under its own name;
-3. `_hint_matches` is exact: `Simple Diff + Shaded` and its `.001` rename match, `Simple Diff + Shaded FACE` does not
-   - the trap in the handoff, decided by measurement rather than by eye (the FACE variant really does carry both of
-   the sockets the panel drives, so a substring match would have failed quietly);
-4. shading a character with `spork-1.0` gives an `[eye]` copy wearing `Spork Eye`, the five rows resolve on it, and
-   `hook` puts 11 drivers on the eye and none of the Looper rows.
+1. the manifest validates, carries his five eye rows *and* the weather rows, and its textures address node names the
+   ported materials actually have;
+2. `SporkShaders.blend` holds the ported graphs: `Simple Diff + Shaded` = his 51 nodes + our dirt chain (58), and
+   `Simple Diff + Shaded FACE` = his 34 + dirt (41); both offer the weather sockets; `Spork Eye` is still the 39-node
+   highlight graph with `CrySwitch` at 0 and no images; his own eye is still kept;
+3. the masters are the ones the roles name: `Spork Shader` and `Uma Brows` on the general group with the base-map
+   chain, `Spork Shader Face` on the FACE variant *without* one, `Spork Eye Inner` on the general group with `Base`
+   resting at white (black there would mix the inner eye fully transparent);
+4. shading a character with `spork-1.0` gives the three roles their own copies, the five rows resolve on the eye, and
+   `hook` puts 11 drivers on the eye with none missing.
 """
 import sys
 
@@ -45,6 +46,11 @@ def check(label, ok, detail=""):
     return ok
 
 
+def group_of(material):
+    return next((node.node_tree.name for node in material.node_tree.nodes
+                 if node.type == 'GROUP' and node.node_tree is not None), None)
+
+
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.preferences.addon_enable(module="bl_ext.blender_org.mmd_tools")
 bpy.ops.preferences.addon_enable(module=ADDON)
@@ -59,27 +65,60 @@ say("=" * 100)
 say("1. the manifest")
 manifest, problems = ShaderManifest.load("spork-1.0")
 check("validates with no problems", not problems, "; ".join(problems) or "clean")
-check("has the five eye rows", len([row for row in manifest["settings"] if row.get("material") == "eye"]) == 5,
-      "%d" % len([row for row in manifest["settings"] if row.get("material") == "eye"]))
-check("7 rows in total", len(manifest["settings"]) == 7, "%d" % len(manifest["settings"]))
+rows = manifest["settings"]
+check("has the five eye rows", len([row for row in rows if row.get("material") == "eye"]) == 5,
+      "%d" % len([row for row in rows if row.get("material") == "eye"]))
+check("has the weather rows", {"uma_shader_wet", "uma_shader_dirt", "uma_shader_dirt_colour"}
+      <= {row["key"] for row in rows}, "%s" % [row["key"] for row in rows])
+check("10 rows in total", len(rows) == 10, "%d" % len(rows))
 eye_rules = [rule["node"] for rule in manifest["textures"]["eye"]]
 check("textures.eye addresses our node names",
-      eye_rules == ["Image Texture", "Image Texture.001", "Image Texture.002", "Image Texture.003"],
-      "%s" % (eye_rules,))
+      eye_rules == ["Iris Map", "Highlight Map 0", "Highlight Map 1", "Highlight Map 2"], "%s" % (eye_rules,))
 check("group_hints is still just his shader", manifest["group_hints"] == ["Simple Diff + Shaded"],
       "%s" % (manifest["group_hints"],))
 say()
-say("   the brows, which his shader did not have")
-check("declares a 'brows' role", (manifest.get("materials") or {}).get("brows") == "Uma Brows",
-      repr((manifest.get("materials") or {}).get("brows")))
+say("   the roles the port added")
+check("declares a 'face' role on his FACE variant",
+      (manifest.get("materials") or {}).get("face") == "Spork Shader Face",
+      repr((manifest.get("materials") or {}).get("face")))
 order = [rule.get("id") for rule in manifest["parts"]]
+check("the face rule maps to that role", any(rule["id"] == "face" and rule.get("material") == "face"
+                                             for rule in manifest["parts"]), "%s" % (order,))
 check("a 'brows' rule for mayu, before 'face'",
       "brows" in order and order.index("brows") < order.index("face"), "%s" % (order,))
-check("has a 'brows' texture recipe", "brows" in (manifest.get("textures") or {}))
+check("has a texture recipe for the face", "face" in (manifest.get("textures") or {}))
+say()
+say("   the decal role, which the Spork manifest went without until 2.35.18")
+check("declares 'decal'", (manifest.get("materials") or {}).get("decal") == "Uma Decal",
+      repr((manifest.get("materials") or {}).get("decal")))
+check("has a decal texture recipe naming its own node",
+      [rule.get("node") for rule in (manifest.get("textures") or {}).get("decal") or []] == ["Decal Map"],
+      "%s" % ([rule.get("node") for rule in (manifest.get("textures") or {}).get("decal") or []],))
+check("ships the blush for multiply decals",
+      (manifest.get("shipped_textures") or {}).get("blush") == "shipped_textures/blush.png",
+      repr((manifest.get("shipped_textures") or {}).get("blush")))
 
 say()
 say("2. the library file")
 bpy.ops.wm.open_mainfile(filepath=SHADERS + r"\SporkShaders.blend")
+main_group = bpy.data.node_groups.get("Simple Diff + Shaded")
+face_group = bpy.data.node_groups.get("Simple Diff + Shaded FACE")
+if check("the general group is there", main_group is not None):
+    check("it is his 51 nodes plus the dirt chain (58)", len(main_group.nodes) == 58, "%d" % len(main_group.nodes))
+    names = {item.name for item in main_group.interface.items_tree
+             if getattr(item, "in_out", None) == 'INPUT'}
+    check("it offers his eight sockets plus the weather three",
+          names == {"Diffuse", "Shaded", "Base", "Shadow Softness", "Emission Strength", "Highlight Color",
+                    "Light Intensity", "Colored Light", "Dirt Map", "Dirt", "Dirt Tint"}, "%s" % (sorted(names),))
+    dirt = [node for node in main_group.nodes if node.name.startswith("Dirt ")]
+    check("the dirt chain is in it", len(dirt) == 7, "%s" % [node.name for node in dirt])
+if check("the FACE variant is there", face_group is not None):
+    check("it is his 34 nodes plus the dirt chain (41)", len(face_group.nodes) == 41, "%d" % len(face_group.nodes))
+    names = {item.name for item in face_group.interface.items_tree
+             if getattr(item, "in_out", None) == 'INPUT'}
+    check("it has no Base or Highlight Color, as his does",
+          "Base" not in names and "Highlight Color" not in names, "%s" % (sorted(names),))
+
 eye = bpy.data.materials.get("Spork Eye")
 kept = bpy.data.materials.get("Spork Eye (Spork's own)")
 if check("Spork Eye is there", eye is not None and eye.node_tree is not None):
@@ -89,19 +128,51 @@ if check("Spork Eye is there", eye is not None and eye.node_tree is not None):
                      if node.type == 'GROUP' and node.node_tree is not None})
     check("the two highlight groups came with it",
           "NoiseGenerator" in groups and "SmoothThreshold" in groups, "%s" % (groups,))
-    cry = nodes.get("Value")
+    cry = nodes.get("Cry Switch")
     check("CrySwitch rests at 0", cry is not None and float(cry.outputs[0].default_value) == 0.0,
           "%r" % (float(cry.outputs[0].default_value) if cry else None,))
     check("no image is bound", not [node for node in nodes if node.type == 'TEX_IMAGE' and node.image])
     check("no shader tag", eye.get(ShaderManifest.SOURCE_PROPERTY) is None)
     check("the four image nodes the recipe names exist",
-          all(nodes.get(name) is not None for name in ("Image Texture", "Image Texture.001",
-                                                       "Image Texture.002", "Image Texture.003")))
+          all(nodes.get(name) is not None for name in ("Iris Map", "Highlight Map 0", "Highlight Map 1",
+                                                       "Highlight Map 2")))
 check("his own eye was kept, not thrown away", kept is not None,
       "%d node(s)" % len(kept.node_tree.nodes) if kept else "missing")
+
+say()
+say("   the masters, which is where the port lands")
+for name, wanted_group, wanted_nodes in (("Spork Shader", "Simple Diff + Shaded", 22),
+                                         ("Uma Brows", "Simple Diff + Shaded", 24),
+                                         ("Spork Shader Face", "Simple Diff + Shaded FACE", 19),
+                                         ("Spork Eye Inner", "Simple Diff + Shaded", 4)):
+    material = bpy.data.materials.get(name)
+    if not check("%s is in the library" % name, material is not None and material.node_tree is not None):
+        continue
+    check("  it wears %s" % wanted_group, group_of(material) == wanted_group, repr(group_of(material)))
+    check("  %d node(s)" % wanted_nodes, len(material.node_tree.nodes) == wanted_nodes,
+          "%d" % len(material.node_tree.nodes))
+    if name != "Spork Eye Inner":        # the inner eye binds no texture map but its two, so it has no Dirt slot
+        check("  it carries the Dirt Map slot", material.node_tree.nodes.get("Dirt Map") is not None)
+    base = material.node_tree.nodes.get("Base Map")
+    if wanted_group == "Simple Diff + Shaded FACE":
+        check("  and no base-map chain", base is None, "Base Map present")
+    elif name == "Spork Eye Inner":
+        check("  and no base map, as the eye binds none", base is None, "Base Map present")
+    else:
+        check("  and its base-map chain", base is not None, "Base Map missing")
+inner = bpy.data.materials.get("Spork Eye Inner")
+if inner is not None:
+    node = next(node for node in inner.node_tree.nodes if node.type == 'GROUP' and node.node_tree is not None)
+    base = node.inputs.get("Base")
+    check("the inner eye's Base rests at white",
+          base is not None and tuple(round(value, 3) for value in base.default_value) == (1.0, 1.0, 1.0, 1.0),
+          "%r" % (tuple(round(value, 3) for value in base.default_value) if base else None,))
+
 slots = [slot.material.name if slot.material else None
          for obj in bpy.data.objects if obj.type == 'MESH' for slot in obj.material_slots]
-check("the carrier sphere points at it", "Spork Eye" in slots, "%s" % (slots,))
+for name in ("Spork Shader", "Spork Shader Face", "Uma Brows", "Spork Eye", "Spork Eye Inner",
+             "Uma Decal", "Uma Outline Material"):
+    check("the carrier sphere has a %r slot" % name, name in slots, "%s" % (slots,))
 
 brows = bpy.data.materials.get("Uma Brows")
 if check("Uma Brows is in his library", brows is not None and brows.node_tree is not None):
@@ -114,12 +185,6 @@ if check("Uma Brows is in his library", brows is not None and brows.node_tree is
                            % scale.inputs["Scale"].default_value],
                           [link.from_node.name for link in output.inputs["Displacement"].links]))
     check("displacement_method is BOTH", brows.displacement_method == 'BOTH', brows.displacement_method)
-    check("it is a copy of his own shader, not of Looper's",
-          any(node.type == 'GROUP' and node.node_tree is not None
-              and node.node_tree.name.startswith("Simple Diff + Shaded") for node in brows.node_tree.nodes))
-    check("and it has a slot on the carrier", any(slot.material is brows for slot in
-                                                  next(obj for obj in bpy.data.objects if obj.type == 'MESH'
-                                                       and obj.name.startswith("Icosphere")).material_slots))
 
 say()
 say("3. the hint matcher (the trap)")
@@ -141,11 +206,26 @@ for obj in context.view_layer.objects:
 mesh.select_set(True)
 context.view_layer.objects.active = mesh
 say("     uma.apply_shader: %s" % (bpy.ops.uma.apply_shader(),))
+
+roles = {}
+for slot in mesh.material_slots:
+    material = slot.material
+    if material is not None and material.node_tree is not None and material.get(ShaderManifest.SOURCE_PROPERTY):
+        roles.setdefault(material.get(ShaderManifest.ROLE_PROPERTY), []).append(material)
+say("     copies by role: %s" % {role: len(copies) for role, copies in sorted(roles.items())})
+check("the body/hair/tail copies are 'default'", len(roles.get("default") or []) > 0)
+if roles.get("face"):
+    check("the face copy wears 19 nodes of the FACE variant",
+          all(len(copy.node_tree.nodes) == 19 for copy in roles["face"]),
+          "%s" % [len(copy.node_tree.nodes) for copy in roles["face"]])
+    check("the face copy has no Base Map", all(copy.node_tree.nodes.get("Base Map") is None
+                                               for copy in roles["face"]))
+
 copy = next((slot.material for slot in mesh.material_slots
              if slot.material and slot.material.name.endswith("[eye]")), None)
 if check("an [eye] copy exists", copy is not None, copy.name if copy else "none"):
-    # the copy is renamed `<model material> [part]` by the apply step, so "it wears Spork Eye" is a question about
-    # the *master* it was made from, not about the copy's own name
+    # the copy is renamed `<model material> [part]` by the apply step, so "it wears the ported graph" is a question
+    # about the material it was copied from, not about the copy's own name
     master = Control.master_material(manifest, "eye", context)
     check("the master it was copied from is Spork Eye", master is not None and master.name.startswith("Spork Eye"),
           master.name if master else "none")
@@ -154,10 +234,10 @@ if check("an [eye] copy exists", copy is not None, copy.name if copy else "none"
     images = {node.name: (node.image.name if node.image else None)
               for node in copy.node_tree.nodes if node.type == 'TEX_IMAGE'}
     say("     bound images: %s" % images)
-    check("the main eye texture is on the main node",
-          (images.get("Image Texture") or "").endswith("eye0.png"), images.get("Image Texture"))
-    check("the first highlight is on .001", (images.get("Image Texture.001") or "").endswith("eyehi00.png"),
-          images.get("Image Texture.001"))
+    check("the main eye texture is on `Iris Map`",
+          (images.get("Iris Map") or "").endswith("eye0.png"), images.get("Iris Map"))
+    check("the first highlight is on `Highlight Map 0`",
+          (images.get("Highlight Map 0") or "").endswith("eyehi00.png"), images.get("Highlight Map 0"))
     Control.use_table(context, manifest=manifest)
     resolved = {key: Control.setting_targets(copy, Control.SETTING_BY_KEY[key]) for key in
                 ("spork_eye_cry", "spork_eye_tremble_rate", "spork_eye_tremble_amount",
@@ -176,6 +256,26 @@ if check("an [eye] copy exists", copy is not None, copy.name if copy else "none"
           "%d wrong of %d checked" % (report["verified"]["wrong_count"], report["verified"]["checked"]))
 
 say()
+say("   the weather, which is the part the port had to keep")
+body = (roles.get("default") or [None])[0]
+if body is not None:
+    images = {node.name: (node.image.name if node.image else None)
+              for node in body.node_tree.nodes if node.type == 'TEX_IMAGE'}
+    say("     body copy images: %s" % images)
+    # whether they are *bound* depends on the export (only a texture-variant export writes the rain set); what the
+    # library owes is the pair of slots beside every dry map, which the pass fills
+    check("the rain slots are there", all(name in images for name in
+                                          ("Wet Diffuse Map", "Wet Shaded Map", "Wet Base Map")),
+          "%s" % (sorted(images),))
+    check("and the Dirt Map slot is there", "Dirt Map" in images, "%s" % (sorted(images),))
+    check("its group offers `Dirt` and `Dirt Map`",
+          all(socket in [item.name for item in body.node_tree.nodes["Group"].inputs]
+              for socket in ("Dirt", "Dirt Map")), "%s" % ([socket.name for socket in
+                                                             body.node_tree.nodes["Group"].inputs],))
+    knob = body.node_tree.nodes.get("Dry/Wet")
+    check("the Dry/Wet knob is there", knob is not None and knob.type == 'VALUE')
+
+say()
 say("   the brow slot under his shader")
 brow_copy = next((slot.material for slot in mesh.material_slots
                   if slot.material and slot.material.name.endswith("[brows]")), None)
@@ -188,8 +288,8 @@ if check("the brow slot is [brows]", brow_copy is not None, brow_copy.name if br
     images = {node.name: (node.image.name if node.image else None)
               for node in brow_copy.node_tree.nodes if node.type == 'TEX_IMAGE'}
     say("     bound images: %s" % images)
-    check("it binds the face atlas", (images.get("mmd_base_tex") or "").endswith("face_diff.png"),
-          images.get("mmd_base_tex"))
+    check("it binds the face atlas", (images.get("Diffuse Map") or "").endswith("face_diff.png"),
+          images.get("Diffuse Map"))
 
 say()
 say("RESULT: %s" % ("all checks passed" if not failures else "FAILED - " + "; ".join(failures)))

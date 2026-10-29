@@ -192,10 +192,13 @@ shape as the 0.2.6 outline bug). `_hint_matches` is now exact: a name, or that n
 case the substring test existed for, since appending a second library renames a node group the way it renames a
 material). The hint list stays `["Simple Diff + Shaded"]`; the FACE variant is deliberately not listed.
 
-**Not done, and now a decision of its own:** his *new* `Simple Diff + Shaded` is **51 nodes with 8 sockets** -
-`Base`, `Highlight Color`, `Light Intensity`, `Colored Light` are the four the library's 26-node/4-socket copy does
-not have. Porting it means rebuilding the library from his file and re-measuring which new sockets are worth rows
-(the same test that kept `Diffuse`/`Shaded` out: is the socket fed by a *link* in his materials?).
+**DONE in 2.35.18** (the user spotted it: *"his shaded + diffuse group seems to be much more complex than what we
+ship"*): his **51-node / 8-socket** `Simple Diff + Shaded` is ported - `Base`, `Highlight Color`, `Light Intensity`,
+`Colored Light`, `Shadow Output`, transparency inside the group off the base mask's blue channel - together with
+`Simple Diff + Shaded FACE` (34 nodes) as a `face` role of its own. `Tools/port_spork_group.py` does it and is
+re-runnable; section 7 below records what it measured. The four new sockets are **not** rows, by the same test the old
+ones failed: `Base`, `Highlight Color` and the two light sockets are either fed by links in his materials or left at
+his own defaults, so a slider on them would fight the link.
 
 **Verified** (`Tools/port_spork_eye.py`, `Tools/verify_spork_library.py`): the library checks above, the matcher
 accepts `Simple Diff + Shaded`/`.001` and rejects `Simple Diff + Shaded FACE`, and a character shaded with
@@ -268,6 +271,42 @@ the face's lid, but nothing yet measures the shading that comes out the other en
 Convert `Spin` (Vector Rotate angle) and `Tear_Scroll` (Mapping location) to `Scene Time` chains so the library
 animates itself, and stop driving the 20 appearance settings every frame (write them when the panel changes; keep
 drivers only while a knob is being animated). Self-containment, not speed.
+
+### 7. DONE (2.35.18) — his current shader, ported; and the decal role Spork never had
+
+Two gaps of the same kind, both found by the user: the Spork side of the add-on was a revision behind the Looper side.
+
+**The graph.** `SporkShaders.blend` carried `Simple Diff + Shaded` = his **26 nodes / 4 sockets** (+ our 6 dirt nodes).
+His file today (`SporksShader.blend`, which matches `test.blend` group for group) is **51 nodes / 8 sockets**: `Base`,
+`Highlight Color`, `Light Intensity`, `Colored Light`, a `Shadow Output`, and transparency handled *inside* the group
+off the base mask's blue channel. `Tools/port_spork_group.py` appends his group and its `FACE` sibling (34 nodes),
+injects our weather maths into both and rewires the masters:
+
+- dirt sits between each colour socket and *every* consumer (`Dirt <tap>` mixes on `Diffuse` and `Shaded`) - his group
+  feeds the emission and both shading chains from those sockets, so one tap would have left the shaded side clean;
+- the wrapper-side `Separate Color` -> `Mix Shader` transparency pair is gone, because his group reads the base mask
+  itself; `Spork Eye Inner` sets `Base` to white, since black there mixes the inner eye fully transparent;
+- masters now: `Spork Shader`/`Uma Brows` (22/24 nodes) on the general group, `Spork Shader Face` (19) on the FACE
+  variant for a new `face` role, `Spork Eye Inner` (4) on the general one with `Base` white.
+
+**Measured, not eyeballed.** His group and the ported one, driven by identical values with `Dirt` 0, render to
+**zero differing pixels** (the dirt chain is a Mix at factor 0 there, so the port is provably his maths). On the 1063
+export (`C:\tmp\matrix\current\1063_00`), a bust view differs on **83% of pixels** from the pre-port library - mean
+0.495/0.413/0.431 against 0.566/0.518/0.521, i.e. his real light-response model is darker than our flat one - and the
+face region comes out at (0.682, 0.405, 0.359) on the FACE variant, against (0.688, 0.410, 0.352) for the old library
+and (0.771, 0.474, 0.439) for the general group, so his face variant preserves the look our faces had. Weather still
+works: Rain 1 moves 59% of the bust, Dirt 1 31%, 15 dirt maps bound, 57 wet slots filled on 1063 / 45 on 1001.
+`Tools/verify_spork_library.py` passes every check (it was out of date with our own node renames and now derives its
+expectations from the current names).
+
+**The decals.** `spork-1.0` named no `decal` master, so `apply_decal_material` had nothing to paint a decal with and
+every decal kept mmd_tools' lit material: wrong brightness beside a character lighting from the `Uma Sun`, and none of
+the spin/extension handling. Measured: **45 decal copies under `umashader-0.2.6`, 0 under `spork-1.0`**; both are 45
+now (`Tools/add_spork_decal.py` appends the Looper library's `Uma Decal`, which is shader-independent by construction,
+and the manifest gains `materials.decal`, `textures.decal` and the same `shipped_textures.blush`).
+
+Both libraries' manifests still expose the same `uma_shader_wet`/`uma_shader_dirt`/`uma_shader_dirt_colour` keys, so a
+scene wearing both shaders keeps one set of weather globals.
 
 ## Reports from the user, with what has been measured
 
@@ -392,14 +431,12 @@ added and left unused, or not added at all.
 ## Decisions still owed by the user
 
 Everything decided at the start of this session is now **shipped and verified**: brows, the eye knobs, Spork's eye,
-the unlit decals and the face donor. What is left:
+the unlit decals, the face donor, and (2.35.18) his current 51-node shader plus the decal role Spork never had. What is
+left:
 
-- **new, from item 3**: port Spork's *new* 51-node `Simple Diff + Shaded` (8 sockets, 4 of them new) into the library,
-  or leave the 26-node one? Measure first: which of the new sockets are fed by a *link* in his materials (those cannot
-  be panel rows, the same reason `Diffuse`/`Shaded` are not).
 - whether `Spin`/`Tear_Scroll` should become node-driven (item 6, deliberately last).
-- the release: `blender_manifest.toml` still says **2.33.16** while the manifest notes describe 2.34, and five features
-  have landed since. The version bump and the release note are the user's call.
+- the viewer side of Spork: a Spork character shaded in Blender looks different from the *viewer's* Spork look, and
+  nobody has compared the two - the viewer ships its own Unity shaders, and 1063 is the only Spork export there is.
 - the eyes' shading path after the port: `Spork Eye` is now our graph, so a Spork character's eyes animate themselves
   but no longer carry his own eye's `mmd_tex_uv`/AOV setup. Nobody has looked at a shaded Spork character yet - there
   is no Spork `.pmx` on this machine - so the first person who shades one should compare it against his render.
