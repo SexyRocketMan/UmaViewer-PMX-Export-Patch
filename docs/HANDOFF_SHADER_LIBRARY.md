@@ -354,6 +354,24 @@ both from `Tools/spork_dirt_fix.py`:
 moves 61.7% of a bust, +0.9 moves 65.5%, Colored Light 0 moves 61.8%, a green Highlight Color 2.9% (the highlight pass
 is a small part of the surface). 15 rows, 155 drivers over 23 copies, `verify()` clean.
 
+**The face copies had no drivers at all (the user's third report).** `shader_nodes` finds a copy's shader group by
+matching its tree name against the manifest's `group_hints` **exactly** - the 2.34 tightening - and the `face` role
+wears `Simple Diff + Shaded FACE`, which is not `Simple Diff + Shaded`. So on a face copy `shader_nodes` returned
+nothing, every `input` row resolved to no target, and `_should_report` asked the same question and stayed quiet.
+Measured: 155 drivers over 23 copies, **0 of them on any of the 6 face copies**; the eye (11) and the decals (5) were
+wired, which is why everything else looked fine.
+
+- `group_hints` now declares **both** names, each matched exactly (substring matching is still gone; the manifest's
+  declaration decides *which* names count, `_hint_matches` decides *how* one matches).
+- the `Rain` row loses its `"material": "default"`: it addresses the `Dry/Wet` node, which the face copies have, so a
+  role-scoped row left the face dry while the body got wet.
+- `Highlight Color` is deliberately not driven on faces - his FACE group has no such socket - and it is no longer
+  reported missing: `hook` now asks each role's own master (`master_sockets`) what it offers before calling a socket
+  missing, so a role with a smaller group stays quiet and a body copy that really lost a socket is still reported.
+
+Measured after: **176 drivers over 23 copies** (face 6x10, brows 3x14, default 12x14, eye 3x11, decals 45x5),
+`missing: none`, `verify()` 0 wrong of 89, export matrix unchanged.
+
 Both libraries' manifests still expose the same `uma_shader_wet`/`uma_shader_dirt`/`uma_shader_dirt_colour` keys, so a
 scene wearing both shaders keeps one set of weather globals.
 

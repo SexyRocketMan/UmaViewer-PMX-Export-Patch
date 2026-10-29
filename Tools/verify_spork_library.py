@@ -77,7 +77,8 @@ check("15 rows in total", len(rows) == 15, "%d" % len(rows))
 eye_rules = [rule["node"] for rule in manifest["textures"]["eye"]]
 check("textures.eye addresses our node names",
       eye_rules == ["Iris Map", "Highlight Map 0", "Highlight Map 1", "Highlight Map 2"], "%s" % (eye_rules,))
-check("group_hints is still just his shader", manifest["group_hints"] == ["Simple Diff + Shaded"],
+check("group_hints names both of his groups, exactly",
+      manifest["group_hints"] == ["Simple Diff + Shaded", "Simple Diff + Shaded FACE"],
       "%s" % (manifest["group_hints"],))
 say()
 say("   the roles the port added")
@@ -222,11 +223,18 @@ if check("Uma Brows is in his library", brows is not None and brows.node_tree is
     check("displacement_method is BOTH", brows.displacement_method == 'BOTH', brows.displacement_method)
 
 say()
-say("3. the hint matcher (the trap)")
-for name, wanted in (("Simple Diff + Shaded", True), ("Simple Diff + Shaded.001", True),
-                     ("Simple Diff + Shaded FACE", False), ("Umaviewer Outline material", False)):
-    check("_hint_matches(%r) is %s" % (name, wanted),
-          Control._hint_matches(name, ("Simple Diff + Shaded",)) is wanted)
+say("3. the hint matcher (exact names, not substrings)")
+plain = ("Simple Diff + Shaded",)
+declared = tuple(manifest["group_hints"])
+for name, hints, wanted in (("Simple Diff + Shaded", plain, True),
+                            ("Simple Diff + Shaded.001", plain, True),
+                            ("Simple Diff + Shaded FACE", plain, False),
+                            ("Simple Diff + Shaded FACE", declared, True),
+                            ("Simple Diff + Shaded FACE.001", declared, True),
+                            ("Simple Diff + Shaded FACEoff", declared, False),
+                            ("Umaviewer Outline material", declared, False)):
+    check("_hint_matches(%r, %s) is %s" % (name, "declared" if hints == declared else "plain", wanted),
+          Control._hint_matches(name, hints) is wanted)
 
 say()
 say("4. shading a character with spork-1.0")
@@ -255,6 +263,20 @@ if roles.get("face"):
           "%s" % [len(copy.node_tree.nodes) for copy in roles["face"]])
     check("the face copy has no Base Map", all(copy.node_tree.nodes.get("Base Map") is None
                                                for copy in roles["face"]))
+    # the control finds a copy's shader group by name, so a group the manifest does not declare is a copy with no
+    # drivers at all - which is what the face silently was until 2.35.18 (`shader_nodes` matched `Simple Diff +
+    # Shaded` exactly, and the FACE variant is a different name)
+    face = roles["face"][0]
+    check("the control sees the FACE group as a shader group",
+          [node.node_tree.name for node in Control.shader_nodes(face)] == ["Simple Diff + Shaded FACE"],
+          "%s" % ([node.node_tree.name for node in Control.shader_nodes(face)],))
+    driven = {setting["key"] for setting in Control.SETTINGS if Control.setting_targets(face, setting)}
+    say("     the face is driven for: %s" % sorted(driven))
+    for key in ("spork_shadow_softness", "spork_emission_strength", "spork_light_intensity",
+                "spork_colored_light", "uma_shader_wet", "uma_shader_dirt", "uma_shader_dirt_colour"):
+        check("  %s reaches the face" % key, key in driven)
+    check("  and the highlight colour does not, because his FACE group has no such socket",
+          "spork_highlight_color" not in driven)
 
 copy = next((slot.material for slot in mesh.material_slots
              if slot.material and slot.material.name.endswith("[eye]")), None)
