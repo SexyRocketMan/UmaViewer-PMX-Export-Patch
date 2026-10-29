@@ -8,7 +8,7 @@ Two downloads, nothing else needed:
 | `uma_addon-2.35.18.zip` | the Blender add-on, with both shaders | 6.7 MB |
 
 SHA256: `4ADC62393B3A0ED85A62A93CE62C37C6D1A71B2B84DC33AC519A7164C9339CF1` (viewer),
-`E708A338A8A6DFCACA87F11B430504E5E1E73A8558752FB139561884CE8EC4FA` (add-on).
+`7D6DBE8B410AE03719C2679A3EDB9F7340D97055F7CADD4F0B33074026C871F7` (add-on).
 Both were built from their repositories' `HEAD` and install-tested; the hashes are of the files as shipped, so a
 re-download can be checked against them.
 

@@ -113,7 +113,13 @@ bpy.ops.wm.open_mainfile(filepath=SHADERS + r"\SporkShaders.blend")
 main_group = bpy.data.node_groups.get("Simple Diff + Shaded")
 face_group = bpy.data.node_groups.get("Simple Diff + Shaded FACE")
 if check("the general group is there", main_group is not None):
-    check("it is his 51 nodes plus the dirt chain (58)", len(main_group.nodes) == 58, "%d" % len(main_group.nodes))
+    # counting *every* node made this check fail on a cosmetic edit: the user added a second `Group Input` node to
+    # lay the dirt chain out tidily, and a group may hold as many of those (and as many frames and reroutes) as its
+    # author likes. The maths is what has to be his, so the UI nodes are excluded.
+    ui_only = {'FRAME', 'REROUTE', 'GROUP_INPUT'}
+    maths = [node for node in main_group.nodes if node.type not in ui_only]
+    check("it is his maths plus the dirt chain (33 non-UI node(s))", len(maths) == 33,
+          "%d of %d node(s)" % (len(maths), len(main_group.nodes)))
     names = {item.name for item in main_group.interface.items_tree
              if getattr(item, "in_out", None) == 'INPUT'}
     check("it offers his eight sockets plus the weather three",
@@ -127,7 +133,11 @@ if check("the general group is there", main_group is not None):
           all(node is not None and node.blend_type == 'MULTIPLY' for node in taps),
           "%s" % [getattr(node, "blend_type", None) for node in taps])
 if check("the FACE variant is there", face_group is not None):
-    check("it is his 34 nodes plus the dirt chain (40)", len(face_group.nodes) == 40, "%d" % len(face_group.nodes))
+    ui_only = {'FRAME', 'REROUTE', 'GROUP_INPUT'}
+    check("it is his maths plus the dirt chain (23 non-UI node(s))",
+          len([node for node in face_group.nodes if node.type not in ui_only]) == 23,
+          "%d of %d node(s)" % (len([node for node in face_group.nodes if node.type not in ui_only]),
+                                len(face_group.nodes)))
     names = {item.name for item in face_group.interface.items_tree
              if getattr(item, "in_out", None) == 'INPUT'}
     check("it has no Base or Highlight Color, as his does",
