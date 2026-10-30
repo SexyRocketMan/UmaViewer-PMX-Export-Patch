@@ -549,13 +549,49 @@ public class UmaViewerUI : MonoBehaviour
         NormalSoundCtrl.Initialize(pageentrys, NormalSoundList);
     }
 
+    /// <summary>
+    /// The prefab name prefixes the prop panel lists.
+    ///
+    /// The game names each `3d/chara` family its own way, so the single `pfb_chr_prop` substring this panel
+    /// used to filter on reached exactly one family and left three prefab families unreachable in the UI
+    /// even though their bundles are in the manifest: `attach` (held/attached models, which carry their own
+    /// wet and dirt maps), `toonprop` (shader-driven props) and `richprop` (three live-show props).
+    /// `docs/ASSET_FAMILIES.md` has the measured counts, from `-umaListFamilies`.
+    ///
+    /// `sweat` is deliberately absent: all 503 of its prefabs are `..._sweatlocator` locators with no
+    /// geometry, so there is nothing to look at.
+    /// </summary>
+    private static readonly string[] PropPrefixes =
+        { "pfb_chr_prop", "pfb_attach", "pfb_toon_prop", "pfb_rich_prop" };
+
+    /// <summary>True for a manifest path the prop panel should offer (the family's prefab, not its clothes).</summary>
+    private static bool IsPropAsset(string path)
+    {
+        if (path.Contains("clothes")) return false;
+        string name = Path.GetFileName(path);
+        return PropPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    /// <summary>The `3d/chara` family a manifest path belongs to ("attach", "prop", ...), or "" outside it.</summary>
+    private static string CharaFamily(string path)
+    {
+        const string root = "3d/chara/";
+        if (!path.StartsWith(root, StringComparison.Ordinal)) return "";
+        string rest = path.Substring(root.Length);
+        int slash = rest.IndexOf('/');
+        return slash > 0 ? rest.Substring(0, slash) : rest;
+    }
+
     public void LoadPropPanel()
     {
         var pageentrys = new List<PageManager.Entry>();
-        foreach (var prop in Main.AbList.Where(a => a.Key.Contains("pfb_chr_prop") && !a.Key.Contains("clothes")))
+        foreach (var prop in Main.AbList.Where(a => IsPropAsset(a.Key)).OrderBy(a => a.Key, StringComparer.Ordinal))
         {
             var pageentry = new PageManager.Entry();
             pageentry.Name = Path.GetFileName(prop.Key);
+            // so a search finds a family whose name the prefab does not repeat (richprop's prefabs are
+            // pfb_rich_prop*, not pfb_richprop*)
+            pageentry.Keywords = CharaFamily(prop.Key);
             pageentry.OnClick = (container) =>
             {
                 HighlightChildImage(PropList.content, container);

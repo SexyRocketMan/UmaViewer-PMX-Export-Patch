@@ -131,8 +131,12 @@ it with `blender --command extension install-file -r user_default -e <zip>` agai
    real names are `pfb_attach####_##_####_##` (321 entries, with their own `_wet`/`_dirt` maps — real shaded models),
    `pfb_toon_prop####_##` (153), `pfb_rich_prop####_##` (3, i.e. barely a family), and `pfb_chr####_##[_face###]_sweatlocator`
    (503 — locators, no geometry, so `sweat` stays out). So the fix is a filter that knows the prefix per family, not a
-   widened substring. Next: one `-umaProp pfb_attach1048_00_0001_00` load to prove those families load at all (it
-   downloads if absent — see the VPN caveat), then the panel predicate. The ASSET_FAMILIES table has the numbers.
+   widened substring. **The panel takes those prefixes now** (`UmaViewerUI.LoadPropPanel`: 1194 → 1609 entries, family
+   name in each entry's search keywords), and all three families were loaded headlessly: attach comes out as a rigged,
+   textured model (`attach.pmx`: 830 verts, 2928 indices, 76 bones, wet/dirt twins in `Texture2D/`), richprop is
+   character-sized, toonprop is small. Screenshots at `C:\tmp\families\`. Remaining: the user's look at them in the
+   viewer (the shipped 3.5 exe predates this change), then whether the panel should also carry `mini`'s
+   `pfb_mattach*`.
 2. **Spork's look has never been compared with the viewer's.** The viewer draws its own Unity shaders; nothing has put
    a Spork-shaded uma in Blender beside the same uma in the viewer. The only Spork export that exists is 1063.
 3. **Decals need eyes**, not tests: see the trap above.

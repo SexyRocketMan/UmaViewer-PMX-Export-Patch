@@ -100,10 +100,37 @@ loaded in `AbList`.
    `Config.json`). **Not run yet**; it is the check that says whether these three families load at all, and it is the
    one that would make a widened panel predicate safe to trust. Deliberately not run in the session that wrote the
    dump, because the dump had already answered the question it was for.
-3. **Partly answered — decide per family.** `sweat` is settled by name: 503 `…_sweatlocator` prefabs, no geometry, so
-   it stays out. `attach` is settled the other way: 321 entries with their own `_wet`/`_dirt` texture sets means real
-   shaded models. `toonprop` (153, plus `ast_…_shader_effect_data`) still needs one load to know what it looks like,
-   and `richprop` is three assets — cheap to check, hard to care about.
+3. **DONE — decide per family.** `sweat` is settled by name: 503 `…_sweatlocator` prefabs, no geometry, so it
+   stays out. `attach` is settled the other way: 321 entries with their own `_wet`/`_dirt` texture sets means real
+   shaded models — confirmed by loading one (below). `toonprop` and `richprop` load too; `richprop` is three
+   assets, so it is on the panel because it costs one line, not because anyone will browse it.
+
+## The panel offers them now (and what they render as)
+
+`UmaViewerUI.LoadPropPanel` used the literal `pfb_chr_prop` substring. It now matches **one prefix per family** -
+`pfb_chr_prop`, `pfb_attach`, `pfb_toon_prop`, `pfb_rich_prop` - skips `clothes`, sorts by path so a family's
+entries sit together, and sets each entry's `Keywords` to its family name, because `richprop`'s prefabs are
+`pfb_rich_prop*` and the family name would otherwise be unsearchable. `sweat` is not in the list on purpose.
+
+That takes the panel from **1 194 entries to 1 609** (prop 1 194 + attach 267 + toonprop 145 + richprop 3), and the
+additions are not theoretical: all three families were loaded headlessly through the CLI, which drives the same
+`Builder.LoadProp` the panel calls.
+
+| what was loaded | what came out |
+|---|---|
+| `pfb_attach1048_00_0001_00` | 1 renderer, 1 material slot, shader `Gallop/3D/Chara/Toon/TSER`, all three maps resolved from the game (`tex_attach1048_00_diff` / `_base` / `_ctrl` / `_shad_c`), bounds 1.30 × 0.07 × 0.12 — a long thin held object |
+| `pfb_toon_prop1001_00` | loaded, bounds 0.36 × 0.09 × 0.12 |
+| `pfb_rich_prop1001_00` | loaded, bounds 1.09 × 2.29 × 1.62 — character-sized, not a small prop |
+
+The attach export is the one that proves the whole path, not just the load: `attach.pmx` writes **830 vertices,
+2 928 indices, 5 textures, 1 material, 76 bones**, and its `Texture2D/` folder gains the family's wet and dirt twins
+(`tex_attach1048_00_{diff,base,ctrl,shad_c}` + `_wet`, + `tex_attach1048_00_dirt`). So attach models are rigged,
+skinned, textured assets that the existing exporter already understands - nothing about them needed new code.
+
+Screenshots of the three for eyeballing: `C:\tmp\families\{attach,toonprop,richprop}.png`.
+
+This was judged **by name plus a headless load, not by eye** — image work is not available in the session that did
+it. The look is the user's call, which is what the screenshots and the widened panel are for.
 
 ## Umamusume Explorer: what it is, and what there is to lift
 
