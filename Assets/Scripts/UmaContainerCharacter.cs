@@ -387,18 +387,14 @@ public class UmaContainerCharacter : UmaContainer
             }
         }
 
-        // Do the prefab's bones sit where this character's do? A toon costume's do (measured: 0.27 units on 1048,
-        // out of a 160-unit body), so it belongs in the character's space and retargeting wraps it around the body.
-        // A held toon prop's do not (measured: 13 units on 1001 - its rig is a flattened arm rooted at its own
-        // `Root`), and retargeting that stitches its geometry between the hand and the floor. So measure it rather
-        // than guess: same space means retarget, own space means hang it off the hand.
-        float boneOffset = MedianBoneOffset(skins, targetBones);
-        float bodyHeight = BodyHeightInModelUnits();
-        bool sameSpace = boneOffset <= 0.05f * Mathf.Max(bodyHeight, 1f);
-
+        // Retarget by bone name, always. Anything that tries to decide *first* has to measure the prefab's rig
+        // against this character's, and every such measurement is pose-dependent: this character is animated, so
+        // its bones are wherever the clip put them, while the prefab's are at rest. A rule built on that misreads a
+        // plain attach prefab as "its own space" as soon as the idle moves an arm (measured: it anchored the whole
+        // attach set to a hand, which put it far off to the side). A prefab whose bones genuinely do not match
+        // simply matches nothing, and that is reported below.
         foreach (var skin in skins)
         {
-            if (!sameSpace) break;
             int matchedHere = RetargetBones(skin, targetBones, ref emptyBones);
             if (matchedHere > 0) merged++;
             else Debug.LogWarning($"[attach] '{accessory.name}' shares no bone name with this character "
@@ -422,7 +418,7 @@ public class UmaContainerCharacter : UmaContainer
         // `Root`, not a character rig, so retargeting is refused above) is a held object and hangs off the hand
         // joint the game names for exactly that - Hand_Attach_R/L.
         Transform anchor = null;
-        if (!sameSpace || merged == 0)
+        if (merged == 0)
         {
             bool left = skinBoneNames.Any(n => n.EndsWith("_L", StringComparison.Ordinal));
             bool right = skinBoneNames.Any(n => n.EndsWith("_R", StringComparison.Ordinal));
@@ -478,8 +474,6 @@ public class UmaContainerCharacter : UmaContainer
                   + (anchor != null
                       ? $", hanging off {anchor.name} at ({anchor.position.x:F2},{anchor.position.y:F2},{anchor.position.z:F2})"
                       : ", retargeted onto the character")
-                  + $", rig is {boneOffset:F2} from the character's ({bodyHeight:F1}-unit body), "
-                  + (sameSpace ? "same space -> retarget" : "own space -> anchored")
                   + (anchor != null && placed.HasValue
                       ? $", {Vector3.Distance(placed.Value.center, anchor.position):F2} from that joint"
                       : ""));
@@ -547,60 +541,12 @@ public class UmaContainerCharacter : UmaContainer
     }
 
     /// <summary>
-    /// How far the prefab's own rig sits from this character's rig, as the median distance between a prefab bone
-    /// and the character bone of the same name, in model units.
-    ///
-    /// Near zero means the prefab was authored in this character's space - retargeting it is the identity, so
-    /// it is the right thing to do. Large means it carries its own space (a hand prop's rig is a flattened arm
-    /// around its own origin) and retargeting would stretch its geometry between the two.
-    /// </summary>
-    private float MedianBoneOffset(SkinnedMeshRenderer[] skins, Dictionary<string, Transform> targetBones)
-    {
-        var distances = new List<float>();
-        foreach (var skin in skins)
-        {
-            foreach (var bone in skin.bones)
-            {
-                if (!bone) continue;
-                if (!targetBones.TryGetValue(bone.name, out Transform target) || !target) continue;
-                // the prefab is still at identity, so its bone positions are already model units; this
-                // character's bones hang off the scaled "Position" node, so they have to come back out of it
-                distances.Add(Vector3.Distance(bone.position, transform.InverseTransformPoint(target.position)));
-            }
-        }
-        if (distances.Count == 0) return float.MaxValue;
-        distances.Sort();
-        return distances[distances.Count / 2];
-    }
-
-    /// <summary>This character's height in model units, from its renderers, undoing the "Position" node's scale.</summary>
-    private float BodyHeightInModelUnits()
-    {
-        Bounds? union = null;
-        foreach (var renderer in GetComponentsInChildren<Renderer>(true))
-        {
-            if (!renderer) continue;
-            if (!union.HasValue) { union = renderer.bounds; continue; }
-            var grown = union.Value;
-            grown.Encapsulate(renderer.bounds);
-            union = grown;
-        }
-        if (!union.HasValue) return 0f;
-
-        // world -> container-local, then container-local -> model units through the node that carries the scale
-        float containerScale = Mathf.Max(1e-5f, Mathf.Abs(transform.lossyScale.y));
-        float local = union.Value.size.y / containerScale;
-        Transform scaled = transform.Find("Position");
-        float height = scaled ? Mathf.Abs(scaled.localScale.y) : 1f;
-        return height > 1e-5f ? local / height : local;
-    }
-
-    /// <summary>
     /// Marks the nodes of a prefab that must survive a retarget: those carrying a renderer or a collider, and
     /// every ancestor of one. Everything else in the prefab is the rig, which the retarget either takes over or
     /// leaves behind, and what it leaves behind is dead weight in an export.
     /// </summary>
-    private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)    {
+    private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)
+    {
         bool keepsSomething = node.GetComponent<Renderer>() != null || node.GetComponent<Collider>() != null;
         for (int i = 0; i < node.childCount; i++) keepsSomething |= MarkKeptNodes(node.GetChild(i), keeps);
         if (keepsSomething) keeps.Add(node);

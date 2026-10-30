@@ -1152,8 +1152,7 @@ public static class UmaHeadlessExport
         }
 
         var candidates = UmaViewerMain.Instance.AbChara
-            .Where(e => e.Name.StartsWith("3d/chara/attach/", StringComparison.Ordinal)
-                        || e.Name.StartsWith("3d/chara/toonprop/", StringComparison.Ordinal))
+            .Where(e => e.Name.StartsWith("3d/chara/attach/", StringComparison.Ordinal))
             .ToList();
 
         foreach (string pattern in patterns)

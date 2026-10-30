@@ -745,23 +745,22 @@ public class UmaViewerBuilder : MonoBehaviour
     }
 
     /// <summary>
-    /// The prefabs the loaded character can wear or hold.
+    /// The attach prefabs the loaded character can wear: `3d/chara/attach/attach{id}_00/`, ten characters, keyed by
+    /// character id.
     ///
-    /// Two families, because they attach in two different ways and only one of them is a rig:
-    /// `3d/chara/attach/attach{id}_00/` (ten characters, 1048 has 28) are accessory meshes skinned to a copy of the
-    /// character rig, so they are retargeted onto the character's bones and follow the animation.
-    /// `3d/chara/toonprop/toon_prop{id}_00/` (one or two per character) are held objects whose rig is a flattened
-    /// copy of an arm rooted at their own `Root`, so they hang off `Hand_Attach_R` rigidly instead. Both lists are
-    /// keyed by character id. `-umaListFamilies attach` / `toonprop` prints them.
+    /// **Toon props are deliberately not here** (they were for one revision). They look like they pair with a
+    /// character because the numbers line up - `toon_prop1001_00` beside `bdy1001_00` - and the user's own look
+    /// says the ids are a coincidence: what `toon_prop1001_00` actually is, is a model of a hand from the fingers to
+    /// the elbow, and it aligns with nothing. They stay a browsable prop (`3d/chara/toonprop/` in the prop panel)
+    /// until someone works out what holds them.
     /// </summary>
     public List<UmaDatabaseEntry> AttachEntriesFor(UmaContainerCharacter character)
     {
         var entries = new List<UmaDatabaseEntry>();
         if (character == null || character.CharaEntry == null) return entries;
-        int id = character.CharaEntry.Id;
+        string prefix = $"3d/chara/attach/attach{character.CharaEntry.Id}_";
         return UmaViewerMain.Instance.AbChara
-            .Where(e => (e.Name.StartsWith($"3d/chara/attach/attach{id}_", StringComparison.Ordinal)
-                         || e.Name.StartsWith($"3d/chara/toonprop/toon_prop{id}_", StringComparison.Ordinal))
+            .Where(e => e.Name.StartsWith(prefix, StringComparison.Ordinal)
                         && Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
             .OrderBy(e => e.Name, StringComparer.Ordinal)
             .ToList();

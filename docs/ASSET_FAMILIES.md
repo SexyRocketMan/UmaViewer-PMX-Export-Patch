@@ -169,48 +169,53 @@ Three traps this cost, all worth keeping:
 * **Retargeting is not pruning.** Prefab nodes nothing points at any more (the bust chains, the IK pole/target
   nodes) are dead weight that the export would report as extra bones, which is why the capture above exists.
 
-## `toonprop` is two things in one family
+## `toonprop`: not character props, whatever the numbers suggest
 
-Loading two of them settled why the family looked inconsistent: they are not one kind of asset, and one placement
-rule cannot serve both.
+They look like they pair with a character, because the ids line up (`toon_prop1001_00` beside `bdy1001_00`) and
+because both prefabs examined carry bone names a character also has. The user's own look says that is a
+**coincidence**, and it is the ruling this section records: the ids are the same number because the game numbers
+things per character, not because a toon prop belongs to that character. None of them aligned when placed.
 
-| prefab | what its weights say | what it is |
+| prefab | what its weights say | what it actually is |
 |---|---|---|
-| `pfb_toon_prop1048_00` | `Waist` 384.9, `Chest` 338.1, `Hip` 276.3, `Thigh_R/L` ~150, knees, elbows, 2 126 verts | a **full-body toon costume** |
-| `pfb_toon_prop1001_00` | `Root` 102.3, `Wrist_R` 52.7, `ArmRoll_R` 36.9, every right-hand finger, 489 verts | a **hand-held object** |
+| `pfb_toon_prop1001_00` | `Root` 102.3, `Wrist_R` 52.7, `ArmRoll_R` 36.9, every right-hand finger, 489 verts | **a model of a hand**, fingers to elbow. Nobody knows what it is for |
+| `pfb_toon_prop1048_00` | `Waist` 384.9, `Chest` 338.1, `Hip` 276.3, `Thigh_R/L` ~150, knees, elbows, 2 126 verts | a body-shaped **prop that reuses the uma armature** - its bones *do* line up with a character's |
 
-The signature that separates them is measurable before anything is retargeted: **how far the prefab's bones sit from
-the character's bones of the same name**, in model units.
+So `toonprop` is a family of prop meshes authored on uma-shaped rigs, not a per-character attachment. It is not in
+the attachment list (it was for one revision, `1e171ff`..`HEAD~`), it stays browsable as a prop, and what holds one
+is an open question: the real hand-held props are mostly *not* toon props, so the place to look is the `prop`
+family, not this one.
 
-| prefab | rig offset from the character | body height | verdict |
+Measurements kept because they were paid for, and because they show how the wrong reading happened:
+
+| case | placement | material box (model units) | reading |
 |---|---|---|---|
-| `pfb_toon_prop1048_00` | **0.03** | 6.3 | same space - it was authored on the character, so retarget it |
-| `pfb_toon_prop1001_00` | **1.26** | 6.3 | its own space - its rig is a *flattened* arm around its own `Root`, so hang it off the hand |
-
-`UmaContainerCharacter.AttachAccessory` measures that and does the matching thing (`<= 5% of body height` means
-retarget, otherwise rigid anchor to `Hand_Attach_R`/`L`, picking the side from the bones the skin names). Both
-outcomes were measured through `pmx_inspect.py bounds` (per-material world box), against the alternative:
-
-| case | placement | material box (model units) | verdict |
-|---|---|---|---|
-| 1048 costume, retargeted | wraps the body | centre (−0.07, 9.79, 0.56), size 12.34 × 19.49 × 3.13, body is 12.75 × 16.82 × 3.04 | **right** |
-| 1048 costume, rigid at the hand | hangs off to the side, above the head | centre (−11.24, **19.21**, 1.48), y 10.97..27.46 | wrong |
-| 1001 hand object, rigid at `Hand_Attach_R` | compact, next to the hand | centre (−7.01, 10.58, 0.75), size 3.41 × 3.08 × 1.35, hand bone at (−5.49, 11.90, 0.87) | **right** |
-| 1001 hand object, retargeted | stretched from the hand to the floor | size 6.48 × **12.96**, y −0.36..12.61 | wrong - Root's weights stay at the prefab's origin while the hand's weights follow the hand |
+| 1048 prop, retargeted | wraps the body | centre (−0.07, 9.79, 0.56), size 12.34 × 19.49 × 3.13, body is 12.75 × 16.82 × 3.04 | it lines up because it *is* body-shaped, which is why it read as a costume |
+| 1048 prop, rigid at the hand | off to the side, above the head | centre (−11.24, **19.21**, 1.48), y 10.97..27.46 | wrong |
+| 1001 prop, rigid at `Hand_Attach_R` | compact, beside the hand | centre (−7.01, 10.58, 0.75), size 3.41 × 3.08 × 1.35, hand at (−5.49, 11.90, 0.87) | the hand model sitting next to a hand, which read as "correct" |
+| 1001 prop, retargeted | stretched from the hand to the floor | size 6.48 × **12.96**, y −0.36..12.61 | wrong - Root's weights stay at the prefab's origin while the hand's weights follow the hand |
 
 Rendered, against the harness's own noise floor (two identical bare runs differ by **746 px** at >12/255):
 
 | change | pixels changed | reading |
 |---|---|---|
-| 1048 + attach only | 1 101 | 1.5x noise - and the user confirmed the attach set repeats geometry the body already draws |
-| 1048 + toon costume | **5 092** | 6.8x noise, clearly visible |
-| 1001 + toon hand prop, full-body view | 571 | **below** the noise floor; the prop is ~3.4 model units on a 6.3-unit body |
-| 1001 + toon hand prop, `-ShotView upper` | 2 314 vs a 1 458 floor | 1.6x, and the changed region reaches left of the noise box (x 250..912 against 366..912) - the hand end, which is where the anchor puts it |
+| 1048 + attach only | 1 101 | 1.5x noise - and the attach set repeats geometry the body already draws |
+| 1048 + its toon prop | **5 092** | 6.8x noise, clearly visible (it is body-sized) |
+| 1001 + its toon prop, full-body view | 571 | **below** the noise floor; the prop is ~3.4 model units on a 6.3-unit body |
+| 1001 + its toon prop, `-ShotView upper` | 2 314 vs a 1 458 floor | 1.6x, reaching left of the noise box - the hand end |
 
-Both toonprops are offered in the attachment panel alongside the attach sets
-(`UmaViewerBuilder.AttachEntriesFor` covers `attach{id}_*` and `toon_prop{id}_*`), and `-umaAttach <pattern>` takes
-either. A character with several toonprops can toggle more than one on; nothing prevents overlap, which is worth
-knowing before reporting "two props in the hand" as a bug.
+### The regression this caused, and the rule it leaves behind
+
+For one revision (`1e171ff`) `AttachAccessory` decided *how* to place a prefab by measuring the distance between the
+prefab's bones and the character's bones of the same name, and anchored anything that scored "own space" to a hand.
+It worked in every headless run and broke in the viewer: **the viewer's character is always animated**, so its bones
+sit wherever the idle put them while the prefab's are at rest, and the measurement flips as soon as the clip moves an
+arm. The attach set - a plain rig copy - scored "own space" and was anchored to a hand, which put it far off to the
+side. The user found it in one look.
+
+The rule that replaces it: **classify nothing from live bone positions.** `AttachAccessory` retargets every skin it
+can by name, and only falls back to a hand anchor when a prefab shares *no* bone name with the character at all.
+Anything that needs to compare a prefab to a character has to do it in rest pose, or not at all.
 
 ## Umamusume Explorer: what it is, and what there is to lift
 
