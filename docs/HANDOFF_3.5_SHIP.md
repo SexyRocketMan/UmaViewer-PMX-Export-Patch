@@ -152,7 +152,14 @@ it with `blender --command extension install-file -r user_default -e <zip>` agai
    One regression is worth remembering from that revision: placing a prefab by measuring its rest-pose bones
    against the character's **live** bones cannot work, because the viewer's character is always animated - it read a
    plain attach set as "its own space" and anchored it to a hand, putting it far off to the side. `AttachAccessory`
-   now retargets anything that shares a bone name and only falls back to a hand anchor when nothing matches.
+   now retargets anything that shares a bone name and only falls back to a hand anchor when nothing matches; the fix
+   is verified: with and without a motion playing, `pfb_attach1048_00_0001_00` exports at the same place (centre
+   (−0.00, 11.60, 0.57), 830 verts), and character 1081's whole 28-prefab set lands as one band at y 11.14.
+   **Where the held props are not**: `-umaScanProps` (which now scans character props too) over sixty
+   `pfb_chr_prop*` prefabs found **zero hand bones** - every one is a single skinned renderer on its own little rig
+   (`Page0_0`, `Saucer_C_00`, `Bamboo_Root`, `Chain0_5`…), 0.17 to 15.08 units across. A held prop is *placed* at a
+   hand, not skinned to one, so the answer is in the game's animator/locator data (`3d/animator/*`), not in the
+   prop bundles.
 2. **Spork's look has never been compared with the viewer's.** The viewer draws its own Unity shaders; nothing has put
    a Spork-shaded uma in Blender beside the same uma in the viewer. The only Spork export that exists is 1063.
 3. **Decals need eyes**, not tests: see the trap above.

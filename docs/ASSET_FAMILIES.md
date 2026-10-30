@@ -182,9 +182,30 @@ things per character, not because a toon prop belongs to that character. None of
 | `pfb_toon_prop1048_00` | `Waist` 384.9, `Chest` 338.1, `Hip` 276.3, `Thigh_R/L` ~150, knees, elbows, 2 126 verts | a body-shaped **prop that reuses the uma armature** - its bones *do* line up with a character's |
 
 So `toonprop` is a family of prop meshes authored on uma-shaped rigs, not a per-character attachment. It is not in
-the attachment list (it was for one revision, `1e171ff`..`HEAD~`), it stays browsable as a prop, and what holds one
-is an open question: the real hand-held props are mostly *not* toon props, so the place to look is the `prop`
-family, not this one.
+the attachment list (it was for one revision, `1e171ff`..`54bec20`), it stays browsable as a prop, and what holds
+one is an open question.
+
+## The `prop` family does not answer "which of these is held" either
+
+`-umaScanProps` now loads character props too (it used to be `3d/env` only) and reports, per prop, whether it is
+skinned and which bones it names. Sixty `pfb_chr_prop*` prefabs were scanned in one editor boot:
+
+* **none of them names a hand bone.** Not one `Wrist_*`, `Hand_Attach_*`, or finger.
+* every one is a single skinned renderer on **its own little rig**, named for what it is: `Page0_0`/`Page1_0`
+  (a book), `Tea0_C_00`/`Saucer_C_00` (a tea set), `Tail0_B_00`, `Chain0_5`, `Bamboo_Root`, `Wing0_L_00`,
+  `Frag_Root`, `Cover_L/R`, `Cap0_0` - props with bones of their own, not props bound to a character.
+* sizes run 0.17 to 15.08 model units, i.e. from a wing ornament to something taller than the character.
+
+So the prefab cannot say whether a prop is held: a held prop is not *skinned* to a hand, it is *placed* at one, and
+that placement is not in the prefab. The signal has to be the game's own attachment data - the animator/locator
+assets (`3d/animator/*`, the same `drivenkeylocator` idea the exporter already knows about) and the motions that
+reference them - which is the next thing to enumerate, not the prop bundles.
+
+Two prefabs are worth naming here because they look like counter-examples until measured: `pfb_chr_prop1003_10`
+names `Cover_L`/`Cover_R` (a book with covers) and `pfb_chr_prop1019_00` names `Sp_Ro_cloth2_*` (cloth chains) -
+prop-internal rigs again, nothing to do with a character's arm.
+
+## Umamusume Explorer: what it is, and what there is to lift
 
 Measurements kept because they were paid for, and because they show how the wrong reading happened:
 

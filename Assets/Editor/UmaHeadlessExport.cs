@@ -641,7 +641,8 @@ public static class UmaHeadlessExport
                         }
 
                         var container = builder.CurrentOtherContainer;
-                        Debug.Log($"{Tag} [{index + 1}/{candidates.Count}] {entry.Name}  {SummarizeMaterials(container)}");
+                        Debug.Log($"{Tag} [{index + 1}/{candidates.Count}] {entry.Name}  {SummarizeMaterials(container)}"
+                                  + $"  {SummarizeRig(container)}");
                         return;
                     }
 
@@ -1126,13 +1127,72 @@ public static class UmaHeadlessExport
     private static List<UmaDatabaseEntry> ScanCandidates(string filter, int count)
     {
         return UmaViewerMain.Instance.AbList.Values
-            .Where(e => e.Name.StartsWith("3d/env", StringComparison.OrdinalIgnoreCase))
+            // scenes first, but a character prop is a legitimate scan target too: "what is this family, and which
+            // of it hangs off a hand" is answered by loading a batch of them, and they load through the same
+            // UmaContainerProp path the UI uses
+            .Where(e => e.Name.StartsWith("3d/env", StringComparison.OrdinalIgnoreCase)
+                        || e.Name.StartsWith(UmaDatabaseController.CharaPath, StringComparison.Ordinal))
             .Where(e => Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
             .Where(e => e.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
             .Where(e => File.Exists(e.Path)) // do not spend the scan on assets that were never downloaded
             .OrderBy(e => e.Name)
             .Take(Mathf.Max(1, count))
             .ToList();
+    }
+
+    /// <summary>
+    /// One line on how a loaded prop is rigged: skinned to a hand, to a whole body, or not at all.
+    ///
+    /// This is how "which of these are held props" gets answered without opening sixty bundles by hand: a
+    /// hand-held prop's skin names wrist/finger bones, a scene prop has none (or a single root), and a prop that
+    /// merely reuses the uma armature names whole-body bones while sitting nowhere near a hand.
+    /// </summary>
+    private static string SummarizeRig(UmaContainer container)
+    {
+        if (container == null) return "!! no container";
+
+        var skins = container.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        var meshes = container.GetComponentsInChildren<MeshRenderer>(true);
+        var handBones = new List<string>();
+        var otherBones = new List<string>();
+        int bones = 0;
+        foreach (var skin in skins)
+        {
+            foreach (var bone in skin.bones)
+            {
+                if (!bone) continue;
+                bones++;
+                bool hand = bone.name.IndexOf("Wrist", StringComparison.Ordinal) >= 0
+                            || bone.name.IndexOf("Hand_Attach", StringComparison.Ordinal) >= 0
+                            || bone.name.IndexOf("Index_", StringComparison.Ordinal) >= 0
+                            || bone.name.IndexOf("Thumb_", StringComparison.Ordinal) >= 0
+                            || bone.name.IndexOf("Middle_", StringComparison.Ordinal) >= 0
+                            || bone.name.IndexOf("Ring_", StringComparison.Ordinal) >= 0
+                            || bone.name.IndexOf("Pinky_", StringComparison.Ordinal) >= 0;
+                var list = hand ? handBones : otherBones;
+                if (!list.Contains(bone.name)) list.Add(bone.name);
+            }
+        }
+
+        Bounds? union = null;
+        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer) continue;
+            if (!union.HasValue) { union = renderer.bounds; continue; }
+            var grown = union.Value;
+            grown.Encapsulate(renderer.bounds);
+            union = grown;
+        }
+        string size = union.HasValue
+            ? $"({union.Value.size.x:F2},{union.Value.size.y:F2},{union.Value.size.z:F2})"
+            : "(-)";
+
+        return $"skinned {skins.Length} of {skins.Length + meshes.Length} renderer(s), {bones} bone ref(s), "
+               + (handBones.Count > 0
+                   ? $"HAND bones {handBones.Count}: {string.Join(",", handBones.Take(4))}"
+                   : "no hand bones")
+               + (otherBones.Count > 0 ? $" | other {otherBones.Count}: {string.Join(",", otherBones.Take(4))}" : "")
+               + $", size {size}";
     }
 
     /// <summary>
