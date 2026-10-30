@@ -105,32 +105,63 @@ loaded in `AbList`.
    shaded models — confirmed by loading one (below). `toonprop` and `richprop` load too; `richprop` is three
    assets, so it is on the panel because it costs one line, not because anyone will browse it.
 
-## The panel offers them now (and what they render as)
+## What the families turned out to be, and where each one lives now
 
-`UmaViewerUI.LoadPropPanel` used the literal `pfb_chr_prop` substring. It now matches **one prefix per family** -
-`pfb_chr_prop`, `pfb_attach`, `pfb_toon_prop`, `pfb_rich_prop` - skips `clothes`, sorts by path so a family's
-entries sit together, and sets each entry's `Keywords` to its family name, because `richprop`'s prefabs are
-`pfb_rich_prop*` and the family name would otherwise be unsearchable. `sweat` is not in the list on purpose.
+Loading them changed the plan twice, which is the point of loading them.
 
-That takes the panel from **1 194 entries to 1 609** (prop 1 194 + attach 267 + toonprop 145 + richprop 3), and the
-additions are not theoretical: all three families were loaded headlessly through the CLI, which drives the same
-`Builder.LoadProp` the panel calls.
+| family | what it actually is | where it lives now |
+|---|---|---|
+| `prop` | 1 194 standalone props | prop panel (unchanged) |
+| `toonprop` | **one per character** (140 folders, 145 prefabs, `toon_prop{id}_{n}`), a partial rig - `Root` → `ArmRoll_R` → `Wrist_R` → fingers, 21 bones, local coordinates. A held/effect object | prop panel |
+| `richprop` | three assets (`pfb_rich_prop1001/1002/1005_00`), character-sized | prop panel |
+| `attach` | **not props at all** - see below | character attachments |
+| `sweat` | 503 `…_sweatlocator` prefabs, no geometry | nowhere |
 
-| what was loaded | what came out |
-|---|---|
-| `pfb_attach1048_00_0001_00` | 1 renderer, 1 material slot, shader `Gallop/3D/Chara/Toon/TSER`, all three maps resolved from the game (`tex_attach1048_00_diff` / `_base` / `_ctrl` / `_shad_c`), bounds 1.30 × 0.07 × 0.12 — a long thin held object |
-| `pfb_toon_prop1001_00` | loaded, bounds 0.36 × 0.09 × 0.12 |
-| `pfb_rich_prop1001_00` | loaded, bounds 1.09 × 2.29 × 1.62 — character-sized, not a small prop |
+`UmaViewerUI.LoadPropPanel` matched the literal `pfb_chr_prop`; it now matches one prefix per listed family
+(`pfb_chr_prop`, `pfb_toon_prop`, `pfb_rich_prop`), skips `clothes`, sorts by path so a family's entries sit
+together, and puts the family name in each entry's search keywords (`richprop`'s prefabs are `pfb_rich_prop*`).
+The panel goes from 1 194 entries to **1 342**; `attach` and `sweat` are deliberately not in it.
 
-The attach export is the one that proves the whole path, not just the load: `attach.pmx` writes **830 vertices,
-2 928 indices, 5 textures, 1 material, 76 bones**, and its `Texture2D/` folder gains the family's wet and dirt twins
-(`tex_attach1048_00_{diff,base,ctrl,shad_c}` + `_wet`, + `tex_attach1048_00_dirt`). So attach models are rigged,
-skinned, textured assets that the existing exporter already understands - nothing about them needed new code.
+### `attach` is a character accessory, and it says so itself
 
-Screenshots of the three for eyeballing: `C:\tmp\families\{attach,toonprop,richprop}.png`.
+`pfb_attach1048_00_0001_00` exports as **830 verts / 2 928 indices / 76 bones**, and the bone list is the answer:
+`Position` → `Hip` → `UpBody_Ctrl`/`Waist` → `Spine`/`Chest`/`Neck`/`Head`, both arms with all fifteen finger bones,
+`Hand_Attach_L/R`, `Sp_Ch_Bust0_L/R`, plus animator leftovers (`M_Attach`, `Wrist_*_Pole`, `Wrist_*_Target`) - a
+**copy of a character rig**, at that character's rest pose, with the accessory geometry skinned to it. So the game's
+job when spawning one is a name-based retarget onto the character's own bones, which is exactly what
+`UmaContainerCharacter.MergeBone` already does for hair.
 
-This was judged **by name plus a headless load, not by eye** — image work is not available in the session that did
-it. The look is the user's call, which is what the screenshots and the widened panel are for.
+`UmaContainerCharacter.AttachAccessory` does that, `UmaViewerBuilder.LoadAttach` loads and wears one,
+`UISettingsModel.LoadAttachPanel` offers them as toggles in the materials panel (28 for character 1048, which is
+the deepest set), and `-umaAttach <pattern>` does it headlessly. Only **ten characters** ship the family
+(`attach{id}_00/`: 1048, 1081, 1112, 1113, 1128, 1132, 1140, 2002, 2003, 2007), even though the id is a character
+id - 1132 and 1140 have no costume 00 in the costume list, so the `_00` is the set index, not the costume.
+
+Measured on 1048 + `pfb_attach1048_00_0001_00` against the same character bare:
+
+| | bare | worn | difference |
+|---|---|---|---|
+| vertices | 15 767 | 16 597 | **+830** - the prefab's own count, exactly |
+| indices | 89 022 | 91 950 | +2 928 |
+| materials | 27 | 28 | +1 (`mtl_attach1048_00`) |
+| textures | 31 | 35 | +4, and `Texture2D/` gains the wet/dirt twins |
+| bones | 425 | 427 | **+2** - the accessory's own holder nodes (`pfb_attach1048_00_0001_00`, `M_Attach`); every rig bone it carries was retargeted, none came along |
+| rendered pixels | - | - | 0.88 % of a full-body shot differ by more than 2/255, 0.27 % by more than 12/255, largest channel delta 243, concentrated in one column (x 516..762, y 248..556 - the hands and forearms, arms down in the idle pose) |
+
+Three traps this cost, all worth keeping:
+
+* **`Destroy` is too late.** The exporter counts every transform under `Position`, and a deferred `Destroy` leaves
+  the released prefab bones alive until the end of the frame - so an attach applied during the settle stage exported
+  **500 bones instead of 425**, the prefab's whole rig coming along as duplicate names. Releasing them with
+  `DestroyImmediate` fixes it; the same trap applies to anything that alters a hierarchy and then measures it in
+  the same frame.
+* **Prune before the retarget captures nothing, prune after it misses the point.** The retarget reparents the
+  prefab's bones onto the character, so a walk of the prefab's tree afterwards no longer sees the leftovers it
+  should remove (measured: 9 extra bones, then 4). The working order is: capture the prefab's nodes and what
+  carries renderers *before* the retarget, retarget, then remove the captured nodes that are neither a renderer
+  holder nor still pointed at by a skin.
+* **Retargeting is not pruning.** Prefab nodes nothing points at any more (the bust chains, the IK pole/target
+  nodes) are dead weight that the export would report as extra bones, which is why the capture above exists.
 
 ## Umamusume Explorer: what it is, and what there is to lift
 

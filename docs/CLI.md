@@ -31,6 +31,7 @@ line, runs it, and prints the interesting lines of the log afterwards.
 | Screenshot the game's own render | `./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/face.png -ShotOnly` |
 | Export a prop or a scene | `./Tools/headless_export.ps1 -ListProps -ListPropsFilter home10001` then `-Prop <path> -Out D:/out/home.pmx` |
 | See what the ten `3d/chara` families hold | `./Tools/headless_export.ps1 -ListFamilies` (names only, nothing downloaded) |
+| Export a character wearing its attachment set | `./Tools/headless_export.ps1 -Char 1048 -Costume 00 -Attach pfb_attach1048_00_0001_00 -Out D:/out/worn.pmx` |
 | Find out why a scene renders white | `./Tools/headless_export.ps1 -ScanProps "3d/env/home" -ScanCount 12` |
 | Find every scene that fails to export | `./Tools/headless_export.ps1 -ScanProps "3d/env" -ScanCount 60 -ScanExport` |
 | See what a sound clip says | `./Tools/headless_export.ps1 -Transcript snd_voi_home_100100` |
@@ -402,7 +403,8 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-ExportClip <n>` | 0 | Which clip of that asset; `-1` mixes the whole asset |
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | - | Print and exit without loading |
 | `-ListTextures [filter]` | - | Print the character *texture* assets matching a substring and exit. Use a character id (`-ListTextures -ListTexturesFilter bdy1001_00`) to see what sets a character ships: the wet maps are the `_wet` twins of the dry ones, and any other set - the `_dirt` maps, for example - shows up here as its own name |
-| `-ListFamilies` / `-ListFamiliesFilter <text>` | - | Print the families under `3d/chara/` (body, head, tail, mini, common, prop, attach, richprop, sweat, toonprop) matching a substring and exit: how many manifest entries each holds, how many are prefabs, the naming forms the family is built from (digit runs masked, e.g. `pfb_toon_prop####_##`), and three samples. Metadata only - it reads the manifest and opens no bundle, so unlike `-Prop` it cannot trigger a download |
+| `-ListFamilies` / `-ListFamiliesFilter <text>` | - | Print the families under `3d/chara/` (body, head, tail, mini, common, prop, attach, richprop, sweat, toonprop) matching a substring and exit: how many manifest entries each holds, how many are prefabs, the naming forms the family is built from (digit runs masked, e.g. `pfb_toon_prop####_##`), and three samples. Metadata only - it reads the manifest and opens no bundle, so unlike `-Prop` it cannot trigger a download. A filter that selects one family also lists that family's folders (`attach1048_00`) with entry counts |
+| `-Attach <pattern>` | - | Wear the `3d/chara/attach` prefab(s) whose path contains `<pattern>` on the loaded character; repeatable, and every match is worn. Applied after the settle frames and before any screenshot or export, so the run measures the character as worn. An attach prefab carries a copy of the character rig, so this retargets its skins onto the character's bones by name - there is no placement to dial in. Ten characters ship the family; `-ListFamilies attach` lists their sets |
 
 ### Listing and plumbing
 
@@ -516,6 +518,7 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | `-umaListChars` / `-umaListCostumes` / `-umaListProps [filter]` |
 | `-ListTextures [filter]` | `-umaListTextures [filter]` |
 | `-ListFamilies` / `-ListFamiliesFilter <text>` | `-umaListFamilies [filter]` |
+| `-Attach <pattern>` | `-umaAttach <pattern>` |
 | `-DumpMaterials` / `-DumpFace` / `-ScanProps` / `-ScanCount` | `-umaDumpMaterials` / `-umaDumpFace` / `-umaScanProps` / `-umaScanCount` |
 | `-ScanExport` / `-ScanOut` | `-umaScanExport` / `-umaScanOut` |
 | `-Transcript` / `-ExportAudio` / `-ExportClip` | `-umaTranscript` / `-umaExportAudio` / `-umaExportClip` |

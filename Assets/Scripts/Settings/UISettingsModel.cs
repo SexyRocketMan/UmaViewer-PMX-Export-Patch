@@ -313,6 +313,64 @@ public class UISettingsModel : MonoBehaviour
         }
     }
 
+    /// <summary>Prefix of the generated attachment rows, so they can be cleared again.</summary>
+    public const string AttachRowPrefix = "AttachRow_";
+
+    /// <summary>
+    /// Offers the attach prefabs the loaded character can wear - the game's `3d/chara/attach/attach{id}_00/`
+    /// sets, which is nail polish, bandages and that kind of thing on ten characters.
+    ///
+    /// One toggle per prefab rather than a pick-one list, because wearing two is meaningful. They live in the
+    /// materials panel for the same reason the texture sets do: that panel is built in code, so a new list
+    /// needs no scene object - only <see cref="MaterialsList"/> assigned.
+    ///
+    /// An attach prefab is not a prop with a placement: it carries a copy of the character rig, and
+    /// <see cref="UmaContainerCharacter.AttachAccessory"/> retargets its skins onto the character's own bones
+    /// by name, so the accessory follows the animation.
+    /// </summary>
+    public void LoadAttachPanel(UmaContainerCharacter character)
+    {
+        ClearAttachPanel();
+        if (character == null || MaterialsList == null) return;
+
+        var entries = Builder.AttachEntriesFor(character);
+        if (entries.Count == 0) return;
+
+        Debug.Log($"[UISettingsModel] offering {entries.Count} attachment(s) for {character.name}");
+        foreach (var entry in entries)
+        {
+            string label = System.IO.Path.GetFileName(entry.Name);
+            var prefab = _textureSetRowPrefab != null ? _textureSetRowPrefab : UmaViewerUI.Instance.UmaContainerTogglePrefab;
+            var row = Instantiate(prefab, MaterialsList.content);
+            row.name = AttachRowPrefix + label;
+            row.Name = label;
+            row.Toggle.SetIsOnWithoutNotify(character.Accessory(label) != null);
+            row.Toggle.onValueChanged.AddListener(value =>
+            {
+                if (value)
+                {
+                    if (Builder.LoadAttach(entry) == null)
+                    {
+                        row.Toggle.SetIsOnWithoutNotify(false);
+                        return;
+                    }
+                }
+                else if (!character.DetachAccessory(character.Accessory(label))) return;
+                Debug.Log($"[UISettingsModel] {(value ? "wearing" : "removed")} {label} on {character.name}");
+            });
+        }
+    }
+
+    public void ClearAttachPanel()
+    {
+        if (MaterialsList == null) return;
+        for (int i = MaterialsList.content.childCount - 1; i >= 0; i--)
+        {
+            var child = MaterialsList.content.GetChild(i);
+            if (child.name.StartsWith(AttachRowPrefix)) Destroy(child.gameObject);
+        }
+    }
+
     public void ExportModel()
     {
 #if !UNITY_ANDROID || UNITY_EDITOR

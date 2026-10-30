@@ -130,13 +130,19 @@ it with `blender --command extension install-file -r user_default -e <zip>` agai
    only, opens no bundle). It refutes "one wider substring": none of the four families is named `pfb_chr_prop*`. The
    real names are `pfb_attach####_##_####_##` (321 entries, with their own `_wet`/`_dirt` maps — real shaded models),
    `pfb_toon_prop####_##` (153), `pfb_rich_prop####_##` (3, i.e. barely a family), and `pfb_chr####_##[_face###]_sweatlocator`
-   (503 — locators, no geometry, so `sweat` stays out). So the fix is a filter that knows the prefix per family, not a
-   widened substring. **The panel takes those prefixes now** (`UmaViewerUI.LoadPropPanel`: 1194 → 1609 entries, family
-   name in each entry's search keywords), and all three families were loaded headlessly: attach comes out as a rigged,
-   textured model (`attach.pmx`: 830 verts, 2928 indices, 76 bones, wet/dirt twins in `Texture2D/`), richprop is
-   character-sized, toonprop is small. Screenshots at `C:\tmp\families\`. Remaining: the user's look at them in the
-   viewer (the shipped 3.5 exe predates this change), then whether the panel should also carry `mini`'s
-   `pfb_mattach*`.
+   (503 — locators, no geometry, so `sweat` stays out). **Loading them then changed the plan once more**: `attach` is
+   not a prop at all — the prefab carries a **copy of the character rig** (`Hip`, `Spine`, every finger,
+   `Hand_Attach_L/R`), so it is an accessory that has to be retargeted onto the character it is worn by
+   (nail polish, bandages; the user confirmed this from the viewer). It is now a character feature:
+   `UmaContainerCharacter.AttachAccessory` retargets the prefab's skins by bone name (the same `MergeBone` hair
+   uses), the materials panel offers one toggle per prefab (`UISettingsModel.LoadAttachPanel`, 28 for 1048), and
+   `-umaAttach` does it headlessly. Only **ten characters** ship the family (`attach{id}_00/`). Measured on 1048:
+   +830 verts, +2 928 indices, +1 material, +4 textures, **+2 bones** (the accessory's own holder nodes) against the
+   same character bare, with every rig bone retargeted. The prop panel keeps `prop`, `toonprop` and `richprop`
+   (1 194 → 1 342 entries); `toonprop` is one held/effect prop per character (140 folders), `sweat` stays out.
+   Remaining: the user's look at the toggles in the viewer (the shipped 3.5 exe predates all of this), and whether
+   `mini`'s `pfb_mattach*` should get the same attachment treatment. `docs/ASSET_FAMILIES.md` has the numbers and
+   the three traps.
 2. **Spork's look has never been compared with the viewer's.** The viewer draws its own Unity shaders; nothing has put
    a Spork-shaded uma in Blender beside the same uma in the viewer. The only Spork export that exists is 1063.
 3. **Decals need eyes**, not tests: see the trap above.

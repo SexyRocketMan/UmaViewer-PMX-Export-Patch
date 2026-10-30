@@ -553,16 +553,17 @@ public class UmaViewerUI : MonoBehaviour
     /// The prefab name prefixes the prop panel lists.
     ///
     /// The game names each `3d/chara` family its own way, so the single `pfb_chr_prop` substring this panel
-    /// used to filter on reached exactly one family and left three prefab families unreachable in the UI
-    /// even though their bundles are in the manifest: `attach` (held/attached models, which carry their own
-    /// wet and dirt maps), `toonprop` (shader-driven props) and `richprop` (three live-show props).
-    /// `docs/ASSET_FAMILIES.md` has the measured counts, from `-umaListFamilies`.
+    /// used to filter on reached exactly one family and left others unreachable in the UI even though their
+    /// bundles are in the manifest: `toonprop` (held/effect props, one per character) and `richprop` (three
+    /// live-show props). `docs/ASSET_FAMILIES.md` has the measured counts, from `-umaListFamilies`.
     ///
-    /// `sweat` is deliberately absent: all 503 of its prefabs are `..._sweatlocator` locators with no
-    /// geometry, so there is nothing to look at.
+    /// `attach` is deliberately absent and `sweat` always was: attach prefabs are not props at all - they carry
+    /// a copy of the character rig and belong to a character, so they are toggles on the character
+    /// (`UISettingsModel.LoadAttachPanel`, `UmaContainerCharacter.AttachAccessory`), not scene objects. A
+    /// sweat prefab is a `..._sweatlocator` with no geometry.
     /// </summary>
     private static readonly string[] PropPrefixes =
-        { "pfb_chr_prop", "pfb_attach", "pfb_toon_prop", "pfb_rich_prop" };
+        { "pfb_chr_prop", "pfb_toon_prop", "pfb_rich_prop" };
 
     /// <summary>True for a manifest path the prop panel should offer (the family's prefab, not its clothes).</summary>
     private static bool IsPropAsset(string path)

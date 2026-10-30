@@ -78,6 +78,9 @@ public class UmaViewerBuilder : MonoBehaviour
         // the rain look is a view setting, so a character loaded while it is on wears it too
         if (ModelSettings.IsWetLook) umaContainer.SetWetLook(true);
 
+        // and the game's own attachment set for this character id, when it has one (ten of them do)
+        UI.ModelSettings?.LoadAttachPanel(umaContainer);
+
         yield break;
     }
 
@@ -739,6 +742,55 @@ public class UmaViewerBuilder : MonoBehaviour
 
         CurrentOtherContainer = prop;
         UI.ModelSettings?.LoadTextureSetPanel(prop.TextureSet);
+    }
+
+    /// <summary>
+    /// The attach prefabs the loaded character can wear.
+    ///
+    /// `3d/chara/attach/attach{id}_{set}/` is keyed by character id, not by costume: costume 00 for ten of them
+    /// (attach1048_00 holds six prefabs) and nothing else, which is why this is a character feature rather
+    /// than part of the prop list. `-umaListFamilies attach` prints the whole set.
+    /// </summary>
+    public List<UmaDatabaseEntry> AttachEntriesFor(UmaContainerCharacter character)
+    {
+        var entries = new List<UmaDatabaseEntry>();
+        if (character == null || character.CharaEntry == null) return entries;
+        string prefix = $"3d/chara/attach/attach{character.CharaEntry.Id}_";
+        return UmaViewerMain.Instance.AbChara
+            .Where(e => e.Name.StartsWith(prefix, StringComparison.Ordinal)
+                        && Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Instantiates one attach prefab and wears it on the current character. Returns null (and says why) when
+    /// no character is loaded or the prefab cannot be read.
+    /// </summary>
+    public GameObject LoadAttach(UmaDatabaseEntry entry)
+    {
+        var character = CurrentUMAContainer;
+        if (character == null)
+        {
+            Debug.LogWarning($"[attach] {entry?.Name}: no character is loaded, so there is nothing to attach to");
+            return null;
+        }
+
+        var prefab = entry.Get<GameObject>();
+        if (prefab == null)
+        {
+            Debug.LogWarning($"[attach] {entry.Name}: the bundle holds no prefab");
+            return null;
+        }
+
+        var instance = Instantiate(prefab);
+        instance.name = Path.GetFileName(entry.Name);
+        return character.AttachAccessory(instance);
+    }
+
+    public void ClearAttachments()
+    {
+        CurrentUMAContainer?.ClearAccessories();
     }
 
     public void LoadLive(LiveEntry live, List<LiveCharacterSelect> characters)

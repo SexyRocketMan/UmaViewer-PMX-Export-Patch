@@ -66,6 +66,7 @@ param(
     [ValidateSet("deterministic", "realtime")][string]$RecordMode = "deterministic",
     [int]$MorphNameMode = -1,
     [switch]$APose,
+    [string[]]$Attach = @(),
     [switch]$PlainMaterials,
     [switch]$NoExtraMorphs,
     [switch]$TextureVariants,
@@ -212,6 +213,8 @@ if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordRedu
 if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 if ($APose) { $arguments += "-umaAPose" }
+# one -umaAttach per pattern, on the character, before anything is measured
+foreach ($pattern in $Attach) { if ($pattern) { $arguments += @("-umaAttach", $pattern) } }
 if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
 if ($NoExtraMorphs) { $arguments += "-umaNoExtraMorphs" }
 if ($TextureVariants) { $arguments += "-umaTextureVariants" }
@@ -271,7 +274,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (Test-Path $LogPath) {
-    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]|\[shaders\]|\[tears\]" |
+    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]|\[shaders\]|\[tears\]|\[attach\]" |
         Where-Object { $_.Line -notmatch "StackTraceUtility|DebugLogHandler|Logger:Log|Debug:Log" } |
         ForEach-Object { $_.Line.Trim() }
 }

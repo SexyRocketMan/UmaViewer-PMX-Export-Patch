@@ -332,6 +332,140 @@ public class UmaContainerCharacter : UmaContainer
         };
     }
 
+    /// <summary>The attach prefabs this character is wearing, so they can be taken off again.</summary>
+    private readonly List<GameObject> accessories = new List<GameObject>();
+
+    public IReadOnlyList<GameObject> Accessories => accessories;
+
+    /// <summary>
+    /// Wears one of the game's `3d/chara/attach/...` prefabs: nail polish, bandages, that kind of thing.
+    ///
+    /// An attach prefab is not a prop with a placement to dial in. Its bone list is a **copy of the character
+    /// rig** - `Hip`, `Spine`, both arms with every finger, `Hand_Attach_L/R` - sitting at that character's
+    /// rest pose, with the accessory geometry skinned to it. The game's job when spawning one is therefore a
+    /// retarget onto the character's own bones, by name, which is exactly what <see cref="MergeBone"/> already
+    /// does for hair; the accessory then follows the animation instead of floating where it was authored.
+    ///
+    /// Bones the character does not have keep their own position: the bust chains (`Sp_Ch_Bust0_*`) and the
+    /// animator's `Wrist_*_Pole`/`Wrist_*_Target` nodes are in the prefab but not on every character, so those
+    /// few weights stay where the prefab put them.
+    /// </summary>
+    public GameObject AttachAccessory(GameObject accessory)
+    {
+        if (accessory == null) return null;
+
+        var targetBones = new Dictionary<string, Transform>();
+        foreach (var bone in GetComponentsInChildren<Transform>(true))
+        {
+            if (!targetBones.ContainsKey(bone.name)) targetBones.Add(bone.name, bone);
+        }
+
+        var emptyBones = new List<Transform>();
+        var skins = accessory.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+
+        // Captured before the retarget, because the retarget reparents the prefab's own bones onto this character's
+        // and afterwards there is no way to tell which nodes came from the prefab. `keeps` is the closure of what
+        // has to survive whatever the bones do: renderer and collider nodes and everything above them.
+        var prefabNodes = new List<Transform>(accessory.GetComponentsInChildren<Transform>(true));
+        var keeps = new HashSet<Transform>();
+        MarkKeptNodes(accessory.transform, keeps);
+
+        int merged = 0;
+        // names the character has no bone for: those weights keep the prefab's own rest position, which is
+        // worth saying out loud because it is the one way an attachment can look half attached
+        var unmatched = new List<string>();
+        foreach (var skin in skins)
+        {
+            string rootBone = skin.rootBone ? skin.rootBone.name : "";
+            Transform before = skin.rootBone;
+            foreach (var bone in skin.bones)
+            {
+                if (bone && !targetBones.ContainsKey(bone.name) && !unmatched.Contains(bone.name))
+                    unmatched.Add(bone.name);
+            }
+            MergeBone(skin, targetBones, ref emptyBones);
+            if (skin.rootBone != before) merged++;
+            else Debug.LogWarning($"[attach] '{accessory.name}' has a skin rooted at '{rootBone}' and this character "
+                                  + $"has no bone of that name; it keeps its own rig and will not follow the animation");
+        }
+
+        // What the prefab carries but nothing points at once its skins follow this character: its copies of the
+        // bust chains, the animator's IK pole/target nodes, the leftover chain roots. Left in, the retarget has
+        // already reparented them onto the character and the exporter reports them as extra bones - measured,
+        // nine of them on 1048, and pruning the prefab's tree at this point missed exactly those.
+        var stillUsed = new HashSet<Transform>();
+        foreach (var skin in skins)
+        {
+            if (skin.rootBone) stillUsed.Add(skin.rootBone);
+            foreach (var bone in skin.bones) if (bone) stillUsed.Add(bone);
+        }
+        var dead = prefabNodes.Where(node => node && !keeps.Contains(node) && !stillUsed.Contains(node)).ToList();
+
+        // under the node the body hangs off, so the character's height scale reaches any unskinned part too
+        Transform holder = transform.Find("Position") ?? transform;
+        accessory.transform.SetParent(holder, false);
+        accessory.transform.localPosition = Vector3.zero;
+        accessory.transform.localRotation = Quaternion.identity;
+
+        // DestroyImmediate, not Destroy: the released bones have to be gone before anything measures this
+        // character. A deferred Destroy leaves them alive until the end of the frame, and the exporter counts
+        // every transform under "Position" - measured, an attach exported 500 bones instead of 425, i.e. the
+        // prefab's whole rig came along as duplicate names.
+        foreach (var bone in emptyBones) if (bone) DestroyImmediate(bone.gameObject);
+        foreach (var node in dead)
+        {
+            if (!node) continue;
+            // never take a node that still carries a bone some skin points at (a bone this character has no
+            // counterpart for keeps its own rest position, and its parent may be prefab scaffolding)
+            if (node.GetComponentsInChildren<Transform>(true).Any(t => stillUsed.Contains(t))) continue;
+            DestroyImmediate(node.gameObject);
+        }
+        accessories.Add(accessory);
+        Debug.Log($"[attach] '{accessory.name}' on {name}: {skins.Length} skin(s), {merged} retargeted, "
+                  + $"{emptyBones.Count} prefab bone(s) released, "
+                  + $"{(accessory.GetComponentsInChildren<Renderer>(true).Length)} renderer(s)"
+                  + (unmatched.Count > 0
+                      ? $", {unmatched.Count} bone(s) with no counterpart here: "
+                        + string.Join(", ", unmatched.Take(8)) + (unmatched.Count > 8 ? " ..." : "")
+                      : ", every bone matched"));
+        return accessory;
+    }
+
+    /// <summary>Takes every attachment back off.</summary>
+    public void ClearAccessories()
+    {
+        foreach (var accessory in accessories) if (accessory) Destroy(accessory);
+        accessories.Clear();
+    }
+
+    /// <summary>Takes one attachment back off (the panel's toggle-off path).</summary>
+    public bool DetachAccessory(GameObject accessory)
+    {
+        if (!accessory) return false;
+        accessories.Remove(accessory);
+        Destroy(accessory);
+        return true;
+    }
+
+    /// <summary>The worn attachment with that prefab name, or null.</summary>
+    public GameObject Accessory(string accessoryName)
+    {
+        return accessories.FirstOrDefault(a => a && a.name == accessoryName);
+    }
+
+    /// <summary>
+    /// Marks the nodes of a prefab that must survive a retarget: those carrying a renderer or a collider, and
+    /// every ancestor of one. Everything else in the prefab is the rig, which the retarget either takes over or
+    /// leaves behind, and what it leaves behind is dead weight in an export.
+    /// </summary>
+    private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)
+    {
+        bool keepsSomething = node.GetComponent<Renderer>() != null || node.GetComponent<Collider>() != null;
+        for (int i = 0; i < node.childCount; i++) keepsSomething |= MarkKeptNodes(node.GetChild(i), keeps);
+        if (keepsSomething) keeps.Add(node);
+        return keepsSomething;
+    }
+
     public void LoadPhysics()
     {
         cySpringDataContainers = new List<CySpringDataContainer>(PhysicsContainer.GetComponentsInChildren<CySpringDataContainer>());

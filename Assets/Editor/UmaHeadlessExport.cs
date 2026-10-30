@@ -48,7 +48,9 @@ using UnityEngine.Rendering;
 ///                        richprop, sweat, toonprop) whose name contains &lt;f&gt; (empty = all), with how many
 ///                        entries it holds, what its prefabs are called, and how many of them the prop
 ///                        panel's "pfb_chr_prop" filter would show, then exit. Metadata only: this reads
-///                        manifest names and opens no bundle, so it cannot download anything.
+///                        manifest names and opens no bundle, so it cannot download anything. When &lt;f&gt;
+///                        selects a single family it also lists that family's folders (attach1048_00,
+///                        bdy1001_00: the id and costume each asset belongs to) with entry counts.
 ///   -umaScanProps &lt;f&gt;    load every prop/scene matching &lt;f&gt; in turn and report its material health
 ///                        (textureless slots, missing shaders, resolved texture set), then exit
 ///   -umaScanCount &lt;n&gt;    how many props to scan, default 10
@@ -66,6 +68,11 @@ using UnityEngine.Rendering;
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short english, 2 unified)
+///   -umaAttach &lt;f&gt;      wear the 3d/chara/attach prefab(s) whose path contains &lt;f&gt; on the loaded
+///                        character (repeatable). Attachments go on after the settle frames and before any
+///                        screenshot or export, so the run measures the character as worn. An attach prefab
+///                        carries a copy of the character rig, so this retargets its skins onto the
+///                        character's bones by name - no placement to dial in.
 ///   -umaAPose            export models with the arms in the A-pose that recorded motions are relative to
 ///   -umaTextureVariants  also export the game's wet and dirt maps beside the dry ones and name them per
 ///                        material with wet=/dirt= tokens (off by default: about +80% texture payload)
@@ -147,6 +154,12 @@ public static class UmaHeadlessExport
         public string ListTexturesFilter = "";
         public bool ListFamilies;
         public string ListFamiliesFilter = "";
+        /// <summary>
+        /// Attach prefabs to wear on the loaded character before measuring (-umaAttach, repeatable). Each value is
+        /// a substring of an asset path under 3d/chara/attach/; every match is worn, after the settle frames and
+        /// before any screenshot or export, so what a run reports includes them.
+        /// </summary>
+        public List<string> Attach = new List<string>();
         public string ScanProps = "";
         public int ScanCount = 10;
         /// <summary>
@@ -260,6 +273,7 @@ public static class UmaHeadlessExport
                         options.ListFamilies = true;
                         if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListFamiliesFilter = argv[++i];
                         break;
+                    case "-umaAttach": options.Attach.Add(Next()); break;
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaScanExport": options.ScanExport = true; break;
@@ -318,6 +332,7 @@ public static class UmaHeadlessExport
     }
 
     private static int _settleFramesLeft;
+    private static bool _attachmentsApplied;
     private static double _playDeadline;
     private static DateTime _playModeEnteredUtc;
     private static DateTime _runStartedUtc;
@@ -366,6 +381,7 @@ public static class UmaHeadlessExport
         _runStartedUtc = DateTime.UtcNow;
         _playModeRetries = 0;
         _faceDumped = false;
+        _attachmentsApplied = false;
         CurrentStage = Stage.WaitPlayMode;
 
         Debug.Log($"{Tag} opening scene {options.ScenePath}");
@@ -699,6 +715,14 @@ public static class UmaHeadlessExport
 
                 case Stage.Settle:
                     if (_settleFramesLeft-- > 0) return;
+
+                    // attachments go on once the character is settled and before anything is measured, so a
+                    // screenshot or an export of the run includes them (they are not a setting of their own)
+                    if (options.Attach.Count > 0 && !_attachmentsApplied)
+                    {
+                        _attachmentsApplied = true;
+                        if (!ApplyAttachments(options.Attach)) return;
+                    }
 
                     if (!string.IsNullOrEmpty(options.Motion) && SessionState.GetInt(KeyMotionLoaded, 0) == 0)
                     {
@@ -1110,7 +1134,58 @@ public static class UmaHeadlessExport
             .ToList();
     }
 
-    /// <summary>One line describing whether a loaded prop/scene will render with its textures.</summary>
+    /// <summary>
+    /// Wears the `-umaAttach` prefabs on the loaded character, before anything is measured.
+    ///
+    /// Returns false (having failed the run) when a pattern matches nothing or no character is loaded, because a
+    /// measurement of an unattached character that was asked to be dressed is worse than no measurement.
+    /// </summary>
+    private static bool ApplyAttachments(List<string> patterns)
+    {
+        var builder = UmaViewerBuilder.Instance;
+        var character = builder?.CurrentUMAContainer;
+        if (character == null)
+        {
+            Fail("-umaAttach needs a character (nothing to attach to)");
+            return false;
+        }
+
+        var candidates = UmaViewerMain.Instance.AbChara
+            .Where(e => e.Name.StartsWith("3d/chara/attach/", StringComparison.Ordinal))
+            .ToList();
+
+        foreach (string pattern in patterns)
+        {
+            var matches = candidates
+                .Where(e => e.Name.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(e => e.Name, StringComparer.Ordinal)
+                .ToList();
+            if (matches.Count == 0)
+            {
+                Fail($"no attach prefab matches '{pattern}'; -umaListFamilies attach prints the family");
+                return false;
+            }
+            if (matches.Count > 1)
+                Debug.Log($"{Tag} '{pattern}' matches {matches.Count} attach prefabs, wearing all of them: "
+                          + string.Join(", ", matches.Select(m => Path.GetFileName(m.Name))));
+
+            foreach (var match in matches)
+            {
+                var worn = builder.LoadAttach(match);
+                if (worn == null)
+                {
+                    Fail($"could not wear {match.Name}");
+                    return false;
+                }
+            }
+        }
+
+        var wornNames = character.Accessories.Select(a => a.name).ToList();
+        Debug.Log($"{Tag} wearing {wornNames.Count} attachment(s) on {character.name}: {string.Join(", ", wornNames)}");
+        return true;
+    }
+
+
     private static string SummarizeMaterials(UmaContainer container)
     {
         if (container == null) return "!! no container";
@@ -1441,7 +1516,35 @@ public static class UmaHeadlessExport
             // three samples per family, sorted so the same run prints the same three
             foreach (string sample in entries.Select(e => e.Name).OrderBy(n => n, StringComparer.Ordinal).Take(3))
                 Debug.Log($"{Tag}     e.g. {sample}");
+
+            // When the filter names a single family the question is about *that* family, and the useful next
+            // question is which ids it covers: a family's folder carries the character id and costume
+            // (attach1048_00, bdy1001_00), which is what a "these belong on this character" panel pairs
+            // against. Printed only for a single-family query, so a plain -umaListFamilies stays a summary.
+            if (families.Count == 1)
+                PrintFamilyFolders(entries, charaPath, family);
         }
+    }
+
+    /// <summary>The distinct `&lt;family&gt;/&lt;folder&gt;/` names a family is grouped into, with entry counts.</summary>
+    private static void PrintFamilyFolders(List<UmaDatabaseEntry> entries, string charaPath, string family)
+    {
+        var folders = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+        {
+            // 3d/chara/<family>/<folder>/<asset> - the folder is what carries the id and the costume
+            string rest = entry.Name.Substring(charaPath.Length + family.Length).TrimStart('/');
+            int slash = rest.IndexOf('/');
+            string folder = slash > 0 ? rest.Substring(0, slash) : "";
+            if (folder.Length == 0) continue;
+            folders.TryGetValue(folder, out int count);
+            folders[folder] = count + 1;
+        }
+
+        Debug.Log($"{Tag}   {family} folders ({folders.Count} distinct, folder x entries):");
+        foreach (var pair in folders.OrderBy(p => p.Key, StringComparer.Ordinal).Take(80))
+            Debug.Log($"{Tag}     {pair.Key,-28} {pair.Value,4}");
+        if (folders.Count > 80) Debug.Log($"{Tag}     ... and {folders.Count - 80} more");
     }
 
     /// <summary>Collapses a digit run to one `#`, so a family's naming form shows through its ids.</summary>
