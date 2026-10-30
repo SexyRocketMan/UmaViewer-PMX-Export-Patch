@@ -146,7 +146,13 @@ Measured on 1048 + `pfb_attach1048_00_0001_00` against the same character bare:
 | materials | 27 | 28 | +1 (`mtl_attach1048_00`) |
 | textures | 31 | 35 | +4, and `Texture2D/` gains the wet/dirt twins |
 | bones | 425 | 427 | **+2** - the accessory's own holder nodes (`pfb_attach1048_00_0001_00`, `M_Attach`); every rig bone it carries was retargeted, none came along |
-| rendered pixels | - | - | 0.88 % of a full-body shot differ by more than 2/255, 0.27 % by more than 12/255, largest channel delta 243, concentrated in one column (x 516..762, y 248..556 - the hands and forearms, arms down in the idle pose) |
+| rendered pixels | - | - | **inside the noise**: 628 px change by more than 12/255 against a 746 px floor from two *identical* bare runs. The user's own look settled it: the attach set repeats geometry the body already draws, so it makes no visual difference |
+
+The export is the evidence here, not the image. Two things had to be learned the hard way to say that honestly:
+a **render diff below the noise floor is not evidence** (measure two identical runs before believing any diff on
+this harness), and **`Renderer.bounds` is stale in the frame a hierarchy changes** - the numbers it reported for a
+just-parented accessory were the pre-move ones, which is why the geometry was checked through the export
+(`pmx_inspect.py bounds`) instead.
 
 Three traps this cost, all worth keeping:
 
@@ -162,6 +168,49 @@ Three traps this cost, all worth keeping:
   holder nor still pointed at by a skin.
 * **Retargeting is not pruning.** Prefab nodes nothing points at any more (the bust chains, the IK pole/target
   nodes) are dead weight that the export would report as extra bones, which is why the capture above exists.
+
+## `toonprop` is two things in one family
+
+Loading two of them settled why the family looked inconsistent: they are not one kind of asset, and one placement
+rule cannot serve both.
+
+| prefab | what its weights say | what it is |
+|---|---|---|
+| `pfb_toon_prop1048_00` | `Waist` 384.9, `Chest` 338.1, `Hip` 276.3, `Thigh_R/L` ~150, knees, elbows, 2 126 verts | a **full-body toon costume** |
+| `pfb_toon_prop1001_00` | `Root` 102.3, `Wrist_R` 52.7, `ArmRoll_R` 36.9, every right-hand finger, 489 verts | a **hand-held object** |
+
+The signature that separates them is measurable before anything is retargeted: **how far the prefab's bones sit from
+the character's bones of the same name**, in model units.
+
+| prefab | rig offset from the character | body height | verdict |
+|---|---|---|---|
+| `pfb_toon_prop1048_00` | **0.03** | 6.3 | same space - it was authored on the character, so retarget it |
+| `pfb_toon_prop1001_00` | **1.26** | 6.3 | its own space - its rig is a *flattened* arm around its own `Root`, so hang it off the hand |
+
+`UmaContainerCharacter.AttachAccessory` measures that and does the matching thing (`<= 5% of body height` means
+retarget, otherwise rigid anchor to `Hand_Attach_R`/`L`, picking the side from the bones the skin names). Both
+outcomes were measured through `pmx_inspect.py bounds` (per-material world box), against the alternative:
+
+| case | placement | material box (model units) | verdict |
+|---|---|---|---|
+| 1048 costume, retargeted | wraps the body | centre (−0.07, 9.79, 0.56), size 12.34 × 19.49 × 3.13, body is 12.75 × 16.82 × 3.04 | **right** |
+| 1048 costume, rigid at the hand | hangs off to the side, above the head | centre (−11.24, **19.21**, 1.48), y 10.97..27.46 | wrong |
+| 1001 hand object, rigid at `Hand_Attach_R` | compact, next to the hand | centre (−7.01, 10.58, 0.75), size 3.41 × 3.08 × 1.35, hand bone at (−5.49, 11.90, 0.87) | **right** |
+| 1001 hand object, retargeted | stretched from the hand to the floor | size 6.48 × **12.96**, y −0.36..12.61 | wrong - Root's weights stay at the prefab's origin while the hand's weights follow the hand |
+
+Rendered, against the harness's own noise floor (two identical bare runs differ by **746 px** at >12/255):
+
+| change | pixels changed | reading |
+|---|---|---|
+| 1048 + attach only | 1 101 | 1.5x noise - and the user confirmed the attach set repeats geometry the body already draws |
+| 1048 + toon costume | **5 092** | 6.8x noise, clearly visible |
+| 1001 + toon hand prop, full-body view | 571 | **below** the noise floor; the prop is ~3.4 model units on a 6.3-unit body |
+| 1001 + toon hand prop, `-ShotView upper` | 2 314 vs a 1 458 floor | 1.6x, and the changed region reaches left of the noise box (x 250..912 against 366..912) - the hand end, which is where the anchor puts it |
+
+Both toonprops are offered in the attachment panel alongside the attach sets
+(`UmaViewerBuilder.AttachEntriesFor` covers `attach{id}_*` and `toon_prop{id}_*`), and `-umaAttach <pattern>` takes
+either. A character with several toonprops can toggle more than one on; nothing prevents overlap, which is worth
+knowing before reporting "two props in the hand" as a bug.
 
 ## Umamusume Explorer: what it is, and what there is to lift
 

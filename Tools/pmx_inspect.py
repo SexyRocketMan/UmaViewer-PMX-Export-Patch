@@ -776,10 +776,41 @@ def cmd_tails(paths: list[str], args) -> int:
     return exit_code
 
 
+def cmd_bounds(paths: list[str], args) -> int:
+    """Where each material's geometry ended up, as a world-space box.
+
+    This is the check for a merged or retargeted part: a collar that was supposed to land on a hand and did not
+    still exports without an error, and the only way to see it headlessly is the box the vertices occupy. Print a
+    bone from the same file (`bones`) to compare against.
+    """
+    for path in paths:
+        m = read_model(path)
+        print(f"== {path}")
+        cursor = 0
+        for mat in m.materials:
+            vids = sorted(set(m.surfaces[cursor:cursor + mat.face_count]))
+            cursor += mat.face_count
+            if args.material and args.material not in mat.name:
+                continue
+            if not vids:
+                continue
+            xs = [m.vertices[vi].pos[0] for vi in vids]
+            ys = [m.vertices[vi].pos[1] for vi in vids]
+            zs = [m.vertices[vi].pos[2] for vi in vids]
+            lo = (min(xs), min(ys), min(zs))
+            hi = (max(xs), max(ys), max(zs))
+            size = tuple(h - l for l, h in zip(lo, hi))
+            centre = tuple((l + h) / 2 for l, h in zip(lo, hi))
+            print(f"   {mat.name!r:34} verts={len(vids):6}  centre=({centre[0]:7.2f},{centre[1]:7.2f},{centre[2]:7.2f}) "
+                  f"size=({size[0]:6.2f},{size[1]:6.2f},{size[2]:6.2f})  "
+                  f"y {lo[1]:7.2f}..{hi[1]:7.2f}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("summary", "bones", "weights", "morphs", "check"):
+    for name in ("summary", "bones", "weights", "morphs", "check", "bounds"):
         p = sub.add_parser(name)
         p.add_argument("paths", nargs="+")
         p.add_argument("--material")
@@ -806,7 +837,7 @@ def main() -> int:
     p.add_argument("--worst", type=int, default=8, help="how many of the worst bone deviations to list")
     args = ap.parse_args()
     return {"summary": cmd_summary, "bones": cmd_bones, "weights": cmd_weights,
-            "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check,
+            "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check, "bounds": cmd_bounds,
             "names": cmd_names, "tails": cmd_tails, "integrity": cmd_integrity}[args.cmd](args.paths, args)
 
 

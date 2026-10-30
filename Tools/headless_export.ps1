@@ -27,6 +27,10 @@
     # -ListProps: after a [switch] the next bare word binds positionally to -Char
     ./Tools/headless_export.ps1 -ListFamilies
     ./Tools/headless_export.ps1 -ListFamilies -ListFamiliesFilter richprop
+    # wear a character's attachments and hold its toon props: -Attach is an array, so several go comma
+    # separated - "-Attach a -Attach b" is a binding error, not two entries
+    ./Tools/headless_export.ps1 -Char 1048 -Costume 00 -Attach pfb_attach1048_00_0001_00,pfb_toon_prop1048_00 `
+        -Out D:/out/worn.pmx
     # export every matching scene in one editor run, and report the ones that fail
     ./Tools/headless_export.ps1 -ScanProps "3d/env/race" -ScanCount 40 -ScanExport -ScanOut D:/scan
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx

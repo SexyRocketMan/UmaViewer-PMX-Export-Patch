@@ -143,6 +143,17 @@ it with `blender --command extension install-file -r user_default -e <zip>` agai
    Remaining: the user's look at the toggles in the viewer (the shipped 3.5 exe predates all of this), and whether
    `mini`'s `pfb_mattach*` should get the same attachment treatment. `docs/ASSET_FAMILIES.md` has the numbers and
    the three traps.
+   **`toonprop` is in the same feature now, and it is two things.** Its weights say which: `pfb_toon_prop1048_00`
+   is a full-body toon costume (Waist/Chest/Hip/Thighs, 2 126 verts) while `pfb_toon_prop1001_00` is a hand-held
+   object (Root/Wrist_R/fingers, 489 verts). The prefab's rig offset from the character's own decides the treatment:
+   0.03 units means it was authored in the character's space (retarget — the costume then wraps the body, measured
+   bounds 12.34 × 19.49 × 3.13 around a 12.75 × 16.82 body, against 13.76 × 16.49 hanging off the head when it was
+   anchored instead), 1.26 units means its own space (anchor to `Hand_Attach_R` — measured box 3.41 × 3.08 × 1.35
+   beside the hand at (−5.49, 11.90, 0.87), against 6.48 × 12.96 stretched from the hand to the floor when it was
+   retargeted). Both are toggles in the attachment panel and `-umaAttach` takes either. A render check also taught
+   the harness's own limit: two identical pinned runs differ by 746 px, so a diff below that proves nothing — the
+   toon costume changes 5 092 px (6.8x noise), the hand prop 571 px at full body distance (invisible) but 2 314 px
+   against a 1 458 px floor in `-ShotView upper`.
 2. **Spork's look has never been compared with the viewer's.** The viewer draws its own Unity shaders; nothing has put
    a Spork-shaded uma in Blender beside the same uma in the viewer. The only Spork export that exists is 1063.
 3. **Decals need eyes**, not tests: see the trap above.

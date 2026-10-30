@@ -371,22 +371,38 @@ public class UmaContainerCharacter : UmaContainer
         MarkKeptNodes(accessory.transform, keeps);
 
         int merged = 0;
+        // every name the skins deform with, before the retarget replaces them
+        var skinBoneNames = new List<string>();
         // names the character has no bone for: those weights keep the prefab's own rest position, which is
         // worth saying out loud because it is the one way an attachment can look half attached
         var unmatched = new List<string>();
         foreach (var skin in skins)
         {
-            string rootBone = skin.rootBone ? skin.rootBone.name : "";
-            Transform before = skin.rootBone;
             foreach (var bone in skin.bones)
             {
-                if (bone && !targetBones.ContainsKey(bone.name) && !unmatched.Contains(bone.name))
+                if (!bone) continue;
+                if (!skinBoneNames.Contains(bone.name)) skinBoneNames.Add(bone.name);
+                if (!targetBones.ContainsKey(bone.name) && !unmatched.Contains(bone.name))
                     unmatched.Add(bone.name);
             }
-            MergeBone(skin, targetBones, ref emptyBones);
-            if (skin.rootBone != before) merged++;
-            else Debug.LogWarning($"[attach] '{accessory.name}' has a skin rooted at '{rootBone}' and this character "
-                                  + $"has no bone of that name; it keeps its own rig and will not follow the animation");
+        }
+
+        // Do the prefab's bones sit where this character's do? A toon costume's do (measured: 0.27 units on 1048,
+        // out of a 160-unit body), so it belongs in the character's space and retargeting wraps it around the body.
+        // A held toon prop's do not (measured: 13 units on 1001 - its rig is a flattened arm rooted at its own
+        // `Root`), and retargeting that stitches its geometry between the hand and the floor. So measure it rather
+        // than guess: same space means retarget, own space means hang it off the hand.
+        float boneOffset = MedianBoneOffset(skins, targetBones);
+        float bodyHeight = BodyHeightInModelUnits();
+        bool sameSpace = boneOffset <= 0.05f * Mathf.Max(bodyHeight, 1f);
+
+        foreach (var skin in skins)
+        {
+            if (!sameSpace) break;
+            int matchedHere = RetargetBones(skin, targetBones, ref emptyBones);
+            if (matchedHere > 0) merged++;
+            else Debug.LogWarning($"[attach] '{accessory.name}' shares no bone name with this character "
+                                  + $"(skin rooted at '{(skin.rootBone ? skin.rootBone.name : "")}'); it keeps its own rig");
         }
 
         // What the prefab carries but nothing points at once its skins follow this character: its copies of the
@@ -401,9 +417,26 @@ public class UmaContainerCharacter : UmaContainer
         }
         var dead = prefabNodes.Where(node => node && !keeps.Contains(node) && !stillUsed.Contains(node)).ToList();
 
+        // Where it hangs. An attach prefab retargets onto this character and follows from there; anything whose
+        // skins could not be retargeted (a toonprop's rig is a *flattened* copy of the right arm rooted at its own
+        // `Root`, not a character rig, so retargeting is refused above) is a held object and hangs off the hand
+        // joint the game names for exactly that - Hand_Attach_R/L.
+        Transform anchor = null;
+        if (!sameSpace || merged == 0)
+        {
+            bool left = skinBoneNames.Any(n => n.EndsWith("_L", StringComparison.Ordinal));
+            bool right = skinBoneNames.Any(n => n.EndsWith("_R", StringComparison.Ordinal));
+            string side = left && !right ? "_L" : "_R";
+            foreach (string candidate in new[] { "Hand_Attach" + side, "Wrist" + side,
+                                                 "Hand_Attach_R", "Hand_Attach_L", "Wrist_R", "Wrist_L" })
+            {
+                if (targetBones.TryGetValue(candidate, out anchor) && anchor) break;
+            }
+        }
+
         // under the node the body hangs off, so the character's height scale reaches any unskinned part too
         Transform holder = transform.Find("Position") ?? transform;
-        accessory.transform.SetParent(holder, false);
+        accessory.transform.SetParent(anchor != null ? anchor : holder, false);
         accessory.transform.localPosition = Vector3.zero;
         accessory.transform.localRotation = Quaternion.identity;
 
@@ -421,13 +454,35 @@ public class UmaContainerCharacter : UmaContainer
             DestroyImmediate(node.gameObject);
         }
         accessories.Add(accessory);
+        // where it ended up, in the same world units the export uses: the one thing a retarget can get wrong
+        // without failing is placing the geometry somewhere plausible-looking and wrong
+        Bounds? placed = null;
+        foreach (var renderer in accessory.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!placed.HasValue) { placed = renderer.bounds; continue; }
+            var union = placed.Value;
+            union.Encapsulate(renderer.bounds);
+            placed = union;
+        }
         Debug.Log($"[attach] '{accessory.name}' on {name}: {skins.Length} skin(s), {merged} retargeted, "
                   + $"{emptyBones.Count} prefab bone(s) released, "
                   + $"{(accessory.GetComponentsInChildren<Renderer>(true).Length)} renderer(s)"
                   + (unmatched.Count > 0
                       ? $", {unmatched.Count} bone(s) with no counterpart here: "
                         + string.Join(", ", unmatched.Take(8)) + (unmatched.Count > 8 ? " ..." : "")
-                      : ", every bone matched"));
+                      : ", every bone matched")
+                  + (placed.HasValue
+                      ? $", placed at ({placed.Value.center.x:F2},{placed.Value.center.y:F2},{placed.Value.center.z:F2}) "
+                        + $"size ({placed.Value.size.x:F2},{placed.Value.size.y:F2},{placed.Value.size.z:F2})"
+                      : ", nothing to place (no renderer)")
+                  + (anchor != null
+                      ? $", hanging off {anchor.name} at ({anchor.position.x:F2},{anchor.position.y:F2},{anchor.position.z:F2})"
+                      : ", retargeted onto the character")
+                  + $", rig is {boneOffset:F2} from the character's ({bodyHeight:F1}-unit body), "
+                  + (sameSpace ? "same space -> retarget" : "own space -> anchored")
+                  + (anchor != null && placed.HasValue
+                      ? $", {Vector3.Distance(placed.Value.center, anchor.position):F2} from that joint"
+                      : ""));
         return accessory;
     }
 
@@ -454,12 +509,98 @@ public class UmaContainerCharacter : UmaContainer
     }
 
     /// <summary>
+    /// Retargets one skin's deform bones onto this character by name, and reports how many matched.
+    ///
+    /// <see cref="MergeBone"/> is the same operation but refuses when the skin's root bone is not one this
+    /// character has - right for hair, whose root must be the head, wrong for a toon prop: its own `Root` is just
+    /// the prefab's container, and both shapes the family ships (a hand object weighted to `Wrist_R` and fingers,
+    /// a whole-body costume weighted to `Waist`/`Chest`/`Thighs`) have to bind without ever mentioning `Root`.
+    /// Bones with no counterpart are left alone and reported, so a partly matched prop still says so.
+    /// </summary>
+    private static int RetargetBones(SkinnedMeshRenderer skin, Dictionary<string, Transform> targetBones,
+                                     ref List<Transform> emptyBones)
+    {
+        Transform[] bones = skin.bones;
+        int matched = 0;
+        for (int i = 0; i < bones.Length; i++)
+        {
+            Transform bone = bones[i];
+            if (!bone) continue;
+            if (!targetBones.TryGetValue(bone.name, out Transform target) || !target) continue;
+
+            bones[i] = target;
+            matched++;
+            // keep whatever hung below the prefab's copy of this bone (the rest of its chain) under the character's
+            while (bone.childCount > 0) bone.GetChild(0).SetParent(target);
+            emptyBones.Add(bone);
+        }
+        skin.bones = bones;
+
+        if (skin.rootBone && targetBones.TryGetValue(skin.rootBone.name, out Transform root) && root)
+            skin.rootBone = root;
+        else if (matched > 0 && skin.rootBone)
+        {
+            // the root it was bound to is not ours; the first matched bone is the closest honest root
+            skin.rootBone = bones.Length > 0 && bones[0] ? bones[0] : skin.rootBone;
+        }
+        return matched;
+    }
+
+    /// <summary>
+    /// How far the prefab's own rig sits from this character's rig, as the median distance between a prefab bone
+    /// and the character bone of the same name, in model units.
+    ///
+    /// Near zero means the prefab was authored in this character's space - retargeting it is the identity, so
+    /// it is the right thing to do. Large means it carries its own space (a hand prop's rig is a flattened arm
+    /// around its own origin) and retargeting would stretch its geometry between the two.
+    /// </summary>
+    private float MedianBoneOffset(SkinnedMeshRenderer[] skins, Dictionary<string, Transform> targetBones)
+    {
+        var distances = new List<float>();
+        foreach (var skin in skins)
+        {
+            foreach (var bone in skin.bones)
+            {
+                if (!bone) continue;
+                if (!targetBones.TryGetValue(bone.name, out Transform target) || !target) continue;
+                // the prefab is still at identity, so its bone positions are already model units; this
+                // character's bones hang off the scaled "Position" node, so they have to come back out of it
+                distances.Add(Vector3.Distance(bone.position, transform.InverseTransformPoint(target.position)));
+            }
+        }
+        if (distances.Count == 0) return float.MaxValue;
+        distances.Sort();
+        return distances[distances.Count / 2];
+    }
+
+    /// <summary>This character's height in model units, from its renderers, undoing the "Position" node's scale.</summary>
+    private float BodyHeightInModelUnits()
+    {
+        Bounds? union = null;
+        foreach (var renderer in GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer) continue;
+            if (!union.HasValue) { union = renderer.bounds; continue; }
+            var grown = union.Value;
+            grown.Encapsulate(renderer.bounds);
+            union = grown;
+        }
+        if (!union.HasValue) return 0f;
+
+        // world -> container-local, then container-local -> model units through the node that carries the scale
+        float containerScale = Mathf.Max(1e-5f, Mathf.Abs(transform.lossyScale.y));
+        float local = union.Value.size.y / containerScale;
+        Transform scaled = transform.Find("Position");
+        float height = scaled ? Mathf.Abs(scaled.localScale.y) : 1f;
+        return height > 1e-5f ? local / height : local;
+    }
+
+    /// <summary>
     /// Marks the nodes of a prefab that must survive a retarget: those carrying a renderer or a collider, and
     /// every ancestor of one. Everything else in the prefab is the rig, which the retarget either takes over or
     /// leaves behind, and what it leaves behind is dead weight in an export.
     /// </summary>
-    private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)
-    {
+    private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)    {
         bool keepsSomething = node.GetComponent<Renderer>() != null || node.GetComponent<Collider>() != null;
         for (int i = 0; i < node.childCount; i++) keepsSomething |= MarkKeptNodes(node.GetChild(i), keeps);
         if (keepsSomething) keeps.Add(node);

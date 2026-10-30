@@ -37,6 +37,7 @@ line, runs it, and prints the interesting lines of the log afterwards.
 | See what a sound clip says | `./Tools/headless_export.ps1 -Transcript snd_voi_home_100100` |
 | Export a voice clip to mp3 with its line in the tag | `./Tools/headless_export.ps1 -ExportAudio snd_voi_story_041047007 -ExportClip 3 -Out D:/out/line.mp3` |
 | Check what you exported | `uv run Tools/pmx_inspect.py summary <file.pmx>`, `uv run Tools/vmd_inspect.py loop <file.vmd>` |
+| See where one material's geometry ended up | `uv run Tools/pmx_inspect.py bounds <file.pmx> --material attach` (a merged part that landed in the wrong place exports without an error, so this is the check) |
 
 ---
 
@@ -404,7 +405,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-ListChars` / `-ListCostumes` / `-ListProps [filter]` | - | Print and exit without loading |
 | `-ListTextures [filter]` | - | Print the character *texture* assets matching a substring and exit. Use a character id (`-ListTextures -ListTexturesFilter bdy1001_00`) to see what sets a character ships: the wet maps are the `_wet` twins of the dry ones, and any other set - the `_dirt` maps, for example - shows up here as its own name |
 | `-ListFamilies` / `-ListFamiliesFilter <text>` | - | Print the families under `3d/chara/` (body, head, tail, mini, common, prop, attach, richprop, sweat, toonprop) matching a substring and exit: how many manifest entries each holds, how many are prefabs, the naming forms the family is built from (digit runs masked, e.g. `pfb_toon_prop####_##`), and three samples. Metadata only - it reads the manifest and opens no bundle, so unlike `-Prop` it cannot trigger a download. A filter that selects one family also lists that family's folders (`attach1048_00`) with entry counts |
-| `-Attach <pattern>` | - | Wear the `3d/chara/attach` prefab(s) whose path contains `<pattern>` on the loaded character; repeatable, and every match is worn. Applied after the settle frames and before any screenshot or export, so the run measures the character as worn. An attach prefab carries a copy of the character rig, so this retargets its skins onto the character's bones by name - there is no placement to dial in. Ten characters ship the family; `-ListFamilies attach` lists their sets |
+| `-Attach <pattern>` | - | Wear or hold the `3d/chara/attach` and `3d/chara/toonprop` prefab(s) whose path contains `<pattern>` on the loaded character; it is an array, so several go `-Attach a,b` (`-Attach a -Attach b` is a binding error). Applied after the settle frames and before any screenshot or export, so the run measures the character as worn. Attach sets carry a copy of the character rig and are retargeted onto the character's bones by name; a toon prop measured to be in its own space is hung off `Hand_Attach_R/L` instead, which the log line says per prefab. Ten characters ship the attach family; `-ListFamilies attach` / `toonprop` lists them |
 
 ### Listing and plumbing
 

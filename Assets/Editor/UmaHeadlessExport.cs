@@ -68,11 +68,12 @@ using UnityEngine.Rendering;
 ///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
 ///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
 ///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short english, 2 unified)
-///   -umaAttach &lt;f&gt;      wear the 3d/chara/attach prefab(s) whose path contains &lt;f&gt; on the loaded
-///                        character (repeatable). Attachments go on after the settle frames and before any
-///                        screenshot or export, so the run measures the character as worn. An attach prefab
-///                        carries a copy of the character rig, so this retargets its skins onto the
-///                        character's bones by name - no placement to dial in.
+///   -umaAttach &lt;f&gt;      wear/hold the 3d/chara/attach or 3d/chara/toonprop prefab(s) whose path contains
+///                        &lt;f&gt; on the loaded character (repeatable: one -umaAttach per pattern). Applied after
+///                        the settle frames and before any screenshot or export, so the run measures the
+///                        character as worn. An attach prefab carries a copy of the character rig and is
+///                        retargeted onto the character's bones by name; a toon prop whose own rig sits in its
+///                        own space (measured per prefab) is hung off Hand_Attach_R/L instead.
 ///   -umaAPose            export models with the arms in the A-pose that recorded motions are relative to
 ///   -umaTextureVariants  also export the game's wet and dirt maps beside the dry ones and name them per
 ///                        material with wet=/dirt= tokens (off by default: about +80% texture payload)
@@ -1151,7 +1152,8 @@ public static class UmaHeadlessExport
         }
 
         var candidates = UmaViewerMain.Instance.AbChara
-            .Where(e => e.Name.StartsWith("3d/chara/attach/", StringComparison.Ordinal))
+            .Where(e => e.Name.StartsWith("3d/chara/attach/", StringComparison.Ordinal)
+                        || e.Name.StartsWith("3d/chara/toonprop/", StringComparison.Ordinal))
             .ToList();
 
         foreach (string pattern in patterns)
@@ -1164,8 +1166,7 @@ public static class UmaHeadlessExport
             {
                 Fail($"no attach prefab matches '{pattern}'; -umaListFamilies attach prints the family");
                 return false;
-            }
-            if (matches.Count > 1)
+            }            if (matches.Count > 1)
                 Debug.Log($"{Tag} '{pattern}' matches {matches.Count} attach prefabs, wearing all of them: "
                           + string.Join(", ", matches.Select(m => Path.GetFileName(m.Name))));
 

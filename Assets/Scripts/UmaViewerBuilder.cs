@@ -745,19 +745,23 @@ public class UmaViewerBuilder : MonoBehaviour
     }
 
     /// <summary>
-    /// The attach prefabs the loaded character can wear.
+    /// The prefabs the loaded character can wear or hold.
     ///
-    /// `3d/chara/attach/attach{id}_{set}/` is keyed by character id, not by costume: costume 00 for ten of them
-    /// (attach1048_00 holds six prefabs) and nothing else, which is why this is a character feature rather
-    /// than part of the prop list. `-umaListFamilies attach` prints the whole set.
+    /// Two families, because they attach in two different ways and only one of them is a rig:
+    /// `3d/chara/attach/attach{id}_00/` (ten characters, 1048 has 28) are accessory meshes skinned to a copy of the
+    /// character rig, so they are retargeted onto the character's bones and follow the animation.
+    /// `3d/chara/toonprop/toon_prop{id}_00/` (one or two per character) are held objects whose rig is a flattened
+    /// copy of an arm rooted at their own `Root`, so they hang off `Hand_Attach_R` rigidly instead. Both lists are
+    /// keyed by character id. `-umaListFamilies attach` / `toonprop` prints them.
     /// </summary>
     public List<UmaDatabaseEntry> AttachEntriesFor(UmaContainerCharacter character)
     {
         var entries = new List<UmaDatabaseEntry>();
         if (character == null || character.CharaEntry == null) return entries;
-        string prefix = $"3d/chara/attach/attach{character.CharaEntry.Id}_";
+        int id = character.CharaEntry.Id;
         return UmaViewerMain.Instance.AbChara
-            .Where(e => e.Name.StartsWith(prefix, StringComparison.Ordinal)
+            .Where(e => (e.Name.StartsWith($"3d/chara/attach/attach{id}_", StringComparison.Ordinal)
+                         || e.Name.StartsWith($"3d/chara/toonprop/toon_prop{id}_", StringComparison.Ordinal))
                         && Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
             .OrderBy(e => e.Name, StringComparer.Ordinal)
             .ToList();
