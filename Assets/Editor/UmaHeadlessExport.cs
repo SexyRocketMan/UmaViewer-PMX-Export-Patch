@@ -44,6 +44,11 @@ using UnityEngine.Rendering;
 ///                        character id), then exit. This is how a variant set is found rather than guessed
 ///                        at: the wet maps are the "..._wet" twins of the dry ones, so any other set the
 ///                        game ships would show up here as its own suffix.
+///   -umaListFamilies &lt;f&gt; print the family under 3d/chara/ (body, head, tail, mini, common, prop, attach,
+///                        richprop, sweat, toonprop) whose name contains &lt;f&gt; (empty = all), with how many
+///                        entries it holds, what its prefabs are called, and how many of them the prop
+///                        panel's "pfb_chr_prop" filter would show, then exit. Metadata only: this reads
+///                        manifest names and opens no bundle, so it cannot download anything.
 ///   -umaScanProps &lt;f&gt;    load every prop/scene matching &lt;f&gt; in turn and report its material health
 ///                        (textureless slots, missing shaders, resolved texture set), then exit
 ///   -umaScanCount &lt;n&gt;    how many props to scan, default 10
@@ -140,6 +145,8 @@ public static class UmaHeadlessExport
         public string ListPropsFilter = "";
         public bool ListTextures;
         public string ListTexturesFilter = "";
+        public bool ListFamilies;
+        public string ListFamiliesFilter = "";
         public string ScanProps = "";
         public int ScanCount = 10;
         /// <summary>
@@ -249,6 +256,10 @@ public static class UmaHeadlessExport
                         options.ListTextures = true;
                         if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListTexturesFilter = argv[++i];
                         break;
+                    case "-umaListFamilies":
+                        options.ListFamilies = true;
+                        if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListFamiliesFilter = argv[++i];
+                        break;
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaScanExport": options.ScanExport = true; break;
@@ -328,13 +339,14 @@ public static class UmaHeadlessExport
         }
 
         if (!options.ListChars && !options.ListCostumes && !options.ListProps && !options.ListTextures
+            && !options.ListFamilies
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
             && string.IsNullOrEmpty(options.ExportAudio)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
-                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaListTextures / -umaScanProps "
-                           + "/ -umaTranscript");
+                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaListTextures "
+                           + "/ -umaListFamilies / -umaScanProps / -umaTranscript");
             EditorApplication.Exit(2);
             return;
         }
@@ -543,6 +555,13 @@ public static class UmaHeadlessExport
                     if (options.ListTextures)
                     {
                         PrintTextures(options.ListTexturesFilter);
+                        Succeed();
+                        return;
+                    }
+
+                    if (options.ListFamilies)
+                    {
+                        PrintFamilies(options.ListFamiliesFilter);
                         Succeed();
                         return;
                     }
@@ -1355,6 +1374,92 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag} props/scenes ({props.Count} matching '{filter}'):");
         foreach (var entry in props.Take(2000)) Debug.Log($"{Tag}   {entry.Name}");
         if (props.Count > 2000) Debug.Log($"{Tag}   ... and {props.Count - 2000} more");
+    }
+
+    /// <summary>
+    /// The families under `3d/chara/`, with what each one holds.
+    ///
+    /// The viewer asks for four of them by name (body, head, tail, mini) and touches `common` and `prop`
+    /// through narrower paths; `attach`, `richprop`, `sweat` and `toonprop` are loaded into <see
+    /// cref="UmaViewerMain.AbChara"/> at startup and then never asked for. Whether that is a missing
+    /// feature or four families of non-character assets is a question about **names**, so this answers it
+    /// from names alone: `AbChara` comes from the manifest, so nothing here opens a bundle (and
+    /// `Config.DownloadMissingResources` cannot fire).
+    ///
+    /// The `names:` column masks digit runs (`pfb_chr_prop####_##`) so ten thousand entries collapse to
+    /// the handful of forms a family is actually built from - that is what shows whether the prop panel's
+    /// literal `pfb_chr_prop` filter (UmaViewerUI.cs:555) can see a family. The `panel` column then counts
+    /// what that filter would offer today, so "does widening it help" is measurable rather than assumed.
+    /// </summary>
+    private static void PrintFamilies(string filter)
+    {
+        var main = UmaViewerMain.Instance;
+        if (main?.AbChara == null)
+        {
+            Fail("no character database (did the viewer finish booting?)");
+            return;
+        }
+
+        // the same prefix UmaViewerMain.LoadDatabase filters on, so "family" here means the same thing it
+        // means there: everything under 3d/chara/
+        string charaPath = UmaDatabaseController.CharaPath;
+        var byFamily = new Dictionary<string, List<UmaDatabaseEntry>>(StringComparer.Ordinal);
+        foreach (var entry in main.AbChara)
+        {
+            if (entry == null || string.IsNullOrEmpty(entry.Name)) continue;
+            if (!entry.Name.StartsWith(charaPath, StringComparison.Ordinal)) continue;
+
+            string rest = entry.Name.Substring(charaPath.Length);
+            int slash = rest.IndexOf('/');
+            string family = slash > 0 ? rest.Substring(0, slash) : rest;
+            if (!byFamily.TryGetValue(family, out var list)) byFamily[family] = list = new List<UmaDatabaseEntry>();
+            list.Add(entry);
+        }
+
+        var families = byFamily.Keys
+            .Where(f => string.IsNullOrEmpty(filter) || f.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
+        Debug.Log($"{Tag} 3d/chara families ({families.Count} of {byFamily.Count} matching '{filter}', "
+                  + $"{main.AbChara.Count} entries under '{charaPath}'):");
+        Debug.Log($"{Tag}   family        entries prefabs  panel  prefab names");
+        foreach (string family in families)
+        {
+            var entries = byFamily[family];
+            int prefabs = entries.Count(e => Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase));
+            // exactly UmaViewerUI.cs's prop-panel predicate, so the column is what the panel shows
+            int panel = entries.Count(e => e.Name.Contains("pfb_chr_prop") && !e.Name.Contains("clothes"));
+            List<string> stems = entries
+                .Select(e => MaskDigits(Path.GetFileName(e.Name)))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .ToList();
+            string stemText = string.Join(" ", stems.Take(6)) + (stems.Count > 6 ? $" (+{stems.Count - 6})" : "");
+            Debug.Log($"{Tag}   {family,-12} {entries.Count,7} {prefabs,7} {panel,6}  {stemText}");
+
+            // three samples per family, sorted so the same run prints the same three
+            foreach (string sample in entries.Select(e => e.Name).OrderBy(n => n, StringComparer.Ordinal).Take(3))
+                Debug.Log($"{Tag}     e.g. {sample}");
+        }
+    }
+
+    /// <summary>Collapses a digit run to one `#`, so a family's naming form shows through its ids.</summary>
+    private static string MaskDigits(string name)
+    {
+        var masked = new System.Text.StringBuilder(name.Length);
+        bool inDigits = false;
+        foreach (char c in name)
+        {
+            bool digit = c >= '0' && c <= '9';
+            if (digit)
+            {
+                if (!inDigits) masked.Append('#');
+            }
+            else masked.Append(c);
+            inDigits = digit;
+        }
+        return masked.ToString();
     }
 
     /// <summary>

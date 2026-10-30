@@ -125,9 +125,14 @@ it with `blender --command extension install-file -r user_default -e <zip>` agai
 
 1. **Asset families (`docs/ASSET_FAMILIES.md`).** A member compared us against Umamusume Explorer: all ten `3d/chara/*`
    families are already in our database, but `attach`, `richprop`, `sweat` and `toonprop` are never used, and the prop
-   panel's filter is the literal substring `pfb_chr_prop` — likely why those families never show. Next: a
-   `-umaListChara <prefix>` metadata dump (≈15 lines) to count and sample each family, then decide whether to widen the
-   filter. The UmaExplorer repo itself has nothing to lift (it is a manifest browser, not a 3D tool).
+   panel's filter is the literal substring `pfb_chr_prop` — likely why those families never show. **The dump now exists
+   and has been run** (`-umaListFamilies [filter]`, also `-ListFamilies` / `-ListFamiliesFilter` on the wrapper; metadata
+   only, opens no bundle). It refutes "one wider substring": none of the four families is named `pfb_chr_prop*`. The
+   real names are `pfb_attach####_##_####_##` (321 entries, with their own `_wet`/`_dirt` maps — real shaded models),
+   `pfb_toon_prop####_##` (153), `pfb_rich_prop####_##` (3, i.e. barely a family), and `pfb_chr####_##[_face###]_sweatlocator`
+   (503 — locators, no geometry, so `sweat` stays out). So the fix is a filter that knows the prefix per family, not a
+   widened substring. Next: one `-umaProp pfb_attach1048_00_0001_00` load to prove those families load at all (it
+   downloads if absent — see the VPN caveat), then the panel predicate. The ASSET_FAMILIES table has the numbers.
 2. **Spork's look has never been compared with the viewer's.** The viewer draws its own Unity shaders; nothing has put
    a Spork-shaded uma in Blender beside the same uma in the viewer. The only Spork export that exists is 1063.
 3. **Decals need eyes**, not tests: see the trap above.

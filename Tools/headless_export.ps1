@@ -22,6 +22,11 @@
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -ShotYaws 0,45,-45,90 `
         -Screenshot D:/out/game_face.png -ShotOnly
     ./Tools/headless_export.ps1 -ListProps home10001
+    # what the ten 3d/chara families hold and what their prefabs are called - manifest names only, so
+    # this opens no bundle and downloads nothing. The filter needs its own parameter, exactly like
+    # -ListProps: after a [switch] the next bare word binds positionally to -Char
+    ./Tools/headless_export.ps1 -ListFamilies
+    ./Tools/headless_export.ps1 -ListFamilies -ListFamiliesFilter richprop
     # export every matching scene in one editor run, and report the ones that fail
     ./Tools/headless_export.ps1 -ScanProps "3d/env/race" -ScanCount 40 -ScanExport -ScanOut D:/scan
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
@@ -41,6 +46,8 @@ param(
     [string]$ListPropsFilter = "",
     [switch]$ListTextures,
     [string]$ListTexturesFilter = "",
+    [switch]$ListFamilies,
+    [string]$ListFamiliesFilter = "",
     [string]$ScanProps = "",
     [int]$ScanCount = 10,
     [switch]$ScanExport,
@@ -142,7 +149,7 @@ if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -179,6 +186,10 @@ if ($ListProps) {
 if ($ListTextures) {
     $arguments += "-umaListTextures"
     if ($ListTexturesFilter) { $arguments += $ListTexturesFilter }
+}
+if ($ListFamilies) {
+    $arguments += "-umaListFamilies"
+    if ($ListFamiliesFilter) { $arguments += $ListFamiliesFilter }
 }
 if ($ScanProps) {
     $arguments += @("-umaScanProps", $ScanProps, "-umaScanCount", $ScanCount)
