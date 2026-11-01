@@ -758,6 +758,25 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                           + $"{string.Join(", ", layer.Animator.GetCurrentAnimatorClipInfo(layer.Layer).Select(i => i.clip != null ? i.clip.name : "<null>"))}");
             }
 
+            // One physics step with the clip at 0, then the clip put back to 0 again, so that the first sampled
+            // frame is the clip's own first pose *and* a pose every system has already written. Sampling straight
+            // after the evaluation above catches a pose the pipeline has only half applied, because the layers
+            // that drive the head and the face - the locator and face layers - write their bones on the physics
+            // step rather than on an animator evaluation. Measured on a stride cycle: frames 0 and 1 recorded the
+            // identical pose and the motion only started at frame 2. And on a recording reported as "a jerk on the
+            // head/neck at the beginning", the head alone moved 78x its own typical step out of frame 0 while
+            // every other bone stepped normally (`vmd_inspect.py motion`, which now names the bone responsible).
+            yield return new WaitForFixedUpdate();
+            foreach (var layer in layers)
+            {
+                layer.Animator.Play(layer.StateHash, layer.Layer, 0f);
+            }
+            RestoreBonePose(poseBeforeSeek);
+            foreach (var layer in layers)
+            {
+                layer.Animator.Update(0f);
+            }
+
             for (int frame = 0; frame <= totalFrames; frame++)
             {
                 // One fixed step advances the animation by exactly 1/fps (captureDeltaTime is pinned),
