@@ -275,6 +275,24 @@ public class UmaContainerCharacter : UmaContainer
             InitBoneTransform[bone] = (bone.position, bone.rotation);
         }
 
+        // ... and every bone the rig puts *between* a skinned bone and the character root. Those are the control
+        // bones - UpBody_Ctrl, Waist, the IK targets - and they are not skinned, so nothing above ever captured
+        // them: ResetBodyPose() restores this table and nothing else, which left them wherever the session had
+        // put them. That is the whole class of bug behind a recording that comes out turned, or twisted, or
+        // jerking at the head while the viewport looks right: the motion's reference pose is built from the live
+        // rig, and whatever had moved a control bone by then is baked into every key. Measured on one clip, same
+        // model, spine offset against a known-good recording: 68.79 deg with the look-at solve on, 170.11 with it
+        // switched off after the character loaded, 34.91 with it switched off before loading - three values for one
+        // motion, because the reference was reading a pose rather than the rest pose.
+        foreach (var bone in bodySkinnedMeshRenderer.bones)
+        {
+            for (var node = bone.parent; node != null && node != transform; node = node.parent)
+            {
+                if (InitBoneTransform.ContainsKey(node)) continue;
+                InitBoneTransform[node] = (node.position, node.rotation);
+            }
+        }
+
         // The up-body control's rest transform, taken here with the rest table: this runs as the model is loaded,
         // before the animator or the look-at solve has a chance to move it (see the field's remarks).
         if (UpBodyBone != null)

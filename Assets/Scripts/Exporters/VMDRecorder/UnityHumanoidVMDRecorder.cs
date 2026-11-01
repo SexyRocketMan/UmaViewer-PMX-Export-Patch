@@ -384,7 +384,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     known ? Quaternion.Angle(world, stored.rot) : -1f,
                     known ? "true" : "false"));
             }
-            Debug.Log($"[VMD] reference pose dumped for {BoneDictionary.Count} bone(s)");
+            Debug.Log($"[VMD] reference pose dumped for {BoneDictionary.Count} bone(s); the rig's rest table "
+                      + $"covers {(characterContainer.InitBoneTransform != null ? characterContainer.InitBoneTransform.Count : 0)} transform(s)");
         }
 
         animator.enabled = true;
