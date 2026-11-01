@@ -53,21 +53,25 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
+    # Reference rows describe the pose the ghost captured, once per bone; the frame rows describe what was
+    # sampled. They share bone names, so they must be separated *here*: keyed into one dict, "the first entry is
+    # a reference row" is true for every bone and the whole per-frame analysis is skipped in silence.
     per_bone = defaultdict(list)
+    reference = []
     with open(sys.argv[1], encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
-            if line:
-                row = json.loads(line)
+            if not line:
+                continue
+            row = json.loads(line)
+            if row.get("role") == "reference":
+                reference.append(row)
+            else:
                 per_bone[row["bone"]].append(row)
 
     print(f"{'bone':12} {'n':>3} {'local d':>8} {'spread':>7} {'world d':>8} {'parent d':>8}  note")
     rows = []
-    reference = []
     for bone, entries in per_bone.items():
-        if entries[0].get("role") == "reference":
-            reference.append(entries[0])
-            continue
         if entries[0].get("role") == "skipped":
             # A bone the ghost chain does not represent, so it has no key of its own: whatever it holds is folded
             # into the recorded bone above it. Its rest rotation is usually not identity (the rig's Waist sits at

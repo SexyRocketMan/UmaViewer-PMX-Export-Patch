@@ -156,6 +156,9 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     static readonly bool GhostDumpEnabled =
         System.Environment.GetEnvironmentVariable("UMA_GHOST_DUMP") == "1";
     System.Text.StringBuilder ghostDump;
+    /// <summary>The recording session's hold on the look-at solve; released by <see cref="StopRecording"/>.</summary>
+    IDisposable lookAtForSession;
+
     /// <summary>The reference pose the ghost captured, one line per recorded bone; see <see cref="Initialize"/>.</summary>
     System.Text.StringBuilder referenceDump;
     public MorphRecorder morphRecorder;
@@ -590,6 +593,20 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         SetInitialPositionAndRotation();
         IsRecording = true;
 
+        // The look-at solve is off for the whole recording *session*, not just for the take a coroutine drives.
+        // It bends the spine chain towards the camera and the sampler reads exactly those bones, so a take whose
+        // reference was captured without it and whose frames were sampled with it carries the solve as a constant
+        // offset on the spine and everything above it - wrong in the file, right in the viewport. Suspending here
+        // rather than inside one path is what makes it not matter which button started the recording: the manual
+        // Record VMD path (`UmaViewerUI.RecordVMD`) calls Initialize() and StartRecording() itself and never
+        // reaches the auto-record coroutine, which is how a suspension placed in that coroutine (or only around
+        // the reference capture) left the manual path sampling a solved pose against an unsolved reference.
+        if (lookAtForSession == null)
+        {
+            var lookAtContainer = GetComponentInParent<UmaContainerCharacter>();
+            if (lookAtContainer != null) lookAtForSession = lookAtContainer.SuspendLookAt();
+        }
+
         foreach (var kvp in BoneDictionary)
         {
             if (kvp.Value != null)
@@ -765,15 +782,10 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         int movingBones = 0;
         bool looping = declaredLoop;
 
-        // The viewer's look-at solve is off for the take. It bends the spine and head towards the camera on top of
-        // the clip, and the recorder samples the very bones it is looking at, so a solved pose is written into the
-        // motion as though the animation had asked for it. Measured on one clip, look-at live against look-at off:
-        // 10.07 deg on the spine, 15.47 on the head, 1.99 on the chest - the leg, hip and root tracks do not change
-        // at all, because the solver only drives the spine chain. `ModelExporter` switches the same flag off before
-        // it writes a model; this is the recorder's half, and it is suspended rather than set so that what the
-        // viewer was showing is what it goes back to.
+        // The solve itself is held off by StartRecording() for the whole session (see there), so that every path -
+        // this coroutine, the manual Record VMD button, live recording - samples it the same way the reference was
+        // captured. What is left to do here is purge a solve that was applied *before* the session began.
         var characterContainer = GetComponentInParent<UmaContainerCharacter>();
-        var lookAtSuspended = characterContainer != null ? characterContainer.SuspendLookAt() : null;
         // TEMP-HARNESS
         if (GhostDumpEnabled) ghostDump = new System.Text.StringBuilder();
 
@@ -871,7 +883,6 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         {
             ManualSampling = false;
             Time.captureDeltaTime = previousCaptureDeltaTime;
-            lookAtSuspended?.Dispose();
             // the harness dump, when it was asked for; see GhostDumpEnabled
             if (ghostDump != null)
             {
@@ -1214,6 +1225,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public void StopRecording()
     {
         IsRecording = false;
+        lookAtForSession?.Dispose();
+        lookAtForSession = null;
         frameNumberSaved = FrameNumber;
         morphRecorderSaved = morphRecorder;
         FrameNumber = 0;
