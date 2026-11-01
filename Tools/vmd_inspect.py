@@ -6,6 +6,23 @@
 
   uv run vmd_inspect.py summary <file.vmd> [more.vmd ...]
   uv run vmd_inspect.py loop    <file.vmd> [--tolerance 1e-4]     # does frame 0 == last frame?
+  uv run vmd_inspect.py diff    <a.vmd> <b.vmd>                   # how two recordings of one action differ
+
+`diff` exists for a regression report: recordings made by one build look fine and the same action recorded by
+a later build comes out with "rotations shifted for several bones". It separates the two causes that look alike
+on screen, because they need different fixes:
+
+  * a **constant offset** on a bone - the difference between the two files is the same rotation on every frame.
+    Nothing about the sampling is wrong; the *basis* is, i.e. the pose the recorded local rotations are
+    relative to (a rest pose, an A-pose/T-pose change, or a bind-pose conversion). One bone in this state is a
+    rest-pose bug, and the offset's axis says which one: ~38.5 degrees about the arms' X is this project's
+    A-pose delta.
+  * a **varying** difference - the offset changes frame to frame. The poses themselves are being sampled or
+    timed differently (frame alignment, a duplicated first frame, the take being rewound to a different start),
+    so the fix is in the sampling, not the basis.
+
+It also reports bones that exist in only one file, and pairs up tracks that *moved to another bone* (a naming
+change: the rotations are identical, the names are not), which is the third way this shows up.
 
 `loop` is the check for "one button, no trimming in Blender": every bone has to be keyed on the last
 frame and that key has to repeat the first frame's pose, otherwise the motion jumps when it loops.
@@ -216,6 +233,169 @@ def _pose_map(keys: list) -> dict[str, list]:
     return poses
 
 
+# --- quaternion helpers, for `diff` -----------------------------------------------------------------------
+# VMD rotations are (x, y, z, w) floats. A quaternion and its negation are the same rotation, so every
+# comparison takes the absolute dot product; anything else reports a bone that has not moved as 180 degrees off.
+
+IDENTITY = (0.0, 0.0, 0.0, 1.0)
+
+
+def q_multiply(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+def q_conjugate(q):
+    return (-q[0], -q[1], -q[2], q[3])
+
+
+def q_angle_degrees(a, b) -> float:
+    """The rotation that takes `a` to `b`, in degrees, sign ambiguity folded away."""
+    dot = abs(sum(x * y for x, y in zip(a, b)))
+    return math.degrees(2.0 * math.acos(min(1.0, max(0.0, dot))))
+
+
+def q_axis(q):
+    """The unit axis a rotation turns about, sign chosen so `w` is positive; None when it barely turns."""
+    norm = math.sqrt(sum(c * c for c in q[:3]))
+    if norm < 1e-6:
+        return None
+    sign = -1.0 if q[3] < 0 else 1.0
+    return tuple(round(sign * c / norm, 3) for c in q[:3])
+
+
+def _pair_poses(a_motion: Motion, b_motion: Motion):
+    """Per bone: the frames both files key, and the two key dicts."""
+    poses_a = _pose_map(a_motion.bone_keys)
+    poses_b = _pose_map(b_motion.bone_keys)
+    shared = sorted(set(poses_a) & set(poses_b))
+    return poses_a, poses_b, shared
+
+
+def _classify(poses_a, poses_b, name, offset_tolerance, spread_tolerance):
+    """One bone's rows: how far apart the two recordings are, and which of the two ways.
+
+    The test is the *angle* of the per-frame difference, not the quaternion: a basis error multiplies the
+    stored rotation on one side or the other, and both spellings leave that angle constant while the axis
+    moves (a world-side basis) or stays put (a local/bind-side one). A sampling difference changes the
+    angle itself, frame to frame. Judging by the first frame alone is what let an earlier version of this
+    report call a take "identical" when the difference only started on frame 2 - so it looks at every frame:
+    the biggest difference reached, and how much that difference wanders.
+    """
+    by_a = {k.frame: k for k in poses_a[name]}
+    by_b = {k.frame: k for k in poses_b[name]}
+    frames = sorted(set(by_a) & set(by_b))
+    if not frames:
+        return None
+    # the difference *as a rotation*, frame by frame: A's rotation in B's frame
+    offsets = [q_multiply(q_conjugate(by_b[f].rotation), by_a[f].rotation) for f in frames]
+    angles = [q_angle_degrees(o, IDENTITY) for o in offsets]
+    worst = max(angles)
+    wander = worst - min(angles)                     # how much the difference's size changes
+    # the frame that differs most speaks for the bone; its axis is the one worth naming
+    index = angles.index(worst)
+    axes = [q_axis(o) for o in offsets if q_axis(o) is not None]
+    axis_wander = 0.0
+    if axes:
+        reference = axes[0]
+        axis_wander = max(math.degrees(math.acos(min(1.0, max(-1.0, abs(sum(x * y for x, y in
+                                                                             zip(reference, axis)))))))
+                          for axis in axes)
+    position_delta = max(math.dist(by_a[f].position, by_b[f].position) for f in frames)
+    if worst <= offset_tolerance:
+        kind = "same"
+    elif wander <= spread_tolerance:
+        kind = "offset"
+    else:
+        kind = "varies"
+    return {
+        "bone": name,
+        "kind": kind,
+        "offset": worst,
+        "spread": wander,
+        "axis": q_axis(offsets[index]),
+        "axis_wander": axis_wander,
+        "position": position_delta,
+        "frames": len(frames),
+    }
+
+
+def cmd_diff(paths: list[str], args) -> int:
+    a_path, b_path = paths[0], paths[1]
+    a_motion, b_motion = read_vmd(a_path), read_vmd(b_path)
+    print(f"== A {a_path} (model {a_motion.model_name!r})")
+    print(f"== B {b_path} (model {b_motion.model_name!r})")
+
+    for tag, motion in (("A", a_motion), ("B", b_motion)):
+        frames = sorted({k.frame for k in motion.bone_keys})
+        print(f"   {tag}: {len(motion.bone_keys)} bone keys over {len(frames)} frames "
+              f"[{frames[0] if frames else '-'}..{frames[-1] if frames else '-'}], "
+              f"{len({k.name for k in motion.bone_keys})} bones, {len(motion.morph_keys)} morph keys")
+
+    poses_a, poses_b, shared = _pair_poses(a_motion, b_motion)
+    only_a = sorted(set(poses_a) - set(poses_b))
+    only_b = sorted(set(poses_b) - set(poses_a))
+
+    if only_a or only_b:
+        print(f"   names: {len(only_a)} bone(s) only in A, {len(only_b)} only in B")
+        if only_a:
+            print(f"      only in A: {only_a[:8]}")
+        if only_b:
+            print(f"      only in B: {only_b[:8]}")
+        # a track that merely changed name: identical rotations under a different bone name
+        signature = {}
+        for name in only_b:
+            first = min(poses_b[name], key=lambda k: k.frame)
+            signature.setdefault(tuple(round(c, 3) for c in first.rotation), name)
+        for name in only_a:
+            first = min(poses_a[name], key=lambda k: k.frame)
+            twin = signature.get(tuple(round(c, 3) for c in first.rotation))
+            if twin:
+                print(f"      A's {name!r} has B's {twin!r} first-frame rotation: the track moved bone")
+
+    rows = [row for row in (_classify(poses_a, poses_b, name, args.offset_tolerance, args.spread_tolerance)
+                            for name in shared) if row]
+    rows.sort(key=lambda row: -row["offset"])
+    tally: dict[str, int] = {}
+    for row in rows:
+        tally[row["kind"]] = tally.get(row["kind"], 0) + 1
+    worst_varying = max((row["spread"] for row in rows if row["kind"] == "varies"), default=0.0)
+    print(f"   {len(rows)} bone(s) in both files: {tally.get('same', 0)} identical, "
+          f"{tally.get('offset', 0)} constant offset, {tally.get('varies', 0)} varying "
+          f"(worst frame-to-frame spread {worst_varying:.2f} deg)")
+
+    for kind, headline in (("offset", "constant offset: the basis these rotations are relative to differs"),
+                           ("varies", "varying: the pose sampled at each frame differs")):
+        selected = [row for row in rows if row["kind"] == kind][:args.top]
+        if not selected:
+            continue
+        print(f"\n   {headline}")
+        for row in selected:
+            side = "axis steady (local/bind side)" if row["axis_wander"] <= 5.0 \
+                else f"axis wanders {row['axis_wander']:.0f} deg (world side)"
+            print(f"      {row['bone']:24} {row['offset']:7.2f} deg  wander {row['spread']:6.2f}  "
+                  f"axis {row['axis']} {side}  dpos {row['position']:.5f}  {row['frames']} frames")
+
+    for row in rows:
+        if row["kind"] != "same" and row["position"] > args.position_tolerance:
+            print(f"   note: {row['bone']} also translates {row['position']:.5f} between the two files")
+            break
+
+    # morphs, coarsely: which names move in one file and not the other
+    moving_a = {k.name for k in a_motion.morph_keys}
+    moving_b = {k.name for k in b_motion.morph_keys}
+    if moving_a or moving_b:
+        print(f"   morphs: {len(moving_a)} in A, {len(moving_b)} in B, "
+              f"{len(moving_a - moving_b)} only in A, {len(moving_b - moving_a)} only in B")
+    return 0
+
+
 def cmd_loop(paths: list[str], args) -> int:
     ok = True
     for path in paths:
@@ -300,8 +480,20 @@ def main() -> int:
     loop.add_argument("--rotation-tolerance", type=float, default=1e-3,
                       help="max quaternion deviation between the first and last frame "
                            "(1e-3 ~ 0.1 degrees; physics driven bones never close exactly)")
+    diff = sub.add_parser("diff", help="how two recordings of one action differ: basis or sampling")
+    diff.add_argument("paths", nargs=2)
+    diff.add_argument("--offset-tolerance", type=float, default=1.0,
+                      help="a bone whose difference is at or below this many degrees counts as identical")
+    diff.add_argument("--spread-tolerance", type=float, default=2.0,
+                      help="how much the per-frame difference may wander before it counts as varying "
+                           "rather than a constant offset")
+    diff.add_argument("--top", type=int, default=15,
+                      help="how many bones of each kind to name")
+    diff.add_argument("--position-tolerance", type=float, default=1e-4,
+                      help="how much translation may differ before it is mentioned")
     args = parser.parse_args()
-    return {"summary": cmd_summary, "loop": cmd_loop, "motion": cmd_motion}[args.cmd](args.paths, args)
+    return {"summary": cmd_summary, "loop": cmd_loop, "motion": cmd_motion, "diff": cmd_diff}[args.cmd](
+        args.paths, args)
 
 
 if __name__ == "__main__":
