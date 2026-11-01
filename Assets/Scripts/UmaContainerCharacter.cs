@@ -32,6 +32,19 @@ public class UmaContainerCharacter : UmaContainer
     public GameObject UpBodyBone;
     public Vector3 UpBodyPosition;
     public Quaternion UpBodyRotation;
+    /// <summary>
+    /// The up-body control's transform as the model was *loaded*, captured in the same pass as
+    /// <see cref="InitBoneTransform"/> - before anything animates the rig. <see cref="UpBodyReset"/> restores this
+    /// rather than <see cref="UpBodyPosition"/>/<see cref="UpBodyRotation"/>, which are read in
+    /// <see cref="Initialize"/> and therefore hold whatever pose the rig happened to be in by then: the default
+    /// idle starts as soon as a character loads, and the look-at solve moves this very bone. Restoring a cached
+    /// pose instead of the rest pose is what puts a session-dependent turn into anything that samples the rig -
+    /// measured, in a recorded motion, as a constant 34 to 180 degrees of yaw on the spine depending on what state
+    /// the viewer was in when the character loaded.
+    /// </summary>
+    Vector3 UpBodyRestPosition;
+    Quaternion UpBodyRestRotation;
+    bool hasUpBodyRest;
     public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneTransform;
 
     [Header("Face")]
@@ -260,6 +273,15 @@ public class UmaContainerCharacter : UmaContainer
         foreach (var bone in bodySkinnedMeshRenderer.bones)
         {
             InitBoneTransform[bone] = (bone.position, bone.rotation);
+        }
+
+        // The up-body control's rest transform, taken here with the rest table: this runs as the model is loaded,
+        // before the animator or the look-at solve has a chance to move it (see the field's remarks).
+        if (UpBodyBone != null)
+        {
+            UpBodyRestPosition = UpBodyBone.transform.localPosition;
+            UpBodyRestRotation = UpBodyBone.transform.localRotation;
+            hasUpBodyRest = true;
         }
     }
 
@@ -824,11 +846,11 @@ public class UmaContainerCharacter : UmaContainer
 
     public void UpBodyReset()
     {
-        if (UpBodyBone)
-        {
-            UpBodyBone.transform.localPosition = UpBodyPosition;
-            UpBodyBone.transform.localRotation = UpBodyRotation;
-        }
+        if (!UpBodyBone) return;
+        // the load-time rest transform when it was captured, and only otherwise the value Initialize() read from
+        // whatever pose the rig was already in - see the remarks on UpBodyRestRotation
+        UpBodyBone.transform.localPosition = hasUpBodyRest ? UpBodyRestPosition : UpBodyPosition;
+        UpBodyBone.transform.localRotation = hasUpBodyRest ? UpBodyRestRotation : UpBodyRotation;
     }
 
     public void CreateIK()
