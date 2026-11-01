@@ -202,6 +202,28 @@ def cmd_motion(paths: list[str], args) -> int:
                 print(f"   !! the first frame is {steps[0] / typical:.1f}x the typical step: it looks like a "
                       f"pose the animation never had (a T-pose or rest pose captured before playback)")
                 ok = False
+            # The global step hides which bones are responsible, and a lead-in pop is usually one chain (the
+            # recorder's own lead-in drop is judged on a sum over every bone, so a pop that is large on a few
+            # bones and small overall never reaches its threshold).
+            openings = []
+            for name, keys in per_bone.items():
+                by_frame = {k.frame: k.rotation for k in keys}
+                deltas = []
+                for index in range(len(frames) - 1):
+                    a, b = by_frame.get(frames[index]), by_frame.get(frames[index + 1])
+                    if a is None or b is None:
+                        continue
+                    deltas.append(min(max(abs(x - y) for x, y in zip(a, b)),
+                                      max(abs(x + y) for x, y in zip(a, b))))
+                if len(deltas) >= 4:
+                    own_typical = sorted(deltas[1:])[len(deltas[1:]) // 2]
+                    if own_typical > 0 and deltas[0] > args.first_step_factor * own_typical:
+                        openings.append((deltas[0] / own_typical, name, deltas[0], own_typical))
+            if openings:
+                openings.sort(reverse=True)
+                print("   bones that open with an outlier step (own first step / own typical):")
+                for ratio, name, first, own_typical in openings[:6]:
+                    print(f"      {name:20} {ratio:5.1f}x   {first:.4f} vs {own_typical:.4f}")
 
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
