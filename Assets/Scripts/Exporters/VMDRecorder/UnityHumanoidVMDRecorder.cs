@@ -582,6 +582,41 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         // after SaveFrame, because that is where GhostAll() sets the ghost values this frame's sample used
         if (ghostDump != null && boneGhost != null)
         {
+            // The bones the ghost chain does not represent: a recorded bone whose live parent is not its MMD
+            // parent (the rig has UpBody_Ctrl and Waist between Hip and Spine, and nothing like them in the MMD
+            // chain). Their rotation cannot be written as a key of its own, so whatever they hold at sample time
+            // ends up folded into the recorded bone's local rotation - which is how an upper-body-only twist with
+            // untouched legs can appear in a motion that looks right in the viewport.
+            var skipped = new System.Collections.Generic.HashSet<Transform>();
+            foreach (var pair in boneGhost.GhostDictionary)
+            {
+                if (!BoneDictionary.ContainsKey(pair.Key) || BoneDictionary[pair.Key] == null) continue;
+                for (var node = BoneDictionary[pair.Key].parent;
+                     node != null && node != transform && !IsRecordedBone(node);
+                     node = node.parent)
+                {
+                    skipped.Add(node);
+                }
+            }
+            foreach (var node in skipped)
+            {
+                var euler = node.localRotation.eulerAngles;
+                string chainLine = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{{\"frame\":{0},\"bone\":\"{1}\",\"role\":\"skipped\",\"liveLocal\":[{2:F6},{3:F6},{4:F6},{5:F6}],"
+                    + "\"liveWorld\":[{6:F6},{7:F6},{8:F6},{9:F6}],"
+                    + "\"ghostLocal\":[0,0,0,1],\"ghostWorld\":[0,0,0,1],"
+                    + "\"liveParentWorld\":[{10:F6},{11:F6},{12:F6},{13:F6}],\"ghostParentWorld\":[0,0,0,1],"
+                    + "\"liveParent\":\"{14}\",\"ghostParent\":\"<not represented>\"}}",
+                    FrameNumber, node.name,
+                    node.localRotation.x, node.localRotation.y, node.localRotation.z, node.localRotation.w,
+                    node.rotation.x, node.rotation.y, node.rotation.z, node.rotation.w,
+                    node.parent != null ? node.parent.rotation.x : 0f,
+                    node.parent != null ? node.parent.rotation.y : 0f,
+                    node.parent != null ? node.parent.rotation.z : 0f,
+                    node.parent != null ? node.parent.rotation.w : 1f,
+                    node.parent != null ? node.parent.name : "<none>");
+                ghostDump.AppendLine(chainLine);
+            }
             foreach (var pair in boneGhost.GhostDictionary)
             {
                 if (pair.Value.ghost == null || !pair.Value.enabled) continue;
@@ -617,6 +652,17 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             }
         }
         FrameNumber++;
+    }
+
+    /// <summary>Whether a transform is one of the bones the recorder writes a key for.</summary>
+    bool IsRecordedBone(Transform node)
+    {
+        if (BoneDictionary == null) return false;
+        foreach (var pair in BoneDictionary)
+        {
+            if (pair.Value == node) return true;
+        }
+        return false;
     }
 
     /// <summary>

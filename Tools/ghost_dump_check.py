@@ -64,6 +64,17 @@ def main() -> int:
     print(f"{'bone':12} {'n':>3} {'local d':>8} {'spread':>7} {'world d':>8} {'parent d':>8}  note")
     rows = []
     for bone, entries in per_bone.items():
+        if entries[0].get("role") == "skipped":
+            # A bone the ghost chain does not represent, so it has no key of its own: whatever it holds is folded
+            # into the recorded bone above it. Its rest rotation is usually not identity (the rig's Waist sits at
+            # -2.2 degrees), so the question is not "is it at rest" but "does it move over the take" - a pose that
+            # moves here is animation the recording has no way to express.
+            angle = [q_angle_degrees(tuple(e["liveLocal"]), (0.0, 0.0, 0.0, 1.0)) for e in entries]
+            spread = max(angle) - min(angle)
+            note = ("NOT REPRESENTED and it moves - the recording cannot express this" if spread > 1.0
+                    else "not represented, but constant (rig rest folded in)")
+            rows.append((spread, bone, len(entries), spread, -1.0, -1.0, note))
+            continue
         local = [q_angle_degrees(tuple(e["ghostLocal"]), tuple(e["liveLocal"])) for e in entries]
         world = [q_angle_degrees(tuple(e["ghostWorld"]), tuple(e["liveWorld"])) for e in entries]
         parent = [q_angle_degrees(tuple(e["liveParentWorld"]), tuple(e["ghostParentWorld"])) for e in entries]
@@ -74,21 +85,28 @@ def main() -> int:
         rows.append((max(local), bone, len(entries), spread, max(world), max(parent), note))
 
     for local_delta, bone, count, spread, world_delta, parent_delta, note in sorted(rows, reverse=True):
-        print(f"{bone:12} {count:>3} {local_delta:>8.2f} {spread:>7.2f} {world_delta:>8.2f} "
-              f"{parent_delta:>8.2f}  {note}")
+        world_text = "     -" if world_delta < 0 else f"{world_delta:8.2f}"
+        parent_text = "     -" if parent_delta < 0 else f"{parent_delta:8.2f}"
+        print(f"{bone:12} {count:>3} {local_delta:>8.2f} {spread:>7.2f} {world_text} "
+              f"{parent_text}  {note}")
 
     if not rows:
         print("no rows in the dump")
         return 1
-    converting = [r for r in rows if r[0] > 1.0]
+    converting = [r for r in rows if r[0] > 1.0 and r[4] >= 0]
     moving = [r for r in converting if r[3] >= 2.0]
+    skipped = [r for r in rows if r[4] < 0 and r[0] > 1.0]
     print(f"\n{len(rows)} bone(s): {len(converting)} recorded through a frame conversion, "
-          f"{len(moving)} of those following something that moves with the animation")
+          f"{len(moving)} of those following something that moves with the animation, "
+          f"{len(skipped)} outside the ghost chain that move over the take")
+    if skipped:
+        print("no key can express these, so they are folded into the bone above them: "
+              + ", ".join(r[1] for r in skipped))
     if moving:
         print("worth looking at first: " + ", ".join(r[1] for r in sorted(moving, reverse=True)[:6]))
-    else:
-        print("every conversion is constant: nothing about the animation is being recorded through a "
-              "frame that changes over the take")
+    if not moving and not skipped:
+        print("every conversion is constant and every skipped chain bone is at rest: nothing about the "
+              "animation is being recorded through a frame that changes over the take")
     return 0
 
 
