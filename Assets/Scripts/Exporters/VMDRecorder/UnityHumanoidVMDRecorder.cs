@@ -156,6 +156,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     static readonly bool GhostDumpEnabled =
         System.Environment.GetEnvironmentVariable("UMA_GHOST_DUMP") == "1";
     System.Text.StringBuilder ghostDump;
+    /// <summary>The reference pose the ghost captured, one line per recorded bone; see <see cref="Initialize"/>.</summary>
+    System.Text.StringBuilder referenceDump;
     public MorphRecorder morphRecorder;
     public MorphRecorder morphRecorderSaved;
 
@@ -351,6 +353,40 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
         UmaAPose.BackToTPose(BoneDictionary[BoneNames.左腕], BoneDictionary[BoneNames.右腕]);
         
+        // The reference pose, captured the moment the ghost captured it. Every rotation in the take is written as a
+        // delta from this, so if a bone is not where the model's rest pose has it here, the whole take is rotated by
+        // that much - and the take looks wrong while the viewport looks right. Dumped with UMA_GHOST_DUMP=1 because
+        // a reported recording cannot be argued about without it.
+        if (GhostDumpEnabled)
+        {
+            referenceDump = new System.Text.StringBuilder();
+            foreach (var pair in BoneDictionary)
+            {
+                if (pair.Value == null) continue;
+                bool known = false;
+                (Vector3 pos, Quaternion rot) stored = default;
+                if (characterContainer.InitBoneTransform != null)
+                {
+                    known = characterContainer.InitBoneTransform.TryGetValue(pair.Value, out stored);
+                }
+                var live = pair.Value.localRotation;
+                var euler = live.eulerAngles;
+                // `InitBoneTransform` stores world transforms, so the comparison has to be world to world - a local
+                // against a world reads as a spurious 180 degrees on every bone deep in a chain.
+                var world = pair.Value.rotation;
+                referenceDump.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{{\"role\":\"reference\",\"bone\":\"{0}\",\"liveLocal\":[{1:F6},{2:F6},{3:F6},{4:F6}],"
+                    + "\"liveWorld\":[{5:F6},{6:F6},{7:F6},{8:F6}],"
+                    + "\"offRest\":{9:F3},\"inRestTable\":{10}}}",
+                    pair.Key,
+                    live.x, live.y, live.z, live.w,
+                    world.x, world.y, world.z, world.w,
+                    known ? Quaternion.Angle(world, stored.rot) : -1f,
+                    known ? "true" : "false"));
+            }
+            Debug.Log($"[VMD] reference pose dumped for {BoneDictionary.Count} bone(s)");
+        }
+
         animator.enabled = true;
         animator.Play(state.shortNameHash, 0, state.normalizedTime);
         lookAtSuspendedDuringInit?.Dispose();
@@ -840,9 +876,11 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             if (ghostDump != null)
             {
                 string dumpPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ghost_dump.jsonl");
-                System.IO.File.WriteAllText(dumpPath, ghostDump.ToString());
+                System.IO.File.WriteAllText(dumpPath,
+                    (referenceDump != null ? referenceDump.ToString() : "") + ghostDump);
                 Debug.Log($"[VMD] ghost dump: {ghostDump.Length} chars to {dumpPath}");
                 ghostDump = null;
+                referenceDump = null;
             }
             foreach (var pair in previousSpeeds)
             {

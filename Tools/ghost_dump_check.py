@@ -63,7 +63,11 @@ def main() -> int:
 
     print(f"{'bone':12} {'n':>3} {'local d':>8} {'spread':>7} {'world d':>8} {'parent d':>8}  note")
     rows = []
+    reference = []
     for bone, entries in per_bone.items():
+        if entries[0].get("role") == "reference":
+            reference.append(entries[0])
+            continue
         if entries[0].get("role") == "skipped":
             # A bone the ghost chain does not represent, so it has no key of its own: whatever it holds is folded
             # into the recorded bone above it. Its rest rotation is usually not identity (the rig's Waist sits at
@@ -90,8 +94,22 @@ def main() -> int:
         print(f"{bone:12} {count:>3} {local_delta:>8.2f} {spread:>7.2f} {world_text} "
               f"{parent_text}  {note}")
 
+    if reference:
+        off_rest = sorted((r for r in reference if r.get("offRest", -1) >= 0),
+                          key=lambda r: -r["offRest"])
+        print(f"\nreference pose (what every recorded rotation is a delta from), {len(reference)} bone(s):")
+        if not off_rest:
+            print("   no bone was in the rig's rest table, so nothing to compare")
+        else:
+            far = [r for r in off_rest if r["offRest"] > 5.0]
+            print(f"   {len(far)} bone(s) captured more than 5 deg away from the rig's rest pose")
+            for r in far[:10]:
+                print(f"      {r['bone']:20} {r['offRest']:8.2f} deg from rest")
+            if not far:
+                print("   every bone is at its rest pose: the reference cannot be what rotates the take")
+
     if not rows:
-        print("no rows in the dump")
+        print("no per-frame rows in the dump")
         return 1
     converting = [r for r in rows if r[0] > 1.0 and r[4] >= 0]
     moving = [r for r in converting if r[3] >= 2.0]
