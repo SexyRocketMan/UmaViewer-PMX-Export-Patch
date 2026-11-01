@@ -600,6 +600,47 @@ public class UmaContainerCharacter : UmaContainer
         EnableEyeTracking = isOn;
     }
 
+    /// <summary>
+    /// The look-at solve, switched off for the duration of a caller's sampling and put back afterwards.
+    ///
+    /// <see cref="EnableEyeTracking"/> is what gates the solve, but by itself it only takes effect on this
+    /// component's next <c>FixedUpdate</c>. A caller that samples the pose it is looking at *now* - the vmd
+    /// recorder does exactly that - would therefore capture the solved pose on its first frame, and since
+    /// <c>CloseRecordedLoop</c> copies that frame onto the last one, at both ends of a loop. So this turns the
+    /// solver off immediately as well. <c>ModelExporter</c> switches the same flag off before it writes a model;
+    /// this is the recorder's half of the same rule.
+    /// </summary>
+    public IDisposable SuspendLookAt()
+    {
+        bool previous = EnableEyeTracking;
+        EnableEyeTracking = false;
+        if (IK != null) IK.enabled = false;
+        return new LookAtScope(this, previous);
+    }
+
+    /// <summary>Puts the setting back when the caller's sampling is over; see <see cref="SuspendLookAt"/>.</summary>
+    sealed class LookAtScope : IDisposable
+    {
+        readonly UmaContainerCharacter _container;
+        readonly bool _eyeTracking;
+        bool _disposed;
+
+        public LookAtScope(UmaContainerCharacter container, bool eyeTracking)
+        {
+            _container = container;
+            _eyeTracking = eyeTracking;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            // the component's own FixedUpdate re-enables the solver once the flag is back, so restoring the
+            // flag is the whole job - and it happens whether or not this container ever had an IK created
+            if (_container != null) _container.EnableEyeTracking = _eyeTracking;
+        }
+    }
+
     public void SetFaceOverrideData(bool isOn)
     {
         FaceOverrideData?.SetEnable(isOn);

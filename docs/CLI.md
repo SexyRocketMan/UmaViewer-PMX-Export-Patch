@@ -148,6 +148,13 @@ Two things about the FBX worth knowing before comparing it with the PMX:
   against the animator; `deterministic` is the default and the one to use unless you are comparing.
 * `-RecordReduction <n>` keeps every `n`th key. `0` (the default) uses `Config.json`'s
   `VmdKeyReductionLevel`, which is every frame.
+* **The viewer's look-at solve is off while a take is recorded.** It bends the spine and head towards the
+  camera on top of the clip, and the sampler reads the very bones it drives, so a solved pose would be
+  written into the motion as though the animation asked for it - measured on one clip, 10.07° on the spine,
+  15.47° on the head and 1.99° on the chest, with the legs, hips and root untouched because the solver only
+  drives the spine chain. `UmaContainerCharacter.SuspendLookAt()` switches it off for the take and puts the
+  setting back afterwards, so the setting a user left on is still on when the recording ends. `ModelExporter`
+  has always done the same before writing a pmx.
 
 ### 4. Model and motion in one run
 

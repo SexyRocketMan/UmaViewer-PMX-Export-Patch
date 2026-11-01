@@ -623,6 +623,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         int movingBones = 0;
         bool looping = declaredLoop;
 
+        // The viewer's look-at solve is off for the take. It bends the spine and head towards the camera on top of
+        // the clip, and the recorder samples the very bones it is looking at, so a solved pose is written into the
+        // motion as though the animation had asked for it. Measured on one clip, look-at live against look-at off:
+        // 10.07 deg on the spine, 15.47 on the head, 1.99 on the chest - the leg, hip and root tracks do not change
+        // at all, because the solver only drives the spine chain. `ModelExporter` switches the same flag off before
+        // it writes a model; this is the recorder's half, and it is suspended rather than set so that what the
+        // viewer was showing is what it goes back to.
+        var characterContainer = GetComponentInParent<UmaContainerCharacter>();
+        var lookAtSuspended = characterContainer != null ? characterContainer.SuspendLookAt() : null;
+
         // Rewind to the start of the clip (see the remarks above): the pose is saved, every recorded layer
         // is put back on time 0, the pose is restored and one animator evaluation applies the clip on top.
         var poseBeforeSeek = SnapshotBonePose();
@@ -688,6 +698,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         {
             ManualSampling = false;
             Time.captureDeltaTime = previousCaptureDeltaTime;
+            lookAtSuspended?.Dispose();
             foreach (var pair in previousSpeeds)
             {
                 if (pair.Key != null) pair.Key.speed = pair.Value;
