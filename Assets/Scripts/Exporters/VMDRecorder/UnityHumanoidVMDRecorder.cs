@@ -314,6 +314,14 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         var state = animator.GetCurrentAnimatorStateInfo(0);
         animator.enabled = false;
 
+        // The look-at solve is off while the reference pose is built. `BoneGhost` captures the live world
+        // rotations below, and every recorded rotation is written as a delta from that capture - so a solve that
+        // had already bent the spine here is not a pose in one frame, it is the frame every rotation of the take is
+        // expressed in. SuspendLookAt is used rather than the flag alone because it also disables the solver now,
+        // and this capture happens before the container's next FixedUpdate. Restored at the end of Initialize, so
+        // the viewer gets its setting back.
+        var lookAtSuspendedDuringInit = characterContainer != null ? characterContainer.SuspendLookAt() : null;
+
         // Set to T-Pose
         characterContainer.ResetBodyPose();
         characterContainer.UpBodyReset();
@@ -345,6 +353,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         
         animator.enabled = true;
         animator.Play(state.shortNameHash, 0, state.normalizedTime);
+        lookAtSuspendedDuringInit?.Dispose();
     }
 
     private void FixedUpdate()
@@ -731,6 +740,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         var lookAtSuspended = characterContainer != null ? characterContainer.SuspendLookAt() : null;
         // TEMP-HARNESS
         if (GhostDumpEnabled) ghostDump = new System.Text.StringBuilder();
+
+        // Switching the solver off stops it writing, but its last write is still on the bones - and the snapshot
+        // below is what frame 0 gets built from, so a spine the solve had bent comes back as the take's opening
+        // pose. One animator evaluation per layer lays the clip's own curves back over those bones first, which is
+        // what makes the snapshot read the pose the *clip* is showing. Measured against a take recorded with the
+        // solve switched off from the start: without this purge the opening frame carries the solved head.
+        foreach (var layer in layers)
+        {
+            layer.Animator.Update(0f);
+        }
 
         // Rewind to the start of the clip (see the remarks above): the pose is saved, every recorded layer
         // is put back on time 0, the pose is restored and one animator evaluation applies the clip on top.
