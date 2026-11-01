@@ -155,6 +155,13 @@ Two things about the FBX worth knowing before comparing it with the PMX:
   drives the spine chain. `UmaContainerCharacter.SuspendLookAt()` switches it off for the take and puts the
   setting back afterwards, so the setting a user left on is still on when the recording ends. `ModelExporter`
   has always done the same before writing a pmx.
+* **`UMA_GHOST_DUMP=1` records what the sampler actually used** to `ghost_dump.jsonl` in the temp directory:
+  per bone and per frame, the value written (the ghost's local rotation), the live bone's rotation, and both
+  parent frames. A recording that comes out wrong cannot be argued about from the vmd alone, because the value
+  in the file came from the ghost's frame rather than the bone's own. `Tools\ghost_dump_check.py` reads the
+  dump and separates a constant frame conversion (what the ghost is for) from a difference that moves with the
+  animation (a recording following something the clip did not ask for). Off unless the variable is set, and it
+  does not change what is recorded.
 
 ### 4. Model and motion in one run
 

@@ -142,6 +142,20 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public Vector3 RightFootIKOffset = Vector3.zero;
 
     BoneGhost boneGhost;
+    /// <summary>
+    /// Writes what the recorder actually samples, per bone and per frame, to `ghost_dump.jsonl` in the temp
+    /// directory - the ghost's local rotation, the live bone's, and both parent frames. Off unless the
+    /// environment variable below is set, so a normal run pays nothing for it.
+    ///
+    /// It exists because the recorder writes `ghost.localRotation` rather than the live bone's rotation
+    /// (the ghost chain mirrors the MMD hierarchy), and a recording that comes out wrong cannot be argued
+    /// about without knowing which of the two a value came from. `Tools/ghost_dump_check.py` reads the file
+    /// and reports, per bone, how far the recorded value is from the live pose and whether that difference
+    /// is a constant frame conversion or something that moves with the animation.
+    /// </summary>
+    static readonly bool GhostDumpEnabled =
+        System.Environment.GetEnvironmentVariable("UMA_GHOST_DUMP") == "1";
+    System.Text.StringBuilder ghostDump;
     public MorphRecorder morphRecorder;
     public MorphRecorder morphRecorderSaved;
 
@@ -565,6 +579,43 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     {
         if (!IsRecording) return;
         SaveFrame();
+        // after SaveFrame, because that is where GhostAll() sets the ghost values this frame's sample used
+        if (ghostDump != null && boneGhost != null)
+        {
+            foreach (var pair in boneGhost.GhostDictionary)
+            {
+                if (pair.Value.ghost == null || !pair.Value.enabled) continue;
+                var live = BoneDictionary != null && BoneDictionary.ContainsKey(pair.Key) ? BoneDictionary[pair.Key] : null;
+                if (live == null) continue;
+                var ghost = pair.Value.ghost;
+                var liveParent = live.parent;
+                var ghostParent = ghost.parent;
+                string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{{\"frame\":{0},\"bone\":\"{1}\",\"liveLocal\":[{2:F6},{3:F6},{4:F6},{5:F6}],"
+                    + "\"liveWorld\":[{6:F6},{7:F6},{8:F6},{9:F6}],"
+                    + "\"ghostLocal\":[{10:F6},{11:F6},{12:F6},{13:F6}],"
+                    + "\"ghostWorld\":[{14:F6},{15:F6},{16:F6},{17:F6}],"
+                    + "\"liveParentWorld\":[{18:F6},{19:F6},{20:F6},{21:F6}],"
+                    + "\"ghostParentWorld\":[{22:F6},{23:F6},{24:F6},{25:F6}],"
+                    + "\"liveParent\":\"{26}\",\"ghostParent\":\"{27}\"}}",
+                    FrameNumber, pair.Key,
+                    live.localRotation.x, live.localRotation.y, live.localRotation.z, live.localRotation.w,
+                    live.rotation.x, live.rotation.y, live.rotation.z, live.rotation.w,
+                    ghost.localRotation.x, ghost.localRotation.y, ghost.localRotation.z, ghost.localRotation.w,
+                    ghost.rotation.x, ghost.rotation.y, ghost.rotation.z, ghost.rotation.w,
+                    liveParent != null ? liveParent.rotation.x : 0f,
+                    liveParent != null ? liveParent.rotation.y : 0f,
+                    liveParent != null ? liveParent.rotation.z : 0f,
+                    liveParent != null ? liveParent.rotation.w : 1f,
+                    ghostParent != null ? ghostParent.rotation.x : 0f,
+                    ghostParent != null ? ghostParent.rotation.y : 0f,
+                    ghostParent != null ? ghostParent.rotation.z : 0f,
+                    ghostParent != null ? ghostParent.rotation.w : 1f,
+                    liveParent != null ? liveParent.name : "<none>",
+                    ghostParent != null ? ghostParent.name : "<none>");
+                ghostDump.AppendLine(line);
+            }
+        }
         FrameNumber++;
     }
 
@@ -632,6 +683,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         // viewer was showing is what it goes back to.
         var characterContainer = GetComponentInParent<UmaContainerCharacter>();
         var lookAtSuspended = characterContainer != null ? characterContainer.SuspendLookAt() : null;
+        // TEMP-HARNESS
+        if (GhostDumpEnabled) ghostDump = new System.Text.StringBuilder();
 
         // Rewind to the start of the clip (see the remarks above): the pose is saved, every recorded layer
         // is put back on time 0, the pose is restored and one animator evaluation applies the clip on top.
@@ -699,6 +752,14 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             ManualSampling = false;
             Time.captureDeltaTime = previousCaptureDeltaTime;
             lookAtSuspended?.Dispose();
+            // the harness dump, when it was asked for; see GhostDumpEnabled
+            if (ghostDump != null)
+            {
+                string dumpPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ghost_dump.jsonl");
+                System.IO.File.WriteAllText(dumpPath, ghostDump.ToString());
+                Debug.Log($"[VMD] ghost dump: {ghostDump.Length} chars to {dumpPath}");
+                ghostDump = null;
+            }
             foreach (var pair in previousSpeeds)
             {
                 if (pair.Key != null) pair.Key.speed = pair.Value;
