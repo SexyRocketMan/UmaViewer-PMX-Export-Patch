@@ -156,6 +156,24 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     static readonly bool GhostDumpEnabled =
         System.Environment.GetEnvironmentVariable("UMA_GHOST_DUMP") == "1";
     System.Text.StringBuilder ghostDump;
+    /// <summary>
+    /// Writes the harness dump (the reference pose and the per-frame samples) when <see cref="GhostDumpEnabled"/>
+    /// asked for it, and forgets it. Idempotent: whichever path ends a take calls it first, the other finds nothing
+    /// to write.
+    /// </summary>
+    void WriteHarnessDump()
+    {
+        if (ghostDump == null && referenceDump == null) return;
+        string dumpPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ghost_dump.jsonl");
+        System.IO.File.WriteAllText(dumpPath,
+            (referenceDump != null ? referenceDump.ToString() : "")
+            + (ghostDump != null ? ghostDump.ToString() : ""));
+        Debug.Log($"[VMD] ghost dump: {(ghostDump != null ? ghostDump.Length : 0)} frame chars, "
+                  + $"{(referenceDump != null ? referenceDump.Length : 0)} reference chars to {dumpPath}");
+        ghostDump = null;
+        referenceDump = null;
+    }
+
     /// <summary>The recording session's hold on the look-at solve; released by <see cref="StopRecording"/>.</summary>
     IDisposable lookAtForSession;
 
@@ -885,16 +903,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         {
             ManualSampling = false;
             Time.captureDeltaTime = previousCaptureDeltaTime;
-            // the harness dump, when it was asked for; see GhostDumpEnabled
-            if (ghostDump != null)
-            {
-                string dumpPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ghost_dump.jsonl");
-                System.IO.File.WriteAllText(dumpPath,
-                    (referenceDump != null ? referenceDump.ToString() : "") + ghostDump);
-                Debug.Log($"[VMD] ghost dump: {ghostDump.Length} chars to {dumpPath}");
-                ghostDump = null;
-                referenceDump = null;
-            }
+            WriteHarnessDump();
             foreach (var pair in previousSpeeds)
             {
                 if (pair.Key != null) pair.Key.speed = pair.Value;
@@ -1229,6 +1238,10 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         IsRecording = false;
         lookAtForSession?.Dispose();
         lookAtForSession = null;
+        // Also from here, because this is the one place both recording paths pass through: a take driven by the
+        // manual Record VMD button never reaches the auto-record coroutine, so a dump written only at the end of
+        // that coroutine silently produced nothing for exactly the takes a user reports.
+        WriteHarnessDump();
         frameNumberSaved = FrameNumber;
         morphRecorderSaved = morphRecorder;
         FrameNumber = 0;
