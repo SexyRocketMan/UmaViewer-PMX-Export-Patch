@@ -734,6 +734,15 @@ public static class UmaHeadlessExport
                             Fail("-umaMotion needs a character");
                             return;
                         }
+                        // `LoadAnimation` does nothing at all while the character's animator is still being built -
+                        // it takes an `if (UmaAnimator)` and has no else - so applying the motion any earlier is a
+                        // silent no-op and the character then plays its own idle. Wait for the animator instead;
+                        // measured: without this, `-umaMotion <a dance>` logged "loading motion" and then reported
+                        // the character's `idle01_loop` as current, and the take recorded the idle.
+                        if (target.UmaAnimator == null)
+                        {
+                            return;
+                        }
                         var main = UmaViewerMain.Instance;
                         if (!main.AbList.TryGetValue(options.Motion, out var motionEntry))
                         {
