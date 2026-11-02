@@ -261,6 +261,22 @@ public class UmaContainerCharacter : UmaContainer
         {
             InitBoneTransform[bone] = (bone.position, bone.rotation);
         }
+
+        // ... and the bones the rig puts *between* a skinned bone and the character root. They are the control
+        // bones - UpBody_Ctrl, Waist, the IK targets - and they are not skinned, so nothing above captured them,
+        // and ResetBodyPose() restores this table and nothing else. Measured in the headless harness on a dance
+        // clip: at the moment the recorder captures its reference, the hip's world yaw was 0.0 degrees and the
+        // spine's was 93.9 - the turn sits on a control bone between them, so it went into every recorded key as a
+        // constant yaw of the upper body with the legs untouched, varying with whatever pose the session had left
+        // on it. ResetBodyPose applies these parents-first (see there), which is what makes capturing them safe.
+        foreach (var bone in bodySkinnedMeshRenderer.bones)
+        {
+            for (var node = bone.parent; node != null && node != transform; node = node.parent)
+            {
+                if (InitBoneTransform.ContainsKey(node)) continue;
+                InitBoneTransform[node] = (node.position, node.rotation);
+            }
+        }
     }
 
     public void MergeHairModel()
@@ -824,11 +840,18 @@ public class UmaContainerCharacter : UmaContainer
 
     public void UpBodyReset()
     {
-        if (UpBodyBone)
+        if (!UpBodyBone) return;
+        // Prefer the rest table, which now holds this bone: UpBodyPosition/UpBodyRotation are read in Initialize()
+        // and so record whatever pose the rig was already in - the default idle starts as soon as a character
+        // loads, and the look-at solve moves this very bone. Restoring a pose instead of the rest pose is what put
+        // a session-dependent turn into anything that samples the rig.
+        if (InitBoneTransform != null && InitBoneTransform.TryGetValue(UpBodyBone.transform, out var rest))
         {
-            UpBodyBone.transform.localPosition = UpBodyPosition;
-            UpBodyBone.transform.localRotation = UpBodyRotation;
+            UpBodyBone.transform.SetPositionAndRotation(rest.pos, rest.rot);
+            return;
         }
+        UpBodyBone.transform.localPosition = UpBodyPosition;
+        UpBodyBone.transform.localRotation = UpBodyRotation;
     }
 
     public void CreateIK()
@@ -2161,10 +2184,29 @@ public class UmaContainerCharacter : UmaContainer
         {
             return;
         }
-        foreach (var pair in InitBoneTransform)
+        // Parents before children. The table stores *world* transforms, so applying a parent after its own
+        // descendant drags that descendant off the value it was just given - and with the control bones now in the
+        // table (UpBody_Ctrl, Waist, ...) they sit exactly between the hips and the spine, so the wrong order
+        // re-creates the very offset this is meant to remove. Measured when the ancestors were appended last
+        // instead: the already-restored spine, chest, neck, head and arms were all dragged by the control bone's
+        // full session deviation.
+        foreach (var pair in InitBoneTransform
+                     .OrderBy(pair => DepthOf(pair.Key))
+                     .ToList())
         {
             pair.Key.SetPositionAndRotation(pair.Value.pos, pair.Value.rot);
         }
+    }
+
+    /// <summary>How many transforms sit between <paramref name="node"/> and this container.</summary>
+    int DepthOf(Transform node)
+    {
+        int depth = 0;
+        for (var walk = node; walk != null && walk != transform; walk = walk.parent)
+        {
+            depth++;
+        }
+        return depth;
     }
 
     public List<UmaDatabaseEntry> GetAssetsList()
