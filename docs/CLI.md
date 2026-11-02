@@ -539,7 +539,7 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-ListFamilies` / `-ListFamiliesFilter <text>` | `-umaListFamilies [filter]` |
 | `-Attach <pattern>` | `-umaAttach <pattern>` |
 | `-PropAtlas <png>` | - | With `-ScanProps`/`-ScanCount`: write that page of props to one PNG as a contact sheet, drawn by the same stage the prop grid uses ([PROP_BROWSER](PROP_BROWSER.md)). Per-cell coverage, bounds and mean colour are logged, so the picture can be checked without looking at it |
-| `-PropGridCheck` | - | Open the prop grid browser headless, fill a page, and report what it built: window and grid size, cards per page, atlas size, how many cells actually drew, and whether marking and clicking a card work. A window cannot be looked at in batch mode, so this is what stands in for looking |
+| `-PropGridCheck` | - | Open the props panel, switch it to the grid view, fill a page, and report what it built: grid size, columns and rows, cards per page, atlas size, how many cells actually drew, whether any cell overflows its square at 0/45/90/135 degrees, and whether marking, clicking, paging, searching and switching back to the list all work. A panel cannot be looked at in batch mode, so this is what stands in for looking - see [PROP_BROWSER](PROP_BROWSER.md) |
 | `-DumpMaterials` / `-DumpFace` / `-ScanProps` / `-ScanCount` | `-umaDumpMaterials` / `-umaDumpFace` / `-umaScanProps` / `-umaScanCount` |
 | `-ScanExport` / `-ScanOut` | `-umaScanExport` / `-umaScanOut` |
 | `-Transcript` / `-ExportAudio` / `-ExportClip` | `-umaTranscript` / `-umaExportAudio` / `-umaExportClip` |

@@ -2,6 +2,7 @@ using Gallop;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using TMPro;
@@ -43,6 +44,24 @@ public class UmaViewerUI : MonoBehaviour
     [Header("other")]
     public ScrollRect PropList;
     public PageManager PropPageCtrl;
+
+    /// <summary>
+    /// The space the prop panel's grid view fills, as a RectTransform in the scene. Put it where the grid
+    /// should go - the panel's free area - and assign it here; see docs/PROP_BROWSER.md. When it is left
+    /// empty the grid falls back to a guess at that space, which is legible but not the layout anyone chose.
+    /// </summary>
+    public RectTransform PropGridArea;
+
+    /// <summary>
+    /// The panel's own view switch, if the scene has one: a toggle row whose tick means "grid". Left empty, one
+    /// is built under the page controls from <see cref="UmaContainerTogglePrefab"/> - the same row the attach and
+    /// texture set lists use - so the control exists either way, but a row placed in the scene is the one that
+    /// fits the layout it was designed for.
+    /// </summary>
+    public UmaUIContainer PropViewRow;
+
+    /// <summary>The panel's own export control for marked props, if the scene has one. Same rule as above.</summary>
+    public UmaUIContainer PropExportRow;
     public ScrollRect SceneList;
     public PageManager ScenePageCtrl;
     public ScrollRect MessageScrollRect;
@@ -550,89 +569,248 @@ public class UmaViewerUI : MonoBehaviour
     }
 
     /// <summary>
-    /// The prefab name prefixes the prop panel lists - see <see cref="PropCatalog"/>, which the grid browser
-    /// reads too, so the list and the grid can never disagree about what a prop is.
+    /// Entries of the prop panel's list, kept so the two views can be rebuilt from the same data.
     /// </summary>
-    private static bool IsPropAsset(string path) => PropCatalog.IsProp(path);
+    private List<PageManager.Entry> _propEntries;
+
+    /// <summary>The prop grid, built the first time the grid view is used and kept after that.</summary>
+    private PropGrid _propGrid;
+
+    /// <summary>Which view the prop panel is showing. Survives a panel reload, so leaving and coming back keeps it.</summary>
+    private bool _propGridMode;
+
+    /// <summary>Name of the row that switches views, so it is not added twice.</summary>
+    private const string PropViewRowName = "PropViewModeRow";
+
+    /// <summary>Name of the row that exports the marked props.</summary>
+    private const string PropExportRowName = "PropExportRow";
 
     /// <summary>The `3d/chara` family a manifest path belongs to ("attach", "prop", ...), or "" outside it.</summary>
     private static string CharaFamily(string path) => PropCatalog.Family(path);
 
     public void LoadPropPanel()
     {
-        var pageentrys = new List<PageManager.Entry>();
-        foreach (var prop in Main.AbList.Where(a => IsPropAsset(a.Key)).OrderBy(a => a.Key, StringComparer.Ordinal))
+        _propEntries = new List<PageManager.Entry>();
+        foreach (var prop in Main.AbList.Where(a => PropCatalog.IsProp(a.Key)).OrderBy(a => a.Key, StringComparer.Ordinal))
         {
             var pageentry = new PageManager.Entry();
             pageentry.Name = Path.GetFileName(prop.Key);
             // so a search finds a family whose name the prefab does not repeat (richprop's prefabs are
             // pfb_rich_prop*, not pfb_richprop*)
             pageentry.Keywords = CharaFamily(prop.Key);
+            // the manifest path, carried through to the card so the grid can find the asset again
+            pageentry.Id = prop.Key;
             pageentry.OnClick = (container) =>
             {
                 HighlightChildImage(PropList.content, container);
                 Builder.LoadProp(prop.Value);
+                // a prop load unloads every bundle, including the ones the grid's pictures are drawn from
+                if (_propGridMode) _propGrid?.Reload();
             };
-            pageentrys.Add(pageentry);
+            _propEntries.Add(pageentry);
         }
-        PropPageCtrl.Initialize(pageentrys, PropList);
-        EnsureGridEntryButton();
+
+        EnsurePropViewRows();
+        ApplyPropView(_propGridMode);
     }
 
     /// <summary>
-    /// Opens the prop grid browser on top of the panel: the same props, as pictures, with a batch export.
+    /// Puts the panel into one of its two views: the text list it had, or the grid of pictures.
     ///
-    /// It is a separate window rather than a mode of the list because a grid needs room - a page of thumbnails
-    /// in the list's 350 pixel column would show about eight - and because the list is still the faster way to
-    /// reach a prop whose id you already know. Nothing here replaces it: closing the grid puts it back.
+    /// Both are the same list drawn differently - one `PageManager`, one search box, one set of page controls -
+    /// so switching is a matter of which scroll view it draws into and what a page is made of. The thumbnails
+    /// only run in grid mode: the stage renders what is on screen, and nothing is on screen in the list.
     /// </summary>
-    public void OpenPropBrowser()
+    public void SetPropView(bool grid)
     {
-        PropBrowser.Open(this);
+        if (_propGridMode == grid && _propEntries != null) return;
+        ApplyPropView(grid);
     }
 
-    /// <summary>Name of the grid button the prop panel adds to its own page control.</summary>
-    private const string GridEntryButtonName = "PropGridButton";
+    /// <summary>Switches the panel's view. Called by the row under the page controls and by the self-check.</summary>
+    private void ApplyPropView(bool showGrid)
+    {
+        if (_propEntries == null || PropPageCtrl == null) return;
+
+        PropGrid grid = null;
+        if (showGrid)
+        {
+            grid = EnsurePropGrid();
+            if (grid == null)
+            {
+                Debug.LogWarning("[UmaViewerUI] no room for the prop grid; staying in the list view");
+            }
+        }
+        _propGridMode = grid != null;
+
+        bool showingGrid = grid != null;
+        if (PropList) PropList.gameObject.SetActive(!showingGrid);
+        if (grid != null) grid.List.gameObject.SetActive(true);
+
+        PropPageCtrl.GridMode = showingGrid;
+        PropPageCtrl.GridPrefab = showingGrid ? grid.CardTemplate : null;
+        PropPageCtrl.DecorateCard = showingGrid ? (Action<UmaUIContainer, int>)grid.DecorateCard : null;
+        PropPageCtrl.PageDrawn = showingGrid ? (Action<List<PageManager.Entry>, int>)grid.OnPageDrawn : null;
+        PropPageCtrl.PageStarting = showingGrid ? (Action)grid.OnPageStarting : null;
+        int page = PropPageCtrl.CurrentPage;
+        PropPageCtrl.Initialize(_propEntries, showingGrid ? (ScrollRect)grid.List : PropList);
+        // switching views should not send the user back to page one: the two views page differently, but the
+        // entry they were looking at is somewhere near the same place in both
+        if (page > 0) PropPageCtrl.JumpToPage((page + 1).ToString(CultureInfo.InvariantCulture));
+
+        if (!showingGrid) grid?.Stop();
+        RefreshPropViewRow();
+        RefreshPropGridButtons();
+        Debug.Log($"[UmaViewerUI] prop panel in {(showingGrid ? "grid" : "list")} view: {_propEntries.Count} prop(s)");
+    }
 
     /// <summary>
-    /// Puts the panel's way into the grid under its paging controls, once.
+    /// The grid, built the first time it is wanted, inside <see cref="PropGridArea"/>.
     ///
-    /// Built in code and parented to <see cref="PropPageCtrl"/> rather than placed in the scene: the page control
-    /// is a prefab every list shares, and a button saved into it would appear on the character, costume, motion
-    /// and sound panels too. Here it exists only while the prop panel is the panel that was loaded.
+    /// The area is a scene object: a RectTransform the size of the space the grid should fill. When it is not
+    /// assigned, one is made at runtime from the space the prop list occupies, widened to the whole panel - which
+    /// is a legible guess, not a layout: an area placed in the scene is what makes the grid fill exactly what it
+    /// should.
     /// </summary>
-    private void EnsureGridEntryButton()
+    private PropGrid EnsurePropGrid()
     {
+        if (_propGrid != null) return _propGrid;
+
+        RectTransform area = PropGridArea;
+        if (area == null && PropList != null)
+        {
+            var host = new GameObject("Prop Grid", typeof(RectTransform));
+            host.transform.SetParent(PropList.transform.parent, false);
+            area = (RectTransform)host.transform;
+            area.anchorMin = new Vector2(0f, 0f);
+            area.anchorMax = new Vector2(1f, 1f);
+            area.offsetMin = new Vector2(8f, 96f);
+            area.offsetMax = new Vector2(-8f, -96f);
+            Debug.LogWarning("[UmaViewerUI] UmaViewerUI.PropGridArea is not assigned, so the prop grid is using "
+                             + "a guess at the free space. Put a RectTransform where the grid should go and assign "
+                             + "it to see the layout you meant.");
+        }
+        if (area == null) return null;
+
+        _propGrid = PropGrid.Create(this, area);
+        if (_propGrid != null)
+        {
+            _propGrid.SetEntries(Main.AbList.Values.Where(entry => PropCatalog.IsProp(entry.Name)));
+            Debug.Log($"[UmaViewerUI] prop grid in an area of {area.rect.size}");
+        }
+        return _propGrid;
+    }
+
+    /// <summary>
+    /// Adds the panel's two grid rows under its page controls: the view switch, and export for the marked props.
+    ///
+    /// Built in code and parented to the page control rather than saved into it, because that control is a prefab
+    /// every list in the viewer shares - a row saved there would appear on the character, costume, motion and
+    /// sound panels too. Here they exist only while the props panel is the one that was loaded.
+    /// </summary>
+    private void EnsurePropViewRows()
+    {
+        if (PropViewRow != null && PropViewRow.Toggle != null)
+        {
+            PropViewRow.Toggle.onValueChanged.RemoveAllListeners();
+            PropViewRow.Toggle.onValueChanged.AddListener(SetPropView);
+            PropViewRow.Toggle.SetIsOnWithoutNotify(_propGridMode);
+        }
+        if (PropExportRow != null && PropExportRow.Button != null)
+        {
+            PropExportRow.Button.onClick.RemoveAllListeners();
+            PropExportRow.Button.onClick.AddListener(ExportSelectedProps);
+        }
+
         if (PropPageCtrl == null) return;
         var host = PropPageCtrl.transform;
-        if (host.Find(GridEntryButtonName)) return;
 
-        var clone = Instantiate(UmaContainerPrefab, host);
-        clone.name = GridEntryButtonName;
-        var container = clone.GetComponent<UmaUIContainer>();
-        if (container == null)
+        if (PropViewRow == null && host.Find(PropViewRowName) == null)
         {
-            Destroy(clone);
-            return;
+            var row = Instantiate(UmaContainerTogglePrefab, host);
+            row.name = PropViewRowName;
+            row.Name = "Grid view";
+            var rect = (RectTransform)row.transform;
+            rect.anchorMin = new Vector2(0f, 0f);
+            rect.anchorMax = new Vector2(1f, 0f);
+            rect.pivot = new Vector2(0.5f, 0f);
+            rect.offsetMin = new Vector2(12f, 48f);
+            rect.offsetMax = new Vector2(-12f, 86f);
+            if (row.Toggle != null)
+            {
+                row.Toggle.SetIsOnWithoutNotify(_propGridMode);
+                row.Toggle.onValueChanged.AddListener(SetPropView);
+            }
         }
 
-        container.Name = "Grid view";
-        var rect = (RectTransform)clone.transform;
-        rect.anchorMin = new Vector2(0f, 0f);
-        rect.anchorMax = new Vector2(1f, 0f);
-        rect.pivot = new Vector2(0.5f, 0f);
-        rect.offsetMin = new Vector2(12f, 4f);
-        rect.offsetMax = new Vector2(-12f, 44f);
-
-        if (container.Button != null)
+        if (PropExportRow == null && host.Find(PropExportRowName) == null)
         {
-            container.Button.onClick.RemoveAllListeners();
-            container.Button.onClick.AddListener(OpenPropBrowser);
-            container.Button.navigation = new Navigation { mode = Navigation.Mode.None };
+            var clone = Instantiate(UmaContainerPrefab, host);
+            clone.name = PropExportRowName;
+            var container = clone.GetComponent<UmaUIContainer>();
+            if (container != null)
+            {
+                container.Name = "Export selected";
+                var rect = (RectTransform)clone.transform;
+                rect.anchorMin = new Vector2(0f, 0f);
+                rect.anchorMax = new Vector2(1f, 0f);
+                rect.pivot = new Vector2(0.5f, 0f);
+                rect.offsetMin = new Vector2(12f, 4f);
+                rect.offsetMax = new Vector2(-12f, 42f);
+                if (container.Button != null)
+                {
+                    container.Button.onClick.RemoveAllListeners();
+                    container.Button.onClick.AddListener(ExportSelectedProps);
+                    container.Button.navigation = new Navigation { mode = Navigation.Mode.None };
+                }
+            }
         }
 
-        Debug.Log($"[UmaViewerUI] prop grid entry button under the page control: {rect.rect}");
+        RefreshPropViewRow();
+        RefreshPropGridButtons();
     }
+
+    /// <summary>Shows the view row's tick matching the view in use, without firing it again.</summary>
+    private void RefreshPropViewRow()
+    {
+        var row = PropViewRow;
+        if (row == null && PropPageCtrl != null)
+        {
+            var host = PropPageCtrl.transform.Find(PropViewRowName);
+            if (host != null) row = host.GetComponent<UmaUIContainer>();
+        }
+        if (row != null && row.Toggle != null) row.Toggle.SetIsOnWithoutNotify(_propGridMode);
+    }
+
+    /// <summary>Grey out export while nothing is marked, and say how many are, without rebuilding the rows.</summary>
+    public void RefreshPropGridButtons()
+    {
+        var row = PropExportRow;
+        if (row == null && PropPageCtrl != null)
+        {
+            var host = PropPageCtrl.transform.Find(PropExportRowName);
+            if (host != null) row = host.GetComponent<UmaUIContainer>();
+        }
+        if (row == null) return;
+
+        int marked = _propGrid != null ? _propGrid.SelectedCount : 0;
+        row.Name = marked > 0 ? $"Export selected ({marked})" : "Export selected";
+        if (row.Button != null) row.Button.interactable = marked > 0;
+    }
+
+    /// <summary>Writes the marked props out. Wired to the panel's export row.</summary>
+    public void ExportSelectedProps()
+    {
+        if (_propGrid == null || _propGrid.SelectedCount == 0) return;
+        _propGrid.ExportSelected();
+    }
+
+    /// <summary>Opens the grid view, for anything that wants to land on it directly.</summary>
+    public void ShowPropGrid() => SetPropView(true);
+
+    /// <summary>Goes back to the list view.</summary>
+    public void ShowPropList() => SetPropView(false);
+
 
     public void LoadMapPanel()
     {

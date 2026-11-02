@@ -495,19 +495,24 @@ public static class UmaHeadlessExport
 
                 case Stage.PropGridCheck:
                 {
-                    var browser = PropBrowser.Instance;
-                    if (browser == null)
+                    if (PropGrid.Instance == null)
                     {
-                        Fail("the prop browser closed itself");
+                        Fail("the prop grid closed itself");
                         return;
                     }
 
-                    // let the page fill: one prop per frame, then a few framing passes
+                    // let the page fill: one prop per frame, then the framing passes
                     if (EditorApplication.timeSinceStartup < _propGridDeadline) return;
 
                     if (_propGridCheckRunning) return;
                     _propGridCheckRunning = true;
-                    browser.StartCoroutine(CheckPropGrid(browser));
+                    var ui = UmaViewerUI.Instance;
+                    if (ui == null)
+                    {
+                        Fail("the viewer UI is not up");
+                        return;
+                    }
+                    ui.StartCoroutine(CheckPropGrid(ui));
                     return;
                 }
 
@@ -672,15 +677,19 @@ public static class UmaHeadlessExport
                     }
                     if (options.PropGridCheck)
                     {
-                        // the grid browser is a window, and a batch run has no window: this opens it, lets it
-                        // fill a page, and reports what it built, so a layout or binding mistake reads as a
-                        // number instead of as "it looked fine when I clicked it"
+                        // the grid is a view of the props panel, and a batch run has no window to look at: this
+                        // opens the panel, switches it to the grid, and reports what it built, so a layout or
+                        // binding mistake reads as a number instead of as "it looked fine when I clicked it"
                         PropThumbnailStage.AlwaysVerbose = true;
-                        UmaViewerUI.Instance?.LoadPropPanel();
-                        var browser = PropBrowser.Open(UmaViewerUI.Instance);
-                        if (browser == null)
+                        var propUi = UmaViewerUI.Instance;
+                        // the props panel is inactive in the scene until a user opens it, and a grid inside an
+                        // inactive panel never draws: open it, as a user would, before switching views
+                        propUi?.PropList?.transform.parent.gameObject.SetActive(true);
+                        propUi?.LoadPropPanel();
+                        propUi?.ShowPropGrid();
+                        if (PropGrid.Instance == null)
                         {
-                            Fail("the prop browser did not open");
+                            Fail("the prop grid did not open");
                             return;
                         }
                         _propGridDeadline = EditorApplication.timeSinceStartup + options.PlaySeconds + 8.0;
@@ -1615,22 +1624,28 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Reads the grid back after a real frame and says what it holds: the layout, a few cards, what the
+    /// Reads the grid back after real frames and says what it holds: the layout, a few cards, what the
     /// thumbnails' cells actually contain, and whether marking and clicking a card work.
     ///
-    /// The `WaitForEndOfFrame` matters. A render only reaches its target on a frame boundary, so reading the
-    /// atlas from an editor update tick gets whatever the *previous* frame left there - which is how the first
-    /// version of this check reported "36 cards, 36 cells, every square empty" for a page that was filling.
+    /// The frame waits matter. A render only reaches its target on a frame boundary, so reading the atlas from an
+    /// editor update tick gets whatever the *previous* frame left there - which is how the first version of this
+    /// check reported "36 cards, 36 cells, every square empty" for a page that was filling correctly.
     /// </summary>
-    private static IEnumerator CheckPropGrid(PropBrowser browser)
+    private static IEnumerator CheckPropGrid(UmaViewerUI ui)
     {
-        // two frames, not WaitForEndOfFrame: in batch mode there is no end-of-frame callback to wait for
         yield return null;
         yield return null;
 
-        Debug.Log($"{Tag} prop grid: {browser.Describe()}");
+        var grid = PropGrid.Instance;
+        if (grid == null)
+        {
+            Fail("the prop grid went away");
+            yield break;
+        }
 
-        var cards = browser.Cards;
+        Debug.Log($"{Tag} prop grid: {grid.Describe()}");
+
+        var cards = grid.Cards;
         for (int i = 0; i < Mathf.Min(cards.Count, 4); i++)
         {
             var cardRect = (RectTransform)cards[i].transform;
@@ -1646,14 +1661,14 @@ public static class UmaHeadlessExport
                           : "no preview"));
         }
 
-        if (browser.Stage != null)
+        if (grid.Stage != null)
         {
-            var atlasTexture = browser.Stage.ReadAtlas();
+            var atlasTexture = grid.Stage.ReadAtlas();
             if (atlasTexture != null)
             {
-                // every cell, not a sample: the turntable means a flat prop is edge-on at some angles, and
-                // four cells that happen to be edge-on at this instant say nothing about the page
-                var cellLines = DescribeAtlasCells(atlasTexture, browser.Stage);
+                // every cell, not a sample: the turntable means a flat prop is edge-on at some angles, and four
+                // cells that happen to be edge-on at this instant say nothing about the page
+                var cellLines = DescribeAtlasCells(atlasTexture, grid.Stage);
                 int drawn = cellLines.Count(line => !line.Contains("EMPTY"));
                 Debug.Log($"{Tag} prop grid pictures: {drawn} of {cellLines.Count} cell(s) drew something "
                           + $"at this turntable angle");
@@ -1662,18 +1677,26 @@ public static class UmaHeadlessExport
                     Debug.Log($"{Tag} prop grid picture {line}");
                 }
                 UnityEngine.Object.DestroyImmediate(atlasTexture);
+
+                // the fitting is about every angle, so check the ones the turntable will show
+                foreach (float angle in new[] { 0f, 45f, 90f, 135f })
+                {
+                    int overflowing = grid.Stage.OverflowAt(angle);
+                    Debug.Log($"{Tag} prop grid at {angle:F0} degrees: {overflowing} of {cellLines.Count} "
+                              + $"cell(s) overflow their square");
+                }
             }
         }
 
         // click two cards' mark boxes and one card, the way a user would: a binding that throws would
-        // otherwise only show up as a dead button in the real window
+        // otherwise only show up as a dead button in the real panel
         for (int i = 0; i < Mathf.Min(cards.Count, 3); i += 2)
         {
             var pick = cards[i].transform.Find("Pick");
             var pickButton = pick ? pick.GetComponent<UnityEngine.UI.Button>() : null;
             if (pickButton) pickButton.onClick.Invoke();
         }
-        Debug.Log($"{Tag} prop grid after marking two cards: {browser.Describe()}");
+        Debug.Log($"{Tag} prop grid after marking two cards: {grid.Describe()}");
 
         if (cards.Count > 0 && cards[0].Button != null)
         {
@@ -1683,34 +1706,39 @@ public static class UmaHeadlessExport
                       + (loaded != null ? loaded.name : "NOTHING - the card's click did not load a prop"));
         }
 
-        // a second page and a search, because both rebuild the grid and both can leave it blank
-        browser.GoToPage(1);
+        // page and search, because both rebuild the grid and both can leave it blank
+        ui.PropPageCtrl?.JumpToPage("2");
         yield return null;
         yield return null;
-        Debug.Log($"{Tag} prop grid page 2: {browser.Describe()}");
-        if (browser.Stage != null)
+        Debug.Log($"{Tag} prop grid page 2: {grid.Describe()}");
+        if (grid.Stage != null)
         {
-            var atlasTexture = browser.Stage.ReadAtlas();
+            var atlasTexture = grid.Stage.ReadAtlas();
             if (atlasTexture != null)
             {
-                var cellLines = DescribeAtlasCells(atlasTexture, browser.Stage);
+                var cellLines = DescribeAtlasCells(atlasTexture, grid.Stage);
                 Debug.Log($"{Tag} prop grid page 2 pictures: "
                           + $"{cellLines.Count(line => !line.Contains("EMPTY"))} of {cellLines.Count} cell(s) drew something");
                 UnityEngine.Object.DestroyImmediate(atlasTexture);
             }
         }
 
-        browser.SetSearch("rich");
+        ui.PropPageCtrl?.OnSearch("rich");
         yield return null;
         yield return null;
-        Debug.Log($"{Tag} prop grid search 'rich': {browser.Describe()}");
+        Debug.Log($"{Tag} prop grid search 'rich': {grid.Describe()}");
 
-        browser.SetSearch("");
+        ui.PropPageCtrl?.OnSearch("");
         yield return null;
         yield return null;
-        Debug.Log($"{Tag} prop grid search cleared: {browser.Describe()}");
+        Debug.Log($"{Tag} prop grid search cleared: {grid.Describe()}");
 
-        browser.Close();
+        // and back to the list, which is what the view switch has to leave working
+        ui.ShowPropList();
+        yield return null;
+        Debug.Log($"{Tag} prop grid switched back to the list: {ui.PropPageCtrl?.PageLabel} "
+                  + $"({ui.PropList?.content.childCount} row(s))");
+
         Succeed();
     }
 

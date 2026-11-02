@@ -1,90 +1,109 @@
 # The prop grid: showing props instead of naming them
 
-How the prop panel's 1 400 ids became a page of pictures, why it is a separate window, and what was measured to
-get there. Companion to [`PROP_LABELS.md`](PROP_LABELS.md), which is the research this came out of: the game
-ships no name for a prop, only a quarter of them name themselves through their bone names, so the props have to
-be *looked at*.
+How the prop panel's 1 337 ids became a page of pictures, why it is a view of the panel rather than a window,
+and what was measured to get there. Companion to [`PROP_LABELS.md`](PROP_LABELS.md), the research this came out
+of: the game ships no name for a prop, only a quarter of them name themselves through their bone names, so props
+have to be *looked at*.
 
-## What the window is
+## What it is
 
-`Props` panel → **Grid view** (under the page controls) opens it. A page of cards, each one a prop rendered live
-from the same bundles the scene loads, turning slowly on a turntable. Clicking a card loads that prop, exactly
-as a list row does. The small square in a card's corner marks it for **Export selected**, which writes every
-marked prop to a folder as `.pmx`. Unticking **Grid view** (or ✕) closes the window and the list is back.
+The props panel has two views of one list:
 
-The list stays the list. This is an overlay, not a replacement: for a prop whose id you already know, the list
-is faster, and nothing here should take that away.
+| | list | grid |
+|---|---|---|
+| what a page is | text rows, one per prop | cards with a picture, a name and a mark box |
+| paging | the panel's own controls (`PageManager`) | **the same** |
+| search | the panel's own box | **the same** |
+| keyboard walk | `PageManager.MoveSelection` | **the same** |
+| where it draws | `Prop List` scroll view | a second scroll view, in `PropGridArea` |
+
+The switch is the **Grid view** row under the page controls (or `UmaViewerUI.PropViewRow` when one is placed in
+the scene). The two views share everything except what a page is made of - one `PageManager`, one search box, one
+set of page controls - so switching cannot leave the two disagreeing about what is on screen, and the list is
+still there for a prop whose id you already know. Clicking a card loads that prop, exactly as a row does. The
+square in a card's corner marks it for **Export selected**, which writes every marked prop to a folder as `.pmx`.
+
+## The one scene object it wants
+
+A `RectTransform` assigned to `UmaViewerUI.PropGridArea`: the space the grid should fill. Nothing else is needed;
+the grid builds its scroll view, cards and thumbnails inside it.
+
+When the field is empty the grid makes its own guess at that space - the prop list's vertical extent, widened to
+the whole panel - and logs a warning saying so. The guess is legible (a 1904x1248 area on a 1440p window) but it
+is a guess: an area placed where the grid belongs is what makes it fill exactly what was meant.
+
+The two control rows (`PropViewRow`, `PropExportRow`) can also be placed in the scene and assigned; left empty
+they are built from the panel's own prefabs under the page controls. Rows placed in the scene are the ones that
+match the layout they were designed for.
 
 ## How the pictures are made
 
-One stage, one camera, one texture. The models are laid out in a row 4 000 units below the origin - well past
-the viewer camera's 1 000 unit far plane, so the game camera can never see them - and a single orthographic
-camera frames the whole row into one `RenderTexture` of 256 pixel cells. Each card is a `RawImage` reading its
-own square of that texture through `uvRect`, so a page of 36 cards costs **one** render per frame rather than
-36 cameras and 36 targets.
+One stage, one camera, one texture. The models stand in a row 4 000 units below the origin - past the viewer
+camera's 1 000 unit far plane, so the game camera can never see them - and a single orthographic camera frames
+them all into one `RenderTexture` of 256 pixel cells. Each card is a `RawImage` reading its own square through
+`uvRect`, so a page of 70 cards costs **one** render per frame rather than 70 cameras and 70 targets.
 
-The parts that were not obvious, all of them found by measuring rather than by looking:
+The parts that were not obvious, each found by measuring rather than by looking:
 
-* **A model's bounds are not its shape.** Scaling each prop to its `Renderer.bounds` left every book at a third
-  of its cell, because a skinned prop's bounds follow its mesh and its bones, not the transform that was just
-  scaled. The stage now *measures what it drew*: render, read the cell back, find the opaque pixels, scale by
-  target/measured, move the model's middle to the cell's middle, and repeat until it stops changing. On the
-  first page of books that converges `8x27 px -> 52x162 -> 65x200` with a 200 px target.
-* **A render only lands on a frame boundary.** Two measure-and-fix passes inside one editor tick measure the
-  same picture twice; the second "corrects" a change that was never drawn. Measured the hard way: a sixfold
-  scale-up between passes, with the renderer's bounds agreeing it had grown sixfold, came back as the identical
-  8x27 pixel sliver. Every pass therefore gets its own frame.
-* **The stage must not be parented to the UI.** A canvas hands its children a scaled transform (0.33 on a
-  1440p screen). The models shrank with it while the camera's orthographic size stayed in world units, so the
-  page drew as a small blob in the middle of the atlas and only 4 of 36 cells had anything in them. The stage is
-  now a root object.
-* **Centre the holder, not the model.** Moving the model so its middle sits on the turntable pivot leaves it
-  orbiting that pivot as the table turns, which for a prop modelled away from its own origin swings it out of
-  its cell within a second. The offset lives on a holder between the pivot and the model instead.
+* **A model's bounds are not its shape.** Scaling to `Renderer.bounds` left every book at a third of its cell:
+  a skinned prop's bounds follow its mesh and its bones, not the transform that was just scaled. The stage now
+  measures what it *drew* and corrects. Books converge `8x27 px -> 52x162 -> 65x200` against a 200 px target.
+* **A render only lands on a frame boundary.** Two passes in one editor tick measure the same picture twice; a
+  sixfold scale-up between passes, with the renderer's bounds agreeing it had grown sixfold, came back as the
+  identical 8x27 pixel sliver. Every pass gets its own frame.
+* **The footprint of a turning object is the union of its projections.** Fitting one angle left props cut in half
+  at 90 degrees, and combining two angles as `sqrt(w0² + w90²)` fixed the size but not a sideways drift, because
+  the centre of a projection is not the centre of rotation. The fit now draws the page at 0, 45, 90 and 135
+  degrees, merges each cell's four footprints, scales so the merged one fits and moves the model so its middle
+  sits on the cell's middle. `-umaPropGridCheck` reports overflow at those angles: **0 of 70 cells at 0, 45, 90
+  and 135 degrees**, against 4, 2, 0 and 10 before.
+* **The stage must not be parented to the UI.** A canvas hands its children a scaled transform (0.33 on a 1440p
+  screen); the models shrank with it while the camera's orthographic size stayed in world units, so the page drew
+  as a blob in the middle of the atlas and only 4 of 36 cells had anything in them. The stage is a root object.
+* **Centre a holder, not the model.** Moving the model so its middle sits on the turntable pivot leaves it
+  orbiting that pivot as the table turns, which swings a prop modelled off its own origin out of its cell. The
+  offset lives on a holder between the pivot and the model.
+* **An inactive panel never draws.** A grid inside a panel that is not open never advances its coroutine, so the
+  thumbnails silently stay blank; the routines run on `UmaViewerUI` instead, which is always live.
 
 ## What a page comes out as
 
-`-umaPropGridCheck` opens the window headless, fills a page and reports it. On a 1920x1440 canvas:
+`-umaPropGridCheck` opens the props panel, switches it to the grid, fills a page and reports it. On a 1920x1440
+canvas, with the area guessed (no `PropGridArea` assigned):
 
 ```
-window 1920x1440, grid 1773x1197, 6 column(s) x 6 row(s) = 36 per page,
-page 1/38 of 1337 shown (1337 in the manifest), cards 36 [prop 1001_00 170px],
-atlas 1536x1536, stage built with 36 cell(s), 0 failure(s)
-prop grid pictures: 36 of 36 cell(s) drew something at this turntable angle
-cell 0: pfb_chr_prop1001_00  17.6% covered, x 95..159 y 33..231 of 256, mean colour 107,161,200
-cell 1: pfb_chr_prop1001_01  17.7% covered, x 95..159 y 33..231 of 256, mean colour 141,138,36
+prop grid: grid 1904x1248, 10 column(s) x 7 row(s), page 1 / 20, cards 70/70 [prop 1001_00 170px],
+atlas 2560x1792, stage built with 70 cell(s), 0 failure(s)
+prop grid pictures: 69 of 70 cell(s) drew something at this turntable angle
+cell 0: pfb_chr_prop1001_00  17.8% covered, x 96..160 y 32..231 of 256, mean colour 109,163,201
+prop grid at 0/45/90/135 degrees: 0 of 70 cell(s) overflow their square
 prop grid click loaded: pfb_chr_prop1001_00
-prop grid page 2: page 2/38, cards 36 [prop 1006_00]
-prop grid search 'rich': page 1/1 of 3 shown, cards 3 [rich 1001_00]
+prop grid page 2: page 2 / 20, cards 70/70 [prop 1025_00]
+prop grid search 'rich': page 1 / 1, cards 70/70 [prop 1001_00]
+prop grid switched back to the list: 1 / 61 (22 row(s))
 ```
 
-The coverage numbers are the point of that output: a square that is *empty* reads as `EMPTY`, and a page that
-has lost its pictures would fail the check instead of looking fine to a human who assumes a blank card is a
-blank prop. The books come out thin (65 wide against 198 tall) because they are flat and the turntable is
-turning; the mean colour is what tells a book from a brick.
+The numbers are the point. A square that drew nothing reads as `EMPTY`, a cell that spills reads as overflow, and
+the view switch is checked to leave the list working - none of which a human glancing at a grid would notice.
 
 ## What it costs
 
-* A page is `columns x rows` props loaded at once, one per frame: about 65 ms per prop on this machine, so a
-  full page of 36 fills in roughly two seconds while the window stays responsive.
-* Bundles are tracked per page (`SearchAB` is the same walk the loader did) and released when the page changes,
-  so browsing ten pages does not hold ten pages of props. The one exception is the prop the viewport is
-  showing: unloading its bundles would break the model on screen.
-* One extra camera render per frame while the window is open (1536x1536, small models). Closing the window
-  destroys the stage, its texture and its models.
-* `LoadProp` - a card click or the list's own row click - unloads *every* bundle, including a page's. The page
-  is therefore rebuilt after a card click; without that, every thumbnail on screen goes blank the moment a card
-  is used.
+* A page is one prop loaded per frame, about 65 ms each, so a 70 card page fills in roughly five seconds while
+  the panel stays responsive. Cards appear at once; pictures arrive progressively.
+* Bundles are tracked per page (`SearchAB` is the same walk the loader did) and released when the page changes, so
+  browsing ten pages does not hold ten pages of props. The prop the viewport is showing is kept: unloading its
+  bundles would break the model on screen.
+* One extra camera render per frame while the grid is up, plus four per framing pass while a page settles.
+  Closing the view releases the texture and the models.
+* `LoadProp` - a card click or the list's own row - unloads *every* bundle, including a page's. The page is
+  redrawn after a card click for that reason.
 
 ## Not done
 
-* **No names.** A card shows `prop 1003_10`, not "a book". That is intentional until there is a label store to
-  read from ([`PROP_LABELS.md`](PROP_LABELS.md) has the plan and the numbers).
-* **No keyboard walk.** The list's arrow-key browsing works through `PageManager`; the grid has its own paging
-  and does not join it, so arrow keys do nothing here yet.
-* **No scene props.** The grid lists the three `3d/chara` prop families, the same set the panel lists. Scenes
-  (`3d/env`) have their own panel and their own sizes; the same stage would work for them with a different
-  framing.
-* **Not seen by a human.** Everything above was measured headless. The layout is right to the number and the
-  pictures are verifiably drawn, but nobody has yet looked at the window and said it *reads* well - card size,
-  font size, the dimming behind it.
+* **No names.** A card shows `prop 1003_10`, not "a book", until there is a label store to read from.
+  [`PROP_LABELS.md`](PROP_LABELS.md) has the plan and the numbers.
+* **No per-family filter.** The grid lists the same three prop families the list does; search covers ids and
+  family names, not "only the held ones" (which the scan can tell, see `Tools/prop_rig_names.py`).
+* **Not seen by a human.** Everything above is measured: the layout resolves, the pictures are drawn, nothing
+  overflows, the switch works. Nobody has yet looked at the grid in the panel and said it *reads* well - card
+  size, font size, how many columns feel right.
