@@ -413,7 +413,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-ShotAzimuths <list>` | - | Light angles for the face shading, one image per angle; combine with `-ShotYaws` for a grid |
 | `-ShotLightElevation <deg>` | scene's own | Rebuild the key light at this height instead of the scene's |
 | `-ShotTransparent` | off | Screenshot without the background |
-| `-ScanProps <filter>` | - | Load every matching `3d/env` scene **or `3d/chara` prop** in turn and report its material health plus how it is rigged (skinned renderers, whether any bone it names is a hand bone, its size). One editor boot answers a whole family's question: `-ScanProps pfb_chr_prop -ScanCount 60` classified sixty character props as self-rigged, with no hand bones among them |
+| `-ScanProps <filter>` | - | Load every matching `3d/env` scene **or `3d/chara` prop** in turn and report its material health plus how it is rigged: skinned renderers, bone count, and up to eight of the hand bones and eight of the other bone names it carries, which is the only description the game ships for a prop (see [PROP_LABELS](PROP_LABELS.md)). One editor boot answers a whole family's question - `-ScanProps pfb_chr_prop -ScanCount 60` reports sixty character props as single-`Root` meshes, and `Tools/prop_rig_names.py <log>` tallies a whole family's names |
 | `-ScanCount <n>` | 10 | How many entries `-ScanProps` covers |
 | `-ScanExport` | off | With `-ScanProps`: export each scene instead of reporting it, and continue past the ones that throw |
 | `-ScanOut <dir>` | `<project>/HeadlessExports/scan` | Where `-ScanExport` writes its `.pmx` files and the shared `Texture2D/` folder |

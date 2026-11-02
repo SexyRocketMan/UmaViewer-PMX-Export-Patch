@@ -1245,11 +1245,21 @@ public static class UmaHeadlessExport
 
         return $"skinned {skins.Length} of {skins.Length + meshes.Length} renderer(s), {bones} bone ref(s), "
                + (handBones.Count > 0
-                   ? $"HAND bones {handBones.Count}: {string.Join(",", handBones.Take(4))}"
+                   ? $"HAND bones {handBones.Count}: {string.Join(",", handBones.Take(RigNamesShown))}"
                    : "no hand bones")
-               + (otherBones.Count > 0 ? $" | other {otherBones.Count}: {string.Join(",", otherBones.Take(4))}" : "")
+               + (otherBones.Count > 0
+                   ? $" | other {otherBones.Count}: {string.Join(",", otherBones.Take(RigNamesShown))}"
+                   : "")
                + $", size {size}";
     }
+
+    /// <summary>
+    /// How many of a prop's bone names the rig summary spells out. A prop can name fifty bones, and
+    /// the names are the only description the game gives it, so the sweep needs more than the first
+    /// handful - but a whole body skin's worth of names on one line buries the eight that say where
+    /// it mounts and what it is.
+    /// </summary>
+    private const int RigNamesShown = 8;
 
     /// <summary>
     /// Wears the `-umaAttach` prefabs on the loaded character, before anything is measured.

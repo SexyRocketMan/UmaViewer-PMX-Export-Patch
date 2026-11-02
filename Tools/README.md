@@ -11,6 +11,7 @@ argument, and what the errors mean. This file is only the map.
 | `headless_export.ps1` | The CLI. Runs Unity in batch mode, boots the viewer scene, loads a character, costume or prop, and then writes a `.pmx` or an `.fbx`, records one loop of a motion into a `.vmd`, and/or renders the game's own view to a PNG - the same code paths the in-app buttons use. The model's extension picks the writer. It also prints a sound sheet's transcript (`-Transcript`) and writes a voiced clip to a tagged mp3 (`-ExportAudio`). |
 | `pmx_inspect.py` | Blender-free PMX inspector and differ: `summary`, `bones`, `tails`, `weights`, `morphs`, `names`, `integrity`, `check`, `diff`. |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator: `summary`, `loop`, `motion`. |
+| `prop_rig_names.py` | Reads `-ScanProps` output and tallies what a family's prefabs are: held in a hand, worn on a body part, or self-rigged, plus every bone name that carries a word - the only description the game ships for a prop. `python Tools/prop_rig_names.py Logs/headless_export_*.log --vocab`. |
 | `mp3_transcript.py` | Reads the transcript an exported mp3 carries in its ID3 tag - title, speaker, story, full text - and exits non-zero when a file has none. Standard library only, so it doubles as the check that an export was tagged. |
 
 Both Python tools are PEP-723 scripts with no dependencies, so `uv run` needs nothing installed:
