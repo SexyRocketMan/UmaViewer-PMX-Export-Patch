@@ -148,13 +148,17 @@ Two things about the FBX worth knowing before comparing it with the PMX:
   against the animator; `deterministic` is the default and the one to use unless you are comparing.
 * `-RecordReduction <n>` keeps every `n`th key. `0` (the default) uses `Config.json`'s
   `VmdKeyReductionLevel`, which is every frame.
-* **The viewer's look-at solve is off while a take is recorded.** It bends the spine and head towards the
-  camera on top of the clip, and the sampler reads the very bones it drives, so a solved pose would be
-  written into the motion as though the animation asked for it - measured on one clip, 10.07° on the spine,
-  15.47° on the head and 1.99° on the chest, with the legs, hips and root untouched because the solver only
-  drives the spine chain. `UmaContainerCharacter.SuspendLookAt()` switches it off for the take and puts the
-  setting back afterwards, so the setting a user left on is still on when the recording ends. `ModelExporter`
-  has always done the same before writing a pmx.
+* **The viewer's look-at solve is off while a take is recorded, and it is off by default in the viewer** for the
+  same reason. It bends the spine and head towards the camera on top of the clip, and the sampler reads the very
+  bones it drives, so its contribution can be written into the motion as though the animation had asked for it.
+  Measured on one clip: a constant **84 to 180 degrees of yaw on the spine** and on everything above it, with the
+  legs untouched, and its size following wherever the camera was. With the setting **off** a take is a replica of
+  the game's own motion (32 of 52 bones identical to a reference recording, spine 2.58°); with it **on** the take
+  is a **known limitation**. The solve is suspended for the whole recording session
+  (`UnityHumanoidVMDRecorder.StartRecording`/`StopRecording` hold `UmaContainerCharacter.SuspendLookAt()`), so the
+  toggle cannot change a recording by itself - but a session that has been looking at the camera leaves its pose
+  on the rig for a while, and that reaches the file. Turn *Look at Camera* off to record; viewing with it on is
+  unaffected.
 * **`UMA_GHOST_DUMP=1` records what the sampler actually used** to `ghost_dump.jsonl` in the temp directory:
   per bone and per frame, the value written (the ghost's local rotation), the live bone's rotation, and both
   parent frames. A recording that comes out wrong cannot be argued about from the vmd alone, because the value

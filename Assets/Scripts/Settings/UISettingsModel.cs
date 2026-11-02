@@ -45,7 +45,11 @@ public class UISettingsModel : MonoBehaviour
         _isHeadFix,
         _isTPose,
         _dynamicBoneEnable = true,
-        _enableEyeTracking = true,
+        // Look at camera is off by default. The solve bends the spine chain towards the camera on top of the clip,
+        // and a recorded motion carries whatever it contributed - see the recording notes in docs/CLI.md. That is a
+        // limitation of recording, not of viewing, so the feature stays available; it just does not start enabled
+        // on a viewer whose recordings are the reason it exists.
+        _enableEyeTracking = false,
         _enableFaceOverride = true,
         _isWetLook;
 
