@@ -1118,6 +1118,11 @@ public class UmaContainerCharacter : UmaContainer
 
         //Some setting for Head
         EnableEyeTracking = UI.ModelSettings.EnableEyeTracking;
+        // Said out loud, because this is the state a recording's reference pose is built in and it decides whether a
+        // take comes out right: with it on, a recorded motion can carry the solve (see docs/CLI.md). One line per
+        // model load, so a session's log states which build and which setting a take was made under.
+        Debug.Log($"[Uma] look-at at load: {(EnableEyeTracking ? "on" : "off")} "
+                  + $"(setting {UI.ModelSettings.EnableEyeTracking}, IK {(IK != null ? "present" : "not built yet")})");
 
         foreach (Renderer r in head.GetComponentsInChildren<Renderer>())
         {

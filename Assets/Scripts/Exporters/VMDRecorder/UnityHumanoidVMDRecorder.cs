@@ -605,6 +605,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         {
             var lookAtContainer = GetComponentInParent<UmaContainerCharacter>();
             if (lookAtContainer != null) lookAtForSession = lookAtContainer.SuspendLookAt();
+            Debug.Log($"[VMD] recording session started: the look-at solve is held off for it "
+                      + $"(container {(lookAtContainer != null ? "found" : "MISSING")})");
         }
 
         foreach (var kvp in BoneDictionary)
