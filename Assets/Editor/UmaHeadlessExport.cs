@@ -1,6 +1,7 @@
 #if UNITY_EDITOR
 using Gallop;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -121,6 +122,19 @@ public static class UmaHeadlessExport
 
     /// <summary>How many times the motion has been re-applied because the idle took the layer back.</summary>
     private static int _recordAttempts;
+
+    /// <summary>The prop atlas stage for a `-umaPropAtlas` run, held until its coroutine finishes.</summary>
+    private static PropThumbnailStage _atlasStage;
+
+    /// <summary>Where the `-umaPropAtlas` run writes its PNG.</summary>
+    private static string _atlasPath = "";
+
+    /// <summary>When the `-umaPropGridCheck` run stops waiting for the first page to fill.</summary>
+    private static double _propGridDeadline;
+
+    /// <summary>True once the `-umaPropGridCheck` coroutine has been started.</summary>
+    private static bool _propGridCheckRunning;
+
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
     private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
     private const string KeyBootReported = "UmaHeadlessExport.BootReported";
@@ -136,7 +150,9 @@ public static class UmaHeadlessExport
         Export,
         Done,
         Screenshot,
-        ExportAudio
+        ExportAudio,
+        PropAtlas,
+        PropGridCheck
     }
 
     [Serializable]
@@ -172,6 +188,18 @@ public static class UmaHeadlessExport
         public List<string> Attach = new List<string>();
         public string ScanProps = "";
         public int ScanCount = 10;
+
+        /// <summary>
+        /// With `-umaScanProps`: write that page of props to this PNG as a contact sheet, drawn by the same
+        /// stage the prop browser fills its grid from. Nothing is exported and no model is loaded.
+        /// </summary>
+        public string PropAtlas = "";
+
+        /// <summary>
+        /// Opens the prop grid browser and reports what it built, then exits: a self-check for a window that
+        /// cannot be looked at in batch mode.
+        /// </summary>
+        public bool PropGridCheck;
         /// <summary>
         /// With -umaScanProps: *export* every matched prop instead of only reporting its material health, and
         /// keep going after one that throws. This is the difference between finding a broken scene by
@@ -287,6 +315,8 @@ public static class UmaHeadlessExport
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaScanExport": options.ScanExport = true; break;
+                case "-umaPropAtlas": options.PropAtlas = Next(); break;
+                case "-umaPropGridCheck": options.PropGridCheck = true; break;
                     case "-umaScanOut": options.ScanOutDir = Next(); break;
                     case "-umaTranscript": options.Transcript = Next(); break;
                     case "-umaExportAudio": options.ExportAudio = Next(); break;
@@ -366,12 +396,12 @@ public static class UmaHeadlessExport
         if (!options.ListChars && !options.ListCostumes && !options.ListProps && !options.ListTextures
             && !options.ListFamilies
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
-            && string.IsNullOrEmpty(options.ExportAudio)
+            && string.IsNullOrEmpty(options.ExportAudio) && !options.PropGridCheck
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
                            + "or -umaListChars / -umaListCostumes / -umaListProps / -umaListTextures "
-                           + "/ -umaListFamilies / -umaScanProps / -umaTranscript");
+                           + "/ -umaListFamilies / -umaScanProps / -umaPropGridCheck / -umaTranscript");
             EditorApplication.Exit(2);
             return;
         }
@@ -462,6 +492,35 @@ public static class UmaHeadlessExport
                     ReportTag(SessionState.GetString(KeyOutPath, ""));
                     Succeed();
                     return;
+
+                case Stage.PropGridCheck:
+                {
+                    var browser = PropBrowser.Instance;
+                    if (browser == null)
+                    {
+                        Fail("the prop browser closed itself");
+                        return;
+                    }
+
+                    // let the page fill: one prop per frame, then a few framing passes
+                    if (EditorApplication.timeSinceStartup < _propGridDeadline) return;
+
+                    if (_propGridCheckRunning) return;
+                    _propGridCheckRunning = true;
+                    browser.StartCoroutine(CheckPropGrid(browser));
+                    return;
+                }
+
+                case Stage.PropAtlas:
+                {
+                    // the stage fills itself one prop and one refit pass per frame, so each render lands in the
+                    // atlas before the next pass measures it (see PropThumbnailStage.RefitPass)
+                    if (_atlasStage == null) return;
+                    if (!_atlasStage.Built) return;
+                    if (!SavePropAtlas(_atlasStage, _atlasPath, _atlasStage.Count)) return;
+                    Succeed();
+                    return;
+                }
 
                 case Stage.WaitStartup:
                 {
@@ -591,6 +650,45 @@ public static class UmaHeadlessExport
                         Succeed();
                         return;
                     }
+
+                    if (!string.IsNullOrEmpty(options.PropAtlas))
+                    {
+                        // A contact sheet of a prop family: the same stage the prop browser draws its cards
+                        // from, rendered without a window. It is how the grid's framing is checked without
+                        // clicking through it, and it doubles as a way to look at a family in one image.
+                        string atlasFilter = string.IsNullOrEmpty(options.ScanProps) ? "pfb_chr_prop" : options.ScanProps;
+                        var atlasProps = ScanCandidates(atlasFilter, Mathf.Max(1, options.ScanCount));
+                        if (atlasProps.Count == 0)
+                        {
+                            Fail($"no props match '{atlasFilter}'");
+                            return;
+                        }
+                        _atlasStage = PropThumbnailStage.Create(null);
+                        _atlasStage.Verbose = true;
+                        _atlasStage.StartCoroutine(_atlasStage.BuildRoutine(atlasProps));
+                        _atlasPath = Path.GetFullPath(options.PropAtlas);
+                        CurrentStage = Stage.PropAtlas;
+                        return;
+                    }
+                    if (options.PropGridCheck)
+                    {
+                        // the grid browser is a window, and a batch run has no window: this opens it, lets it
+                        // fill a page, and reports what it built, so a layout or binding mistake reads as a
+                        // number instead of as "it looked fine when I clicked it"
+                        PropThumbnailStage.AlwaysVerbose = true;
+                        UmaViewerUI.Instance?.LoadPropPanel();
+                        var browser = PropBrowser.Open(UmaViewerUI.Instance);
+                        if (browser == null)
+                        {
+                            Fail("the prop browser did not open");
+                            return;
+                        }
+                        _propGridDeadline = EditorApplication.timeSinceStartup + options.PlaySeconds + 8.0;
+                        CurrentStage = Stage.PropGridCheck;
+                        return;
+                    }
+
+
 
                     if (!string.IsNullOrEmpty(options.ScanProps))
                     {
@@ -1515,6 +1613,214 @@ public static class UmaHeadlessExport
         }
         return null;
     }
+
+    /// <summary>
+    /// Reads the grid back after a real frame and says what it holds: the layout, a few cards, what the
+    /// thumbnails' cells actually contain, and whether marking and clicking a card work.
+    ///
+    /// The `WaitForEndOfFrame` matters. A render only reaches its target on a frame boundary, so reading the
+    /// atlas from an editor update tick gets whatever the *previous* frame left there - which is how the first
+    /// version of this check reported "36 cards, 36 cells, every square empty" for a page that was filling.
+    /// </summary>
+    private static IEnumerator CheckPropGrid(PropBrowser browser)
+    {
+        // two frames, not WaitForEndOfFrame: in batch mode there is no end-of-frame callback to wait for
+        yield return null;
+        yield return null;
+
+        Debug.Log($"{Tag} prop grid: {browser.Describe()}");
+
+        var cards = browser.Cards;
+        for (int i = 0; i < Mathf.Min(cards.Count, 4); i++)
+        {
+            var cardRect = (RectTransform)cards[i].transform;
+            var preview = cards[i].transform.Find("Preview");
+            var raw = preview ? preview.GetComponent<UnityEngine.UI.RawImage>() : null;
+            Debug.Log($"{Tag} prop grid card {i}: '{cards[i].Name}' "
+                      + $"rect {cardRect.rect.size.x:F0}x{cardRect.rect.size.y:F0} "
+                      + $"at {cardRect.anchoredPosition}, "
+                      + (raw != null
+                          ? $"uv {raw.uvRect.x:F3},{raw.uvRect.y:F3} "
+                            + $"{raw.uvRect.width:F3}x{raw.uvRect.height:F3}, "
+                            + $"texture {(raw.texture != null ? raw.texture.name : "none")}"
+                          : "no preview"));
+        }
+
+        if (browser.Stage != null)
+        {
+            var atlasTexture = browser.Stage.ReadAtlas();
+            if (atlasTexture != null)
+            {
+                // every cell, not a sample: the turntable means a flat prop is edge-on at some angles, and
+                // four cells that happen to be edge-on at this instant say nothing about the page
+                var cellLines = DescribeAtlasCells(atlasTexture, browser.Stage);
+                int drawn = cellLines.Count(line => !line.Contains("EMPTY"));
+                Debug.Log($"{Tag} prop grid pictures: {drawn} of {cellLines.Count} cell(s) drew something "
+                          + $"at this turntable angle");
+                foreach (string line in cellLines.Take(6))
+                {
+                    Debug.Log($"{Tag} prop grid picture {line}");
+                }
+                UnityEngine.Object.DestroyImmediate(atlasTexture);
+            }
+        }
+
+        // click two cards' mark boxes and one card, the way a user would: a binding that throws would
+        // otherwise only show up as a dead button in the real window
+        for (int i = 0; i < Mathf.Min(cards.Count, 3); i += 2)
+        {
+            var pick = cards[i].transform.Find("Pick");
+            var pickButton = pick ? pick.GetComponent<UnityEngine.UI.Button>() : null;
+            if (pickButton) pickButton.onClick.Invoke();
+        }
+        Debug.Log($"{Tag} prop grid after marking two cards: {browser.Describe()}");
+
+        if (cards.Count > 0 && cards[0].Button != null)
+        {
+            cards[0].Button.onClick.Invoke();
+            var loaded = UmaViewerBuilder.Instance != null ? UmaViewerBuilder.Instance.CurrentOtherContainer : null;
+            Debug.Log($"{Tag} prop grid click loaded: "
+                      + (loaded != null ? loaded.name : "NOTHING - the card's click did not load a prop"));
+        }
+
+        // a second page and a search, because both rebuild the grid and both can leave it blank
+        browser.GoToPage(1);
+        yield return null;
+        yield return null;
+        Debug.Log($"{Tag} prop grid page 2: {browser.Describe()}");
+        if (browser.Stage != null)
+        {
+            var atlasTexture = browser.Stage.ReadAtlas();
+            if (atlasTexture != null)
+            {
+                var cellLines = DescribeAtlasCells(atlasTexture, browser.Stage);
+                Debug.Log($"{Tag} prop grid page 2 pictures: "
+                          + $"{cellLines.Count(line => !line.Contains("EMPTY"))} of {cellLines.Count} cell(s) drew something");
+                UnityEngine.Object.DestroyImmediate(atlasTexture);
+            }
+        }
+
+        browser.SetSearch("rich");
+        yield return null;
+        yield return null;
+        Debug.Log($"{Tag} prop grid search 'rich': {browser.Describe()}");
+
+        browser.SetSearch("");
+        yield return null;
+        yield return null;
+        Debug.Log($"{Tag} prop grid search cleared: {browser.Describe()}");
+
+        browser.Close();
+        Succeed();
+    }
+
+
+    /// <summary>
+    /// One line per atlas cell: how much of the square the prop covers, and where its opaque pixels sit inside
+    /// it. A prop that failed to frame shows as 0% covered, and one clipped by its cell shows a box touching
+    /// 0 or the far edge - neither of which a picture alone would tell a script.
+    /// </summary>
+    private static List<string> DescribeAtlasCells(Texture2D atlas, PropThumbnailStage stage)
+    {
+        var lines = new List<string>();
+        var pixels = atlas.GetPixels32();
+        int width = atlas.width;
+        int height = atlas.height;
+        int cell = PropThumbnailStage.CellPixels;
+
+        for (int index = 0; index < stage.Count; index++)
+        {
+            var rect = stage.CellRect(index);
+            int x0 = Mathf.RoundToInt(rect.x * width);
+            int y0 = Mathf.RoundToInt(rect.y * height);          // ReadPixels puts row 0 at the bottom
+            int covered = 0;
+            int minX = cell, minY = cell, maxX = -1, maxY = -1;
+            long r = 0, g = 0, b = 0;
+            for (int y = 0; y < cell; y++)
+            {
+                for (int x = 0; x < cell; x++)
+                {
+                    int px = x0 + x;
+                    int py = y0 + y;
+                    if (px < 0 || py < 0 || px >= width || py >= height) continue;
+                    var pixel = pixels[py * width + px];
+                    if (pixel.a <= 8) continue;
+                    covered++;
+                    r += pixel.r;
+                    g += pixel.g;
+                    b += pixel.b;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+
+            string name = stage.CellName(index);
+            if (maxX < 0)
+            {
+                lines.Add($"cell {index,2}: {name,-40} EMPTY (nothing drawn)");
+                continue;
+            }
+            lines.Add($"cell {index,2}: {name,-40} {100f * covered / (cell * cell),5:F1}% covered, "
+                      + $"x {minX}..{maxX} y {minY}..{maxY} of {cell}, "
+                      + $"mean colour {r / covered},{g / covered},{b / covered}");
+        }
+        return lines;
+    }
+
+    /// <summary>
+    /// Writes the stage's atlas to a PNG and says what landed in each cell.
+    ///
+    /// A window cannot be looked at in batch mode, so the part of the grid worth checking without eyes is
+    /// checked here: that the stage frames a prop, lights it as the viewport does, and hands every card a
+    /// square of one texture. The per-cell numbers are the check - how much of the square the prop covers,
+    /// and where its opaque pixels sit - so a framing regression reads as a number rather than a shrug.
+    /// </summary>
+    private static bool SavePropAtlas(PropThumbnailStage stage, string path, int requested)
+    {
+        if (stage == null) return false;
+        try
+        {
+            var texture = stage.ReadAtlas();
+            if (texture == null)
+            {
+                Fail("the prop atlas stage produced no texture");
+                return false;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllBytes(path, ImageConversion.EncodeToPNG(texture));
+            foreach (string line in DescribeAtlasCells(texture, stage))
+            {
+                Debug.Log($"{Tag} {line}");
+            }
+            UnityEngine.Object.DestroyImmediate(texture);
+
+            Debug.Log($"{Tag} prop atlas: {stage.Count} cell(s) for {requested} prop(s), "
+                      + $"{stage.Columns}x{stage.Rows} cells of "
+                      + $"{PropThumbnailStage.CellPixels}px -> {path}"
+                      + (stage.Failures.Count > 0
+                          ? $" ({stage.Failures.Count} prop(s) could not be drawn: "
+                            + string.Join("; ", stage.Failures) + ")"
+                          : ""));
+            return true;
+        }
+        catch (Exception e)
+        {
+            Fail("prop atlas failed: " + e);
+            return false;
+        }
+        finally
+        {
+            if (_atlasStage != null)
+            {
+                UnityEngine.Object.DestroyImmediate(_atlasStage.gameObject);
+                _atlasStage = null;
+            }
+        }
+    }
+
 
     /// <summary>The container the current run is operating on (character or prop/scene).</summary>
     private static UmaContainer CurrentContainer()
