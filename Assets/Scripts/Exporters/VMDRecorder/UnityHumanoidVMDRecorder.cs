@@ -1686,9 +1686,60 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             centerOffsetLength = Vector3.Distance(boneDictionary[BoneNames.全ての親].position, boneDictionary[BoneNames.センター].position);
         }
 
+        /// <summary>
+        /// The ghost bones ordered parents-first within the ghost hierarchy.
+        ///
+        /// Each ghost is given a *world* rotation, and a child's local rotation is fixed against its parent's world
+        /// at the moment it is written - so writing a child before its parent leaves that child's local computed
+        /// against a stale parent, worst on the first frame when every parent still sits at its capture state.
+        /// Measured on a dance clip: the live head moved 0.4 degrees into frame 1 while the recorded head jumped
+        /// 29.5, and the take opened with Head at 71.8x its own typical step - a defect the known-good reference
+        /// recording of the same clip has too (71.7x), so it had been there as long as the recorder had.
+        /// </summary>
+        System.Collections.Generic.List<BoneNames> GhostParentsFirst()
+        {
+            if (_ghostOrder != null) return _ghostOrder;
+            var ordered = new System.Collections.Generic.List<BoneNames>(GhostDictionary.Count);
+            var remaining = new System.Collections.Generic.HashSet<BoneNames>(GhostDictionary.Keys);
+            // repeatedly take the bones whose ghost parent is not itself a pending ghost
+            while (remaining.Count > 0)
+            {
+                bool progressed = false;
+                foreach (var boneName in new System.Collections.Generic.List<BoneNames>(remaining))
+                {
+                    var ghost = GhostDictionary[boneName].ghost;
+                    BoneNames? pendingParent = null;
+                    if (ghost != null)
+                    {
+                        foreach (var other in remaining)
+                        {
+                            if (other == boneName) continue;
+                            var otherGhost = GhostDictionary[other].ghost;
+                            if (otherGhost != null && ghost.parent == otherGhost) { pendingParent = other; break; }
+                        }
+                    }
+                    if (pendingParent != null) continue;
+                    ordered.Add(boneName);
+                    remaining.Remove(boneName);
+                    progressed = true;
+                }
+                if (!progressed)
+                {
+                    // a cycle or an unexpected hierarchy: keep the rest in whatever order is left
+                    ordered.AddRange(remaining);
+                    break;
+                }
+            }
+            _ghostOrder = ordered;
+            return ordered;
+        }
+
+        /// <summary>The parents-first order, computed once: the ghost hierarchy does not change during a take.</summary>
+        System.Collections.Generic.List<BoneNames> _ghostOrder;
+
         public void GhostAll()
         {
-            foreach (BoneNames boneName in GhostDictionary.Keys)
+            foreach (BoneNames boneName in GhostParentsFirst())
             {
                 if (GhostDictionary[boneName].ghost == null || !GhostDictionary[boneName].enabled) { continue; }
                 Quaternion transQuaternion = boneDictionary[boneName].rotation * Quaternion.Inverse(OriginalRotationDictionary[boneName]);
