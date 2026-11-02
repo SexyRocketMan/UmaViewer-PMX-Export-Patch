@@ -112,6 +112,12 @@ public static class UmaHeadlessExport
     private const string KeyVmdDone = "UmaHeadlessExport.VmdDone";
     private const string KeyVmdFrames = "UmaHeadlessExport.VmdFrames";
     private const string KeyMotionLoaded = "UmaHeadlessExport.MotionLoaded";
+
+    /// <summary>
+    /// The clip `-umaMotion` applied. Kept because the animator reports the state it is still transitioning *from*
+    /// right after a loop motion is started, so reading "the current clip" records the wrong animation.
+    /// </summary>
+    private static AnimationClip _requestedClip;
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
     private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
     private const string KeyBootReported = "UmaHeadlessExport.BootReported";
@@ -756,7 +762,15 @@ public static class UmaHeadlessExport
                         }
                         Debug.Log($"{Tag} loading motion {motionEntry.Name}");
                         target.LoadAnimation(motionEntry);
-                        Debug.Log($"{Tag} now playing '{CurrentClip(target.UmaAnimator)?.name}'");
+                        // `LoadAnimation` puts a loop motion into the override controller's `clip_2` slot and
+                        // starts the `motion_1` state, so what the animator reports as current at this instant is
+                        // still the clip it was playing - the previous one. Remember the clip that was asked for
+                        // and record that: measuring through `CurrentClip` recorded the character's own idle
+                        // against a 76-frame dance, 30 frames of `clip_t`.
+                        _requestedClip = motionEntry.Get<AnimationClip>();
+                        if (_requestedClip != null) _requestedClip.name = motionEntry.Name;
+                        Debug.Log($"{Tag} now playing '{CurrentClip(target.UmaAnimator)?.name}' "
+                                  + $"(requested '{_requestedClip?.name}')");
                         SessionState.SetInt(KeyMotionLoaded, 1);
                         _settleFramesLeft = options.ExtraFrames; // let the new clip settle before sampling
                         // batch mode runs editor updates back to back, so frames alone are no time at all:
@@ -893,7 +907,11 @@ public static class UmaHeadlessExport
 
                     if (SessionState.GetInt(KeyVmdStarted, 0) == 0)
                     {
-                        var clip = CurrentClip(character.UmaAnimator);
+                        // the motion that was asked for wins over what the state machine reports as current: the
+                        // state reports the clip it is still transitioning *from* (see the -umaMotion site)
+                        var clip = _requestedClip != null ? _requestedClip : CurrentClip(character.UmaAnimator);
+                        Debug.Log($"{Tag} recording clip '{clip?.name}' "
+                                  + $"(animator currently reports '{CurrentClip(character.UmaAnimator)?.name}')");
                         if (clip == null)
                         {
                             Fail("no animation clip is playing on the character");
