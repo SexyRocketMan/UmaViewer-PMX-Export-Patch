@@ -118,6 +118,9 @@ public static class UmaHeadlessExport
     /// right after a loop motion is started, so reading "the current clip" records the wrong animation.
     /// </summary>
     private static AnimationClip _requestedClip;
+
+    /// <summary>How many times the motion has been re-applied because the idle took the layer back.</summary>
+    private static int _recordAttempts;
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
     private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
     private const string KeyBootReported = "UmaHeadlessExport.BootReported";
@@ -884,6 +887,32 @@ public static class UmaHeadlessExport
                     {
                         Fail("-umaRecordVmd needs a character with an animator");
                         return;
+                    }
+
+                    // The motion has to be the thing actually playing, not merely the thing asked for. Applying it
+                    // in the settle stage raced the character's own load sequence, which re-applies the idle
+                    // afterwards: measured, layer 0 was still playing `anm_eve_chr1001_00_idle01_loop` while a
+                    // 75-frame take labelled with the dance was recorded, so the take held the idle's animation
+                    // for the dance's frame count - a static hip and a constant spine. Re-apply and wait again
+                    // until the requested clip is the one on the animation layer.
+                    if (_requestedClip != null && _recordAttempts < 6)
+                    {
+                        var playing = CurrentClip(character.UmaAnimator);
+                        bool rightClip = playing != null && playing.name == _requestedClip.name;
+                        if (!rightClip)
+                        {
+                            _recordAttempts++;
+                            Debug.Log($"{Tag} the animation layer is playing '{playing?.name}' but "
+                                      + $"'{_requestedClip.name}' was requested - re-applying (attempt {_recordAttempts})");
+                            var main = UmaViewerMain.Instance;
+                            if (main.AbList.TryGetValue(_requestedClip.name, out var entry))
+                            {
+                                character.LoadAnimation(entry);
+                            }
+                            _settleFramesLeft = Mathf.Max(8, options.ExtraFrames / 2);
+                            return;
+                        }
+                        Debug.Log($"{Tag} the animation layer is playing the requested clip '{playing.name}'");
                     }
 
                     var positionBone = container.transform.Find("Position");
