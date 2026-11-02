@@ -148,24 +148,24 @@ Two things about the FBX worth knowing before comparing it with the PMX:
   against the animator; `deterministic` is the default and the one to use unless you are comparing.
 * `-RecordReduction <n>` keeps every `n`th key. `0` (the default) uses `Config.json`'s
   `VmdKeyReductionLevel`, which is every frame.
-* **The viewer's look-at solve is off while a take is recorded, and it is off by default in the viewer** for the
-  same reason. It bends the spine and head towards the camera on top of the clip, and the sampler reads the very
-  bones it drives, so its contribution can be written into the motion as though the animation had asked for it.
-  Measured on one clip: a constant **84 to 180 degrees of yaw on the spine** and on everything above it, with the
-  legs untouched, and its size following wherever the camera was. With the setting **off** a take is a replica of
-  the game's own motion (32 of 52 bones identical to a reference recording, spine 2.58°); with it **on** the take
-  is a **known limitation**. The solve is suspended for the whole recording session
-  (`UnityHumanoidVMDRecorder.StartRecording`/`StopRecording` hold `UmaContainerCharacter.SuspendLookAt()`), so the
-  toggle cannot change a recording by itself - but a session that has been looking at the camera leaves its pose
-  on the rig for a while, and that reaches the file. Turn *Look at Camera* off to record; viewing with it on is
-  unaffected.
+* **The viewer's look-at solve is suspended for the whole recording session**, and it is **off by default** in the
+  viewer. It bends the spine and head towards the camera on top of the clip, and the sampler reads the very bones
+  it drives, so its contribution could be written into the motion as though the animation had asked for it.
+  `UnityHumanoidVMDRecorder.StartRecording`/`StopRecording` hold `UmaContainerCharacter.SuspendLookAt()`, so **both**
+  record buttons - the manual one and the auto-record one - sample the same way the reference was captured; a
+  suspension placed inside only one of those paths is what left the manual button sampling a solved pose against an
+  unsolved reference for several builds. Whether the setting still changes a recording now that the reference pose
+  is also reset correctly (`docs/VMD_RECORDING.md`) has **not been measured** - the last takes that showed the
+  toggle mattering predate those fixes. Viewing with it on is unaffected.
 * **`UMA_GHOST_DUMP=1` records what the sampler actually used** to `ghost_dump.jsonl` in the temp directory:
   per bone and per frame, the value written (the ghost's local rotation), the live bone's rotation, and both
-  parent frames. A recording that comes out wrong cannot be argued about from the vmd alone, because the value
-  in the file came from the ghost's frame rather than the bone's own. `Tools\ghost_dump_check.py` reads the
-  dump and separates a constant frame conversion (what the ghost is for) from a difference that moves with the
-  animation (a recording following something the clip did not ask for). Off unless the variable is set, and it
-  does not change what is recorded.
+  parent frames; plus one reference row per bone (`role: "reference"`) holding the pose the take is a delta
+  against, and one row per control bone the ghost chain skips (`role: "skipped"`). A recording that comes out wrong
+  cannot be argued about from the vmd alone, because the value in the file came from the ghost's frame rather than
+  the bone's own. `Tools\ghost_dump_check.py` reads the dump and separates a constant frame conversion (what the
+  ghost is for) from a difference that moves with the animation. Off unless the variable is set, and it does not
+  change what is recorded. Flushed from `StopRecording`, so either button produces it.
+  See `docs/VMD_RECORDING.md` for what these three rows have caught.
 
 ### 4. Model and motion in one run
 
