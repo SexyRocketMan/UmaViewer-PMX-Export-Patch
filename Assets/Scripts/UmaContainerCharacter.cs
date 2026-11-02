@@ -613,27 +613,9 @@ public class UmaContainerCharacter : UmaContainer
     public IDisposable SuspendLookAt()
     {
         bool previous = EnableEyeTracking;
-
-        // The solver's own weight as well as the component's enabled flag. Disabling the component is enough in
-        // principle, but the weight is the solver's actual contribution and zeroing it means a solve cannot reach
-        // a bone even if something re-enables the component mid-take - which is the case this kept failing in: a
-        // take with the viewer's toggle on still carried the solve as a constant 115.33 deg on the spine when only
-        // the flag was being switched off.
-        float previousWeight = 0f;
-        bool hadWeight = false;
-        if (IK != null)
-        {
-            IK.enabled = false;
-            if (IK.solvers != null && IK.solvers.lookAt != null)
-            {
-                previousWeight = IK.solvers.lookAt.IKPositionWeight;
-                hadWeight = true;
-                IK.solvers.lookAt.IKPositionWeight = 0f;
-            }
-        }
-
         EnableEyeTracking = false;
-        return new LookAtScope(this, previous, previousWeight, hadWeight);
+        if (IK != null) IK.enabled = false;
+        return new LookAtScope(this, previous);
     }
 
     /// <summary>Puts the setting back when the caller's sampling is over; see <see cref="SuspendLookAt"/>.</summary>
@@ -641,31 +623,21 @@ public class UmaContainerCharacter : UmaContainer
     {
         readonly UmaContainerCharacter _container;
         readonly bool _eyeTracking;
-        readonly float _solverWeight;
-        readonly bool _hadWeight;
         bool _disposed;
 
-        public LookAtScope(UmaContainerCharacter container, bool eyeTracking, float solverWeight, bool hadWeight)
+        public LookAtScope(UmaContainerCharacter container, bool eyeTracking)
         {
             _container = container;
             _eyeTracking = eyeTracking;
-            _solverWeight = solverWeight;
-            _hadWeight = hadWeight;
         }
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            if (_container == null) return;
-            if (_hadWeight && _container.IK != null && _container.IK.solvers != null
-                && _container.IK.solvers.lookAt != null)
-            {
-                _container.IK.solvers.lookAt.IKPositionWeight = _solverWeight;
-            }
             // the component's own FixedUpdate re-enables the solver once the flag is back, so restoring the
-            // flag is the rest of the job - and it happens whether or not this container ever had an IK created
-            _container.EnableEyeTracking = _eyeTracking;
+            // flag is the whole job - and it happens whether or not this container ever had an IK created
+            if (_container != null) _container.EnableEyeTracking = _eyeTracking;
         }
     }
 

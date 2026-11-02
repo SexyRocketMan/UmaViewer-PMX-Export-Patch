@@ -784,22 +784,10 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
         // The solve itself is held off by StartRecording() for the whole session (see there), so that every path -
         // this coroutine, the manual Record VMD button, live recording - samples it the same way the reference was
-        // captured.
+        // captured. What is left to do here is purge a solve that was applied *before* the session began.
         var characterContainer = GetComponentInParent<UmaContainerCharacter>();
         // TEMP-HARNESS
         if (GhostDumpEnabled) ghostDump = new System.Text.StringBuilder();
-
-        // The rig is put back to the pose the ghost built its reference from, before anything is sampled: the same
-        // ResetBodyPose/UpBodyReset that Initialize() runs just before it captures. Whatever had moved the rig since
-        // then - the look-at solve being the one that does, but a pose or a leftover clip would do it too - cannot
-        // reach the take, because the frames are then built from the clip laid over this pose and the reference was
-        // built from the same one. Measured with the viewer's look-at on: a take without this still carried the
-        // solve as a constant 115.33 deg on the spine, while the same take with the toggle off was a replica.
-        if (characterContainer != null)
-        {
-            characterContainer.ResetBodyPose();
-            characterContainer.UpBodyReset();
-        }
 
         // Switching the solver off stops it writing, but its last write is still on the bones - and the snapshot
         // below is what frame 0 gets built from, so a spine the solve had bent comes back as the take's opening
