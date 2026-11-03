@@ -8,15 +8,16 @@ produce, only without the clicking.
 Everything goes through one script, `Tools/headless_export.ps1`. It builds a Unity batch-mode command
 line, runs it, and prints the interesting lines of the log afterwards.
 
-> ### Status: this runs the Unity Editor, not the released build
-> The CLI is an editor entry point - `Assets/Editor/UmaHeadlessExport.cs`, which Unity executes with
-> `-batchmode -executeMethod UmaHeadlessExport.Run` - and `Tools/headless_export.ps1` is the wrapper that
-> assembles that command line for you. Every flag has a double-dash name (`--char`) and its original
-> single-dash one (`-umaChar`), `--help` lists them, and `--json` gives a machine readable result. **Using it today needs the project source and the matching Unity
-> editor.** The `UmaViewer.exe` from a release has no argument handling at all, so none of this works from
-> a release build yet. If the CLI is meant to be a feature of the shipped viewer, read
-> [What a shipped CLI would need](#what-a-shipped-cli-would-need) at the end - that section is the
-> starting point for reworking this interface.
+> ### Status: the editor and a built viewer
+> The runner lives in `Assets/Scripts/Cli/`, which is runtime code: the editor reaches it with
+> `-batchmode -executeMethod UmaHeadlessExport.Run` (and `Tools/headless_export.ps1` assembles that command
+> line for you), and **a built viewer is itself the CLI** - `UmaViewer.exe --char 1001 --out x.pmx` - with no
+> Unity installed at all. See [Running from the built viewer](#running-from-the-built-viewer).
+>
+> Every flag has a double-dash name (`--char`) and its original single-dash one (`-umaChar`), `--help` lists
+> them, and `--json` gives a machine readable result. The flags that read editor-only data -
+> `--probe-morphs`, `--probe-tears`, `--dump-shaders`, `--dump-face` - still need the editor, because a runtime
+> assembly cannot reference `UnityEditor`; in a player they say so and the run carries on.
 
 ### Two spellings, one parser
 
@@ -41,6 +42,38 @@ That needs no wrapper at all. Its exit code is the run's (0 ok, 1 the run failed
 log says `[UmaHeadlessExport] OK` or `FAILED: <why>` either way. What the wrapper still does for you: finds
 Unity, clears a `Temp/UnityLockfile` left by a crashed run, waits out Unity's launcher process, and filters
 the log down to the lines worth reading.
+
+### Running from the built viewer
+
+Build one to `BuildDev/uma-cli/UmaViewer.exe` (ignored by git, 124 MB):
+
+```powershell
+& "C:\Program Files\Unity\Hub\Editor\2022.3.62f1\Editor\Unity.exe" -batchmode -projectPath . `
+    -executeMethod UmaPlayerBuild.BuildWindows -logFile build.log
+```
+
+Then the binary *is* the CLI - no Unity, no project, no PowerShell:
+
+```powershell
+.\BuildDev\uma-cli\UmaViewer.exe --char 1001 --costume 00 --out D:\out\1001.pmx --json
+.\BuildDev\uma-cli\UmaViewer.exe --dump-props D:\props --dump-props-filter toon_prop
+.\BuildDev\uma-cli\UmaViewer.exe --help
+```
+
+The exit code is the run's (0 ok, 1 failed, 2 bad arguments), the log says the same as the editor's, and
+`--json` gives the same line. A window does open - the viewer is a game, not a console app - so pass
+`-screen-width 640 -screen-height 360 -screen-fullscreen 0` if it is in the way; the UI is hidden as the run
+starts and the cursor is released.
+
+Measured, same machine: a character export took **5.3 s** in the player against **10-11 s** in the editor, for
+a PMX of the same 14 492 vertices, 82 074 indices, 437 bones and 205 morphs. Two honest differences:
+
+* **The editor-only probes.** `--probe-morphs`, `--probe-tears`, `--dump-shaders` and `--dump-face` read
+  animation curves and serialized properties with `UnityEditor`, which a player assembly cannot reference at
+  all. In a player they say so - `DumpTearBundles needs the editor: ...` - and the run carries on.
+* **The model's English name.** The editor writes the localised name (`Special Week`); the player writes the
+  Japanese one (`スペシャルウィーク`), because the English names arrive from a translation download the
+  editor's cache already has. Everything else in the file is identical.
 
 ### `--help`, `--about`, `--json`
 
@@ -618,7 +651,29 @@ a poor user interface, for reasons that are all in the code:
   `SessionState` strings, and it terminates the process (`EditorApplication.Exit`) rather than returning.
 * The wrapper is PowerShell, i.e. Windows-only, and its only progress channel is scraping the log.
 
-**What has been done, and what is still open**
+**What has been done**
+
+The runner moved out of `Assets/Editor/` into `Assets/Scripts/Cli/`, so it is ordinary runtime code and is
+compiled into the player:
+
+* `CliHost` is the four things that were editor-shaped - the frame loop, exiting, entering play mode, opening
+  the scene - each with an editor branch and a player branch.
+* `CliState` is `SessionState` in the editor (where entering play mode clears every static field) and a plain
+  dictionary in a player (where nothing reloads).
+* The five diagnostic probes that read animation data - `DumpTearBundles`, `DumpTearAnimator`,
+  `DumpClipSerialized`, `DumpShaderFacts`, `DumpShaderEffectData`, `DumpFacePipeline` - moved to
+  `Assets/Editor/CliEditorProbes.cs` and install themselves into `CliEditorProbeHooks` when the editor loads,
+  including after the domain reload that play mode causes. In a player the hooks stay null and the flag says so.
+* `UmaCliBootstrap` is the player's entry point: a `[RuntimeInitializeOnLoadMethod]` that notices CLI flags,
+  hides the UI, adds a driver object that delivers frames, and starts the same stage machine.
+* `UmaPlayerBuild.BuildWindows` builds the player, because the only way to know any of this stays true is to
+  build one and run a job through it.
+
+Verified both hosts on the same jobs: a character export (identical structure, 5.3 s in the player against
+10-11 s in the editor), a prop dump with its `index.json`, `--help`, `--json`, and the editor-only probe
+reporting itself as unavailable in the player.
+
+**What is still open**
 
 The first step of that rework is in: the parser is table-driven, every flag has a `--long` name with the old
 `-uma*` one as an alias, `--help` prints the table it is parsed from, `--about` names the build, `--json` gives

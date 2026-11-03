@@ -1,4 +1,3 @@
-#if UNITY_EDITOR
 using Gallop;
 using System;
 using System.Collections.Generic;
@@ -6,8 +5,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using UmaMusumeAudio;
-using UnityEditor;
-using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -93,8 +90,26 @@ using UnityEngine.Rendering;
 ///
 /// NOTE: entering play mode triggers a script domain reload, which clears static fields and drops
 /// EditorApplication.update subscriptions. All progress state therefore lives in
-/// <see cref="SessionState"/> and the update loop is re-armed from an [InitializeOnLoadMethod].
+/// <see cref="CliState"/> and the update loop is re-armed from an [InitializeOnLoadMethod].
 /// </summary>
+/// <summary>
+/// The command line's editor-only probes, as hooks.
+///
+/// Reading an animation's curves and serialized properties is `UnityEditor` work, and a runtime assembly -
+/// which is where the runner lives so a built player can use it - cannot see those types. The editor side
+/// installs these when it loads (<see cref="CliEditorProbes"/>); in a player they stay null and the flag that
+/// wanted one says so instead of failing.
+/// </summary>
+public static class CliEditorProbeHooks
+{
+    public static Action DumpTearBundles;
+    public static Action<string, AnimationClip> DumpClipSerialized;
+    public static Action<string, Animator, GameObject> DumpTearAnimator;
+    public static Action<UmaContainer> DumpShaderFacts;
+    public static Action<string, CharaShaderEffectData> DumpShaderEffectData;
+    public static Action<GameObject, string> DumpFacePipeline;
+}
+
 public static class UmaHeadlessExport
 {
     private const string Tag = "[UmaHeadlessExport]";
@@ -326,6 +341,9 @@ public static class UmaHeadlessExport
         new Flag { Long = "--help", Internal = "", Kind = FlagKind.Switch, Group = "run",
                    Help = "print this and exit" },
     };
+
+    /// <summary>True when <paramref name="name"/> is a flag this build knows (takes `--x` or `--x=value`).</summary>
+    public static bool IsKnownFlagName(string name) => FlagsByLongName.ContainsKey(name);
 
     private static readonly Dictionary<string, Flag> FlagsByLongName =
         Flags.Where(flag => flag.Long.StartsWith("--", StringComparison.Ordinal))
@@ -715,12 +733,12 @@ public static class UmaHeadlessExport
     }
 
     private static Options CurrentOptions =>
-        JsonUtility.FromJson<Options>(SessionState.GetString(KeyOptions, "{}"));
+        JsonUtility.FromJson<Options>(CliState.GetString(KeyOptions, "{}"));
 
     private static Stage CurrentStage
     {
-        get => (Stage)SessionState.GetInt(KeyStage, (int)Stage.Idle);
-        set => SessionState.SetInt(KeyStage, (int)value);
+        get => (Stage)CliState.GetInt(KeyStage, (int)Stage.Idle);
+        set => CliState.SetInt(KeyStage, (int)value);
     }
 
     private static int _settleFramesLeft;
@@ -736,7 +754,7 @@ public static class UmaHeadlessExport
     {
         get
         {
-            string ticks = SessionState.GetString(KeyRunStarted, "");
+            string ticks = CliState.GetString(KeyRunStarted, "");
             return long.TryParse(ticks, out long value) && value > 0
                 ? new DateTime(value, DateTimeKind.Utc)
                 : default;
@@ -744,18 +762,45 @@ public static class UmaHeadlessExport
     }
     private static int _playModeRetries;
 
-    /// <summary>Entry point for -executeMethod.</summary>
-    public static void Run()
+    /// <summary>
+    /// Entry point for the editor's `-executeMethod`. Everything after the argument parsing is shared with the
+    /// player entry (<see cref="RunInPlayer"/>), so both hosts run the same stages; only the way the scene is
+    /// reached differs.
+    /// </summary>
+    public static void Run() => Begin(Environment.GetCommandLineArgs());
+
+    /// <summary>
+    /// True when this process was started with command line flags this build understands. The player bootstrap
+    /// asks before doing anything, so a normal launch of the viewer is untouched by any of this.
+    /// </summary>
+    public static bool LooksLikeCommandLine(string[] argv)
+    {
+        foreach (string argument in argv)
+        {
+            if (string.IsNullOrEmpty(argument)) continue;
+            if (argument.StartsWith("-uma", StringComparison.Ordinal)) return true;
+            if (!argument.StartsWith("--", StringComparison.Ordinal)) continue;
+            if (IsKnownFlagName(argument.Split('=')[0])) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The shared beginning of a run: parse, answer --help/--about, validate, then set the state machine going.
+    /// In the editor the scene is opened and play mode is entered; in a player the scene is already the one
+    /// running, so the stages start at <see cref="Stage.WaitStartup"/> instead.
+    /// </summary>
+    public static void Begin(string[] argv)
     {
         Options options;
         try
         {
-            options = Options.Parse(Environment.GetCommandLineArgs());
+            options = Options.Parse(argv);
         }
         catch (Exception ex)
         {
             Debug.LogError($"{Tag} invalid arguments: {ex.Message}");
-            EditorApplication.Exit(2);
+            CliHost.Exit(2);
             return;
         }
 
@@ -765,7 +810,7 @@ public static class UmaHeadlessExport
             // every mode ends with this marker, including the ones that print and exit: a wrapper waits for it
             // and a mode that only logs its own summary looks like a hang
             Debug.Log($"{Tag} OK");
-            EditorApplication.Exit(0);
+            CliHost.Exit(0);
             return;
         }
 
@@ -773,7 +818,7 @@ public static class UmaHeadlessExport
         {
             PrintVersion();
             Debug.Log($"{Tag} OK");
-            EditorApplication.Exit(0);
+            CliHost.Exit(0);
             return;
         }
 
@@ -786,50 +831,57 @@ public static class UmaHeadlessExport
             Debug.LogError($"{Tag} nothing to do: pass --char <id> or --prop <path> (optionally --out), "
                            + "or --list-chars / --list-costumes / --list-props / --list-textures "
                            + "/ --list-families / --scan-props / --dump-props / --transcript. See --help.");
-            EditorApplication.Exit(2);
+            CliHost.Exit(2);
             return;
         }
 
         if (!File.Exists(options.ScenePath))
         {
             Debug.LogError($"{Tag} scene not found: {options.ScenePath}");
-            EditorApplication.Exit(2);
+            CliHost.Exit(2);
             return;
         }
 
-        SessionState.SetString(KeyOptions, JsonUtility.ToJson(options));
-        SessionState.SetString(KeyDeadline, DateTime.UtcNow.AddSeconds(options.TimeoutSeconds).Ticks.ToString());
-        SessionState.SetString(KeyOutPath, "");
-        SessionState.SetInt(KeyScanFailures, 0);
-        SessionState.SetInt(KeyBootReported, 0);
-        SessionState.SetString(KeyRunStarted, DateTime.UtcNow.Ticks.ToString());
+        CliState.SetString(KeyOptions, JsonUtility.ToJson(options));
+        CliState.SetString(KeyDeadline, DateTime.UtcNow.AddSeconds(options.TimeoutSeconds).Ticks.ToString());
+        CliState.SetString(KeyOutPath, "");
+        CliState.SetInt(KeyScanFailures, 0);
+        CliState.SetInt(KeyBootReported, 0);
+        CliState.SetString(KeyRunStarted, DateTime.UtcNow.Ticks.ToString());
         _playModeRetries = 0;
-        _faceDumped = false;
+        FaceDumped = false;
         _attachmentsApplied = false;
-        CurrentStage = Stage.WaitPlayMode;
 
-        Debug.Log($"{Tag} opening scene {options.ScenePath}");
-        EditorSceneManager.OpenScene(options.ScenePath, OpenSceneMode.Single);
+        // a player is already past "start the scene and enter play mode": the scene it was built with is running
+        // and the viewer is booting in it, so the run starts at the stage that waits for that boot
+        CurrentStage = CliHost.IsEditor ? Stage.WaitPlayMode : Stage.WaitStartup;
+        Debug.Log($"{Tag} starting a run in {(CliHost.IsEditor ? "the editor" : "a player")}, "
+                  + $"scene {options.ScenePath}");
 
+        CliHost.OpenScene(options.ScenePath);
         Arm();
-        EditorApplication.EnterPlaymode();
+        if (CliHost.IsEditor) CliHost.EnterPlayMode();
     }
 
     /// <summary>
     /// Runs after every domain reload (including the one caused by entering play mode), which is
     /// where the update subscription made by <see cref="Run"/> gets lost.
     /// </summary>
-    [InitializeOnLoadMethod]
+#if UNITY_EDITOR
+    /// <summary>
+    /// Runs after every domain reload (including the one caused by entering play mode), which is
+    /// where the update subscription made by <see cref="Run"/> gets lost.
+    /// </summary>
+    [UnityEditor.InitializeOnLoadMethod]
     private static void Bootstrap()
     {
         if (CurrentStage != Stage.Idle) Arm();
     }
+#endif
 
-    private static void Arm()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-    }
+
+    private static void Arm() => CliHost.Arm(Tick);
+
 
     private static void Tick()
     {
@@ -837,7 +889,7 @@ public static class UmaHeadlessExport
         if (stage == Stage.Idle || stage == Stage.Done) return;
 
         var options = CurrentOptions;
-        if (DateTime.UtcNow.Ticks > long.Parse(SessionState.GetString(KeyDeadline, "0")))
+        if (DateTime.UtcNow.Ticks > long.Parse(CliState.GetString(KeyDeadline, "0")))
         {
             Fail($"timed out after {options.TimeoutSeconds}s in stage {stage}");
             return;
@@ -848,7 +900,7 @@ public static class UmaHeadlessExport
             switch (stage)
             {
                 case Stage.WaitPlayMode:
-                    if (EditorApplication.isPlaying)
+                    if (CliHost.IsPlaying)
                     {
                         _playModeEnteredUtc = DateTime.UtcNow;
                         Debug.Log($"{Tag} play mode entered");
@@ -867,13 +919,13 @@ public static class UmaHeadlessExport
                             return;
                         }
                         Debug.Log($"{Tag} play mode has not started yet, asking again ({_playModeRetries})");
-                        EditorApplication.EnterPlaymode();
+                        CliHost.EnterPlayMode();
                     }
                     return;
 
                 case Stage.ExportAudio:
                     if (!_audioExported) return;
-                    ReportTag(SessionState.GetString(KeyOutPath, ""));
+                    ReportTag(CliState.GetString(KeyOutPath, ""));
                     Succeed();
                     return;
 
@@ -894,9 +946,9 @@ public static class UmaHeadlessExport
 
                     // once per run: a -umaScanExport sweep comes back through this stage for every prop, and
                     // the boot summary is about the run, not about the prop
-                    if (SessionState.GetInt(KeyBootReported, 0) == 0)
+                    if (CliState.GetInt(KeyBootReported, 0) == 0)
                     {
-                        SessionState.SetInt(KeyBootReported, 1);
+                        CliState.SetInt(KeyBootReported, 1);
                         Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets, "
                                   + $"{builder.ShaderList.Count} shaders"
                                   + (fullyBooted ? "" : $" (after {bootSeconds:F0}s without the startup download finishing)"));
@@ -1023,9 +1075,9 @@ public static class UmaHeadlessExport
                                      : $" matching '{options.DumpPropsFilter}'"));
                             return;
                         }
-                        SessionState.SetInt(KeyDumpTotal, dumpList.Count);
+                        CliState.SetInt(KeyDumpTotal, dumpList.Count);
 
-                        int dumpIndex = SessionState.GetInt(KeyDumpIndex, 0);
+                        int dumpIndex = CliState.GetInt(KeyDumpIndex, 0);
                         if (dumpIndex >= dumpList.Count)
                         {
                             WriteDumpIndex(root, dumpList.Count);
@@ -1042,15 +1094,15 @@ public static class UmaHeadlessExport
                         {
                             // a resume: the file is already there, so only the index needs to know about it
                             RecordDump(root, dumpEntry, dumpFamily, dumpPath, null);
-                            SessionState.SetInt(KeyDumpIndex, dumpIndex + 1);
+                            CliState.SetInt(KeyDumpIndex, dumpIndex + 1);
                             Debug.Log($"{Tag} [{dumpIndex + 1}/{dumpList.Count}] {Path.GetFileName(dumpEntry.Name)}: "
                                       + "already dumped, skipping");
                             return;
                         }
 
-                        SessionState.SetString(KeyOutPath, dumpPath);
-                        SessionState.SetInt(KeyIsProp, 1);
-                        SessionState.SetString(KeyPropName, dumpEntry.Name);
+                        CliState.SetString(KeyOutPath, dumpPath);
+                        CliState.SetInt(KeyIsProp, 1);
+                        CliState.SetString(KeyPropName, dumpEntry.Name);
                         Debug.Log($"{Tag} [{dumpIndex + 1}/{dumpList.Count}] dumping {dumpEntry.Name}");
                         builder.UnloadProp();
                         builder.LoadProp(dumpEntry);
@@ -1061,7 +1113,7 @@ public static class UmaHeadlessExport
 
                     if (!string.IsNullOrEmpty(options.ScanProps))
                     {
-                        int index = SessionState.GetInt(KeyScanIndex, 0);
+                        int index = CliState.GetInt(KeyScanIndex, 0);
                         var candidates = ScanCandidates(options.ScanProps, options.ScanCount);
                         if (candidates.Count == 0)
                         {
@@ -1070,7 +1122,7 @@ public static class UmaHeadlessExport
                         }
                         if (index >= candidates.Count)
                         {
-                            int failures = SessionState.GetInt(KeyScanFailures, 0);
+                            int failures = CliState.GetInt(KeyScanFailures, 0);
                             if (!options.ScanExport)
                             {
                                 Debug.Log($"{Tag} scanned {candidates.Count} prop(s)");
@@ -1090,7 +1142,7 @@ public static class UmaHeadlessExport
                         }
 
                         var entry = candidates[index];
-                        SessionState.SetInt(KeyScanIndex, index + 1);
+                        CliState.SetInt(KeyScanIndex, index + 1);
                         builder.UnloadProp();
                         builder.LoadProp(entry);
 
@@ -1108,9 +1160,9 @@ public static class UmaHeadlessExport
                             // the run would exit 0. A sweep exists to find exactly those scenes, so the
                             // target is cleared first and the check means what it says.
                             if (File.Exists(sweepPath)) File.Delete(sweepPath);
-                            SessionState.SetString(KeyOutPath, sweepPath);
-                            SessionState.SetInt(KeyIsProp, 1);
-                            SessionState.SetString(KeyPropName, entry.Name);
+                            CliState.SetString(KeyOutPath, sweepPath);
+                            CliState.SetInt(KeyIsProp, 1);
+                            CliState.SetString(KeyPropName, entry.Name);
                             Debug.Log($"{Tag} [{index + 1}/{candidates.Count}] exporting {entry.Name}");
                             CurrentStage = Stage.WaitModel;
                             return;
@@ -1137,9 +1189,9 @@ public static class UmaHeadlessExport
                             : options.OutPath;
                         propExportPath = Path.GetFullPath(propExportPath);
                         Directory.CreateDirectory(Path.GetDirectoryName(propExportPath));
-                        SessionState.SetString(KeyOutPath, propExportPath);
-                        SessionState.SetInt(KeyIsProp, 1);
-                        SessionState.SetString(KeyPropName, propEntry.Name);
+                        CliState.SetString(KeyOutPath, propExportPath);
+                        CliState.SetInt(KeyIsProp, 1);
+                        CliState.SetString(KeyPropName, propEntry.Name);
 
                         Debug.Log($"{Tag} loading prop {propEntry.Name}");
                         builder.UnloadProp();
@@ -1173,8 +1225,8 @@ public static class UmaHeadlessExport
                         : options.OutPath;
                     exportPath = Path.GetFullPath(exportPath);
                     Directory.CreateDirectory(Path.GetDirectoryName(exportPath));
-                    SessionState.SetString(KeyOutPath, exportPath);
-                    SessionState.SetInt(KeyIsProp, 0);
+                    CliState.SetString(KeyOutPath, exportPath);
+                    CliState.SetInt(KeyIsProp, 0);
 
                     Debug.Log($"{Tag} loading character {chara.Id} ({chara.Name}) costume {costumeId}");
                     StartLoad(chara, costumeId);
@@ -1202,7 +1254,7 @@ public static class UmaHeadlessExport
                         if (!ApplyAttachments(options.Attach)) return;
                     }
 
-                    if (!string.IsNullOrEmpty(options.Motion) && SessionState.GetInt(KeyMotionLoaded, 0) == 0)
+                    if (!string.IsNullOrEmpty(options.Motion) && CliState.GetInt(KeyMotionLoaded, 0) == 0)
                     {
                         var target = CurrentContainer() as UmaContainerCharacter;
                         if (target == null)
@@ -1241,15 +1293,15 @@ public static class UmaHeadlessExport
                         if (_requestedClip != null) _requestedClip.name = motionEntry.Name;
                         Debug.Log($"{Tag} now playing '{CurrentClip(target.UmaAnimator)?.name}' "
                                   + $"(requested '{_requestedClip?.name}')");
-                        SessionState.SetInt(KeyMotionLoaded, 1);
+                        CliState.SetInt(KeyMotionLoaded, 1);
                         _settleFramesLeft = options.ExtraFrames; // let the new clip settle before sampling
                         // batch mode runs editor updates back to back, so frames alone are no time at all:
                         // PlaySeconds is what lets a one shot animation actually reach its end
-                        _playDeadline = EditorApplication.timeSinceStartup + options.PlaySeconds;
+                        _playDeadline = CliHost.Now + options.PlaySeconds;
                         return;
                     }
 
-                    if (options.PlaySeconds > 0 && EditorApplication.timeSinceStartup < _playDeadline)
+                    if (options.PlaySeconds > 0 && CliHost.Now < _playDeadline)
                     {
                         return;
                     }
@@ -1264,7 +1316,7 @@ public static class UmaHeadlessExport
                             _tearSampleSeconds = options.TearSampleSeconds;
                             BeginTearSampling();
                         }
-                        if (EditorApplication.timeSinceStartup < _tearSampleDeadline)
+                        if (CliHost.Now < _tearSampleDeadline)
                         {
                             SampleTearFrame();
                             return;
@@ -1399,9 +1451,9 @@ public static class UmaHeadlessExport
 
                     string vmdPath = Path.GetFullPath(options.RecordVmd);
                     Directory.CreateDirectory(Path.GetDirectoryName(vmdPath));
-                    SessionState.SetString(KeyVmdPath, vmdPath);
+                    CliState.SetString(KeyVmdPath, vmdPath);
 
-                    if (SessionState.GetInt(KeyVmdStarted, 0) == 0)
+                    if (CliState.GetInt(KeyVmdStarted, 0) == 0)
                     {
                         // the motion that was asked for wins over what the state machine reports as current: the
                         // state reports the clip it is still transitioning *from* (see the -umaMotion site)
@@ -1413,7 +1465,7 @@ public static class UmaHeadlessExport
                             Fail("no animation clip is playing on the character");
                             return;
                         }
-                        SessionState.SetInt(KeyVmdStarted, 1);
+                        CliState.SetInt(KeyVmdStarted, 1);
                         Debug.Log($"{Tag} recording one loop of '{clip.name}' ({clip.length:F3}s) at {options.RecordFps}fps "
                                   + $"in {options.RecordMode} mode; the save dialog would suggest "
                                   + $"'{ExportNaming.MotionFile(character, clip)}.vmd'");
@@ -1422,7 +1474,7 @@ public static class UmaHeadlessExport
                         {
                             // the legacy path: let the animator play normally and let FixedUpdate sample
                             int frames = Mathf.Max(1, Mathf.RoundToInt(clip.length * options.RecordFps));
-                            SessionState.SetInt(KeyVmdFrames, frames);
+                            CliState.SetInt(KeyVmdFrames, frames);
                             Time.fixedDeltaTime = 1f / options.RecordFps;
                             character.UmaAnimator.speed = 1f;
                             recorder.StartRecording();
@@ -1430,20 +1482,20 @@ public static class UmaHeadlessExport
                         else
                         {
                             recorder.StartCoroutine(recorder.RecordCurrentLoop(clip, options.RecordFps,
-                                () => SessionState.SetInt(KeyVmdDone, 1)));
+                                () => CliState.SetInt(KeyVmdDone, 1)));
                         }
                         return;
                     }
 
                     if (options.RecordMode == "realtime")
                     {
-                        int wanted = SessionState.GetInt(KeyVmdFrames, 30) + 1;
+                        int wanted = CliState.GetInt(KeyVmdFrames, 30) + 1;
                         if (recorder.FrameNumber < wanted) return; // still sampling
                         recorder.StopRecording();
-                        SessionState.SetInt(KeyVmdDone, 1);
+                        CliState.SetInt(KeyVmdDone, 1);
                     }
 
-                    if (SessionState.GetInt(KeyVmdDone, 0) == 0) return; // still recording
+                    if (CliState.GetInt(KeyVmdDone, 0) == 0) return; // still recording
 
                     // The component defaults to 2 (its interactive default); recordings from here should be
                     // full fidelity unless asked otherwise, which is also what Config.VmdKeyReductionLevel
@@ -1470,7 +1522,7 @@ public static class UmaHeadlessExport
                         Fail("model container disappeared before export");
                         return;
                     }
-                    string exportPath = SessionState.GetString(KeyOutPath, "");
+                    string exportPath = CliState.GetString(KeyOutPath, "");
 
                     if (!string.IsNullOrEmpty(options.Variant) && container is UmaContainerProp propContainer
                         && propContainer.TextureSet != null)
@@ -1487,8 +1539,8 @@ public static class UmaHeadlessExport
 
                     if (options.DumpFace || options.DumpMaterials)
                     {
-                        string stem = SessionState.GetInt(KeyIsProp, 0) == 1
-                            ? SceneStem(SessionState.GetString(KeyPropName, ""))
+                        string stem = CliState.GetInt(KeyIsProp, 0) == 1
+                            ? SceneStem(CliState.GetString(KeyPropName, ""))
                             : "";
                         if (options.DumpFace) DumpFacePipeline(container.gameObject, stem);
                         if (options.DumpMaterials)
@@ -1583,7 +1635,7 @@ public static class UmaHeadlessExport
                 {
                     DumpPath(CurrentOptions.DumpProps, dumpEntry, out string dumpFamily);
                     string dumpPath = Path.Combine(Path.GetFullPath(CurrentOptions.DumpProps), "unwritten");
-                    dumpPath = SessionState.GetString(KeyOutPath, dumpPath);
+                    dumpPath = CliState.GetString(KeyOutPath, dumpPath);
                     ContinueDump(Path.GetFullPath(CurrentOptions.DumpProps), dumpEntry, dumpFamily, dumpPath, null,
                                  $"{ex.GetType().Name}: {ex.Message}");
                     return;
@@ -1663,23 +1715,23 @@ public static class UmaHeadlessExport
     /// </summary>
     private static void ContinueSweep(string failure)
     {
-        string name = SessionState.GetString(KeyPropName, "");
-        int done = SessionState.GetInt(KeyScanIndex, 0);
+        string name = CliState.GetString(KeyPropName, "");
+        int done = CliState.GetInt(KeyScanIndex, 0);
         if (failure != null)
         {
-            SessionState.SetInt(KeyScanFailures, SessionState.GetInt(KeyScanFailures, 0) + 1);
+            CliState.SetInt(KeyScanFailures, CliState.GetInt(KeyScanFailures, 0) + 1);
             Debug.Log($"{Tag} [{done}] {name}: FAILED: {failure}");
         }
         else
         {
-            string written = SessionState.GetString(KeyOutPath, "");
+            string written = CliState.GetString(KeyOutPath, "");
             long bytes = File.Exists(written) ? new FileInfo(written).Length : 0;
             Debug.Log($"{Tag} [{done}] {name}: exported ({bytes} bytes)");
         }
 
-        SessionState.SetString(KeyOutPath, "");
-        SessionState.SetInt(KeyIsProp, 0);
-        SessionState.SetString(KeyPropName, "");
+        CliState.SetString(KeyOutPath, "");
+        CliState.SetInt(KeyIsProp, 0);
+        CliState.SetString(KeyPropName, "");
         CurrentStage = Stage.WaitStartup;
     }
 
@@ -1839,7 +1891,7 @@ public static class UmaHeadlessExport
         if (container != null) FillRigFacts(record, container);
 
         _dumpEntries[modelRelative] = record;
-        WriteDumpIndex(root, SessionState.GetInt(KeyDumpTotal, _dumpEntries.Count));
+        WriteDumpIndex(root, CliState.GetInt(KeyDumpTotal, _dumpEntries.Count));
     }
 
     /// <summary>Bone count, hand bone count and bounds - the three facts a picker wants without loading the model.</summary>
@@ -1915,7 +1967,7 @@ public static class UmaHeadlessExport
 
         if (failure != null)
         {
-            SessionState.SetInt(KeyScanFailures, SessionState.GetInt(KeyScanFailures, 0) + 1);
+            CliState.SetInt(KeyScanFailures, CliState.GetInt(KeyScanFailures, 0) + 1);
             Debug.Log($"{Tag} {Path.GetFileName(entry.Name)}: FAILED: {failure}");
         }
         else
@@ -1926,17 +1978,17 @@ public static class UmaHeadlessExport
                       + (record.handBones > 0 ? $", {record.handBones} hand bone(s)" : ""));
         }
 
-        SessionState.SetInt(KeyDumpIndex, SessionState.GetInt(KeyDumpIndex, 0) + 1);
-        SessionState.SetString(KeyOutPath, "");
-        SessionState.SetInt(KeyIsProp, 0);
-        SessionState.SetString(KeyPropName, "");
+        CliState.SetInt(KeyDumpIndex, CliState.GetInt(KeyDumpIndex, 0) + 1);
+        CliState.SetString(KeyOutPath, "");
+        CliState.SetInt(KeyIsProp, 0);
+        CliState.SetString(KeyPropName, "");
         CurrentStage = Stage.WaitStartup;
     }
 
     /// <summary>The prop being dumped by the run in progress, found again from the state the export stage reads.</summary>
     private static UmaDatabaseEntry DumpCurrentEntry()
     {
-        string name = SessionState.GetString(KeyPropName, "");
+        string name = CliState.GetString(KeyPropName, "");
         if (string.IsNullOrEmpty(name)) return null;
         var main = UmaViewerMain.Instance;
         if (main == null || main.AbList == null) return null;
@@ -2286,7 +2338,7 @@ public static class UmaHeadlessExport
     {
         var builder = UmaViewerBuilder.Instance;
         if (builder == null) return null;
-        return SessionState.GetInt(KeyIsProp, 0) == 1 ? (UmaContainer)builder.CurrentOtherContainer : builder.CurrentUMAContainer;
+        return CliState.GetInt(KeyIsProp, 0) == 1 ? (UmaContainer)builder.CurrentOtherContainer : builder.CurrentUMAContainer;
     }
 
     /// <summary>
@@ -2783,7 +2835,8 @@ public static class UmaHeadlessExport
     /// the viewer overwrites textures and properties when it loads a character - and the face shader's
     /// _NormalizeNormal is 0, so the length of its vertex normals matters.
     /// </summary>
-    private static bool _faceDumped;
+    /// <summary>Whether the face pipeline has already been dumped this run; the editor probes share it.</summary>
+    public static bool FaceDumped;
 
     /// <summary>
     /// What the facial morph system holds at runtime, for a character that was set up but not exported.
@@ -2805,7 +2858,7 @@ public static class UmaHeadlessExport
     {
         var character = CurrentContainer() as UmaContainerCharacter;
         _tearSampleCount = 0;
-        _tearSampleDeadline = EditorApplication.timeSinceStartup + Math.Max(0.1, _tearSampleSeconds);
+        _tearSampleDeadline = CliHost.Now + Math.Max(0.1, _tearSampleSeconds);
         if (character == null || character.FaceDrivenKeyTarget == null)
         {
             Debug.Log($"{Tag} [tears] no facial target, nothing to sample");
@@ -3204,45 +3257,12 @@ public static class UmaHeadlessExport
     /// </summary>
     private static void DumpTearBundles()
     {
-        var main = UmaViewerMain.Instance;
-        if (main == null) return;
-        foreach (var pair in main.AbList)
+        if (CliEditorProbeHooks.DumpTearBundles == null)
         {
-            if (pair.Key.IndexOf("tear", StringComparison.OrdinalIgnoreCase) < 0) continue;
-            AssetBundle bundle = null;
-            try
-            {
-                bundle = UmaAssetManager.LoadAssetBundle(pair.Value, true, false);
-            }
-            catch (Exception exception)
-            {
-                Debug.Log($"{Tag} [tears] bundle '{pair.Key}' failed: {exception.GetType().Name}");
-                continue;
-            }
-            if (bundle == null) continue;
-            UnityEngine.Object[] assets = bundle.LoadAllAssets();
-            Debug.Log($"{Tag} [tears] bundle '{pair.Key}': {assets.Length} asset(s)");
-            foreach (UnityEngine.Object asset in assets)
-            {
-                if (asset == null) continue;
-                var clip = asset as AnimationClip;
-                if (clip != null)
-                {
-                    Debug.Log($"{Tag} [tears]   AnimationClip '{clip.name}' legacy={clip.legacy} "
-                              + $"length={clip.length:F3} bindings={AnimationUtility.GetCurveBindings(clip).Length} "
-                              + $"humanMotion={clip.humanMotion} motionCurves={clip.hasMotionCurves}");
-                    continue;
-                }
-                var controller = asset as RuntimeAnimatorController;
-                if (controller != null)
-                {
-                    Debug.Log($"{Tag} [tears]   controller '{asset.name}' "
-                              + $"clips={string.Join(",", controller.animationClips.Select(c => c != null ? c.name : "null"))}");
-                    continue;
-                }
-                Debug.Log($"{Tag} [tears]   {asset.GetType().Name} '{asset.name}'");
-            }
+            Debug.LogWarning($"{Tag} DumpTearBundles needs the editor: it reads animation data through UnityEditor");
+            return;
         }
+        CliEditorProbeHooks.DumpTearBundles();
     }
 
 
@@ -3307,137 +3327,22 @@ public static class UmaHeadlessExport
     /// </summary>
     private static void DumpClipSerialized(string label, AnimationClip clip)
     {
-        try
+        if (CliEditorProbeHooks.DumpClipSerialized == null)
         {
-            var serialized = new SerializedObject(clip);
-            SerializedProperty iterator = serialized.GetIterator();
-            int printed = 0;
-            while (iterator.NextVisible(true) && printed < 60)
-            {
-                if (iterator.depth > 2) continue;
-                if (iterator.propertyType == SerializedPropertyType.Generic && iterator.propertyPath.Contains(".")) continue;
-                string detail;
-                switch (iterator.propertyType)
-                {
-                    case SerializedPropertyType.Integer:
-                    case SerializedPropertyType.Enum:
-                    case SerializedPropertyType.Boolean:
-                    case SerializedPropertyType.Float:
-                        detail = iterator.ToString() == null ? iterator.propertyType.ToString() : iterator.propertyType.ToString();
-                        break;
-                    default:
-                        detail = iterator.propertyType.ToString();
-                        break;
-                }
-                string size = iterator.isArray ? $"[{iterator.arraySize}]" : "";
-                Debug.Log($"{Tag} {label}     field {iterator.propertyPath} = {detail}{size}");
-                printed++;
-            }
+            Debug.LogWarning($"{Tag} DumpClipSerialized needs the editor: it reads animation data through UnityEditor");
+            return;
         }
-        catch (Exception exception)
-        {
-            Debug.Log($"{Tag} {label}     serialized dump failed: {exception.GetType().Name}");
-        }
+        CliEditorProbeHooks.DumpClipSerialized(label, clip);
     }
 
     private static void DumpTearAnimator(string label, Animator animator, GameObject part)
     {
-        if (animator == null)
+        if (CliEditorProbeHooks.DumpTearAnimator == null)
         {
-            Debug.Log($"{Tag} {label} no Animator");
+            Debug.LogWarning($"{Tag} DumpTearAnimator needs the editor: it reads animation data through UnityEditor");
             return;
         }
-        var runtime = animator.runtimeAnimatorController;
-        Debug.Log($"{Tag} {label} animator enabled={animator.enabled} "
-                  + $"controller='{(runtime != null ? runtime.name : "none")}' "
-                  + $"clips={(runtime != null ? runtime.animationClips.Length : 0)}");
-
-        // a *humanoid* clip has no generic curve bindings at all - its motion lives in muscle curves, and what
-        // maps them onto this skeleton is the avatar. `bindings=0` therefore says nothing about whether the clip
-        // animates anything, which is exactly the trap this probe fell into first time round.
-        Avatar avatar = animator.avatar;
-        if (avatar == null)
-        {
-            Debug.Log($"{Tag} {label} avatar: NONE - a humanoid clip cannot be applied without one");
-        }
-        else
-        {
-            Debug.Log($"{Tag} {label} avatar '{avatar.name}' valid={avatar.isValid} human={avatar.isHuman}");
-            if (avatar.isHuman)
-            {
-                HumanBone[] human = avatar.humanDescription.human;
-                Debug.Log($"{Tag} {label}   human bones mapped: {human.Length}");
-                foreach (HumanBone bone in human)
-                {
-                    Debug.Log($"{Tag} {label}     {bone.humanName} -> '{bone.boneName}'");
-                }
-            }
-        }
-        if (runtime == null) return;
-        AnimatorOverrideController overrides = runtime as AnimatorOverrideController;
-        if (overrides != null && overrides.runtimeAnimatorController != null)
-        {
-            Debug.Log($"{Tag} {label}   override over '{overrides.runtimeAnimatorController.name}'");
-        }
-        // the override only replaces the one state it is named for; the rest of the base controller - which is
-        // where a chain that bends down the cheek would have to live - is a different set of clips entirely
-        RuntimeAnimatorController baseController = overrides != null && overrides.runtimeAnimatorController != null
-            ? overrides.runtimeAnimatorController
-            : runtime;
-        if (baseController != null && !ReferenceEquals(baseController, runtime))
-        {
-            AnimationClip[] baseClips = baseController.animationClips;
-            Debug.Log($"{Tag} {label}   base controller '{baseController.name}' clips={baseClips.Length}");
-            foreach (AnimationClip baseClip in baseClips)
-            {
-                if (baseClip == null) continue;
-                EditorCurveBinding[] baseBindings = AnimationUtility.GetCurveBindings(baseClip);
-                Debug.Log($"{Tag} {label}     base clip '{baseClip.name}' length={baseClip.length:F3} "
-                          + $"bindings={baseBindings.Length}");
-                for (int b = 0; b < baseBindings.Length && b < 8; b++)
-                {
-                    Debug.Log($"{Tag} {label}       {baseBindings[b].path} | {baseBindings[b].type.Name} | "
-                              + $"{baseBindings[b].propertyName}");
-                }
-            }
-        }
-        var animatorController = baseController as UnityEditor.Animations.AnimatorController;
-        if (animatorController != null)
-        {
-            foreach (var layer in animatorController.layers)
-            {
-                Debug.Log($"{Tag} {label}   layer '{layer.name}' states={layer.stateMachine.states.Length}");
-                foreach (var state in layer.stateMachine.states)
-                {
-                    Debug.Log($"{Tag} {label}     state '{state.state.name}' "
-                              + $"clip='{(state.state.motion != null ? state.state.motion.name : "none")}'");
-                }
-            }
-        }
-        foreach (AnimationClip clip in runtime.animationClips)
-        {
-            if (clip == null) continue;
-            EditorCurveBinding[] bindings = AnimationUtility.GetCurveBindings(clip);
-            Debug.Log($"{Tag} {label}   clip '{clip.name}' length={clip.length:F3} "
-                      + $"loop={clip.isLooping} bindings={bindings.Length} humanMotion={clip.humanMotion} "
-                      + $"motionCurves={clip.hasMotionCurves} genericRoot={clip.hasGenericRootTransform}");
-            for (int b = 0; b < bindings.Length && b < 12; b++)
-            {
-                EditorCurveBinding binding = bindings[b];
-                AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, binding);
-                string keys = curve == null || curve.length == 0
-                    ? "no keys"
-                    : $"keys={curve.length} first={curve.keys[0].value:F3} last={curve.keys[curve.length - 1].value:F3}";
-                Debug.Log($"{Tag} {label}     {binding.path} | {binding.type.Name} | {binding.propertyName} | {keys}");
-            }
-            if (bindings.Length > 12)
-            {
-                Debug.Log($"{Tag} {label}     ... {bindings.Length - 12} more bindings");
-            }
-            // GetCurveBindings only reports generic curves. A clip can still carry data the API does not list
-            // (muscle curves, additive data), so the serialized fields are printed too rather than trusted.
-            DumpClipSerialized(label, clip);
-        }
+        CliEditorProbeHooks.DumpTearAnimator(label, animator, part);
     }
 
     private static string VectorText(Vector3 value) => $"({value.x:F3},{value.y:F3},{value.z:F3})";
@@ -3508,138 +3413,16 @@ public static class UmaHeadlessExport
     /// </summary>
     private static void DumpShaderFacts(UmaContainer container)
     {
-        Debug.Log("[shaders] ---- eye/face/cheek materials on the loaded model ----");
-        var seen = new HashSet<string>();
-        foreach (Renderer renderer in container.GetComponentsInChildren<Renderer>(true))
+        if (CliEditorProbeHooks.DumpShaderFacts == null)
         {
-            if (renderer == null) continue;
-            // sharedMaterials, not materials: the latter instantiates a copy per call and leaks it
-            foreach (Material material in renderer.sharedMaterials)
-            {
-                if (material == null || material.shader == null) continue;
-                string shaderName = material.shader.name;
-                bool facial = Contains(shaderName, "eye") || Contains(shaderName, "face") || Contains(shaderName, "cheek")
-                              || Contains(material.name, "eye") || Contains(material.name, "face");
-                if (!facial) continue;
-                // several renderers share one material; print each distinct one once
-                if (!seen.Add(shaderName + "|" + material.name)) continue;
-
-                int propertyCount = material.shader.GetPropertyCount();
-                Debug.Log($"[shaders] '{material.name}' on '{renderer.name}' uses shader '{shaderName}', "
-                          + $"{propertyCount} properties");
-                for (int i = 0; i < propertyCount; i++)
-                {
-                    string property = material.shader.GetPropertyName(i);
-                    var type = material.shader.GetPropertyType(i);
-                    string value;
-                    try
-                    {
-                        switch (type)
-                        {
-                            case ShaderPropertyType.Float:
-                            case ShaderPropertyType.Range:
-                                value = material.GetFloat(property).ToString("0.0000"); break;
-                            case ShaderPropertyType.Int:
-                                value = material.GetInt(property).ToString(); break;
-                            case ShaderPropertyType.Color:
-                                var colour = material.GetColor(property);
-                                value = $"({colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3})"; break;
-                            case ShaderPropertyType.Vector:
-                                var vector = material.GetVector(property);
-                                value = $"({vector.x:F3},{vector.y:F3},{vector.z:F3},{vector.w:F3})"; break;
-                            case ShaderPropertyType.Texture:
-                                var texture = material.GetTexture(property);
-                                value = texture != null ? texture.name : "<none>"; break;
-                            default:
-                                value = "?"; break;
-                        }
-                    }
-                    catch (Exception exception)
-                    {
-                        value = "(" + exception.GetType().Name + ")";
-                    }
-                    Debug.Log($"[shaders]    {property} [{type}] = {value}");
-                }
-            }
+            Debug.LogWarning($"{Tag} DumpShaderFacts needs the editor: it reads animation data through UnityEditor");
+            return;
         }
-
-        DumpShaderEffectData("head", container.HeadShaderEffectData);
-        DumpShaderEffectData("body", container.BodyShaderEffectData);
-
-        // The shipped eye shader has a _WetTex slot and a _WetRate that nothing in this viewer writes, and no
-        // exported character carries a wet texture - so the teary state may be a wet overlay the game assigns at
-        // runtime rather than only a _Limit drop. Name scan only, no bundle loading: whether such assets exist at
-        // all is the question, and it is answerable from the asset list. Counted by part rather than listed,
-        // because "wet" turns out to match thousands of them (every texture has a wet variant).
-        var viewer = UmaViewerMain.Instance;
-        if (viewer != null)
-        {
-            var wet = viewer.AbList.Keys.Where(name => Contains(name, "wet")).ToList();
-            Debug.Log($"[shaders] asset names containing 'wet': {wet.Count}");
-            foreach (var part in new[] { "eyehi", "eye", "face", "cheek", "tear", "hair", "body", "attach" })
-            {
-                Debug.Log($"[shaders]   wet+{part}: {wet.Count(name => Contains(name, part))}");
-            }
-            foreach (var name in wet.Where(name => Contains(name, "eye")).Take(10))
-            {
-                Debug.Log($"[shaders]   eye wet: {name}");
-            }
-        }
-
-        // A keyframed teary threshold would be a material curve on some clip in a motion bundle. Capped and
-        // fully guarded: these are large bundles and a failure in here must cost the probe, not the export.
-        // Character motions are looked at, not the first eight bundles: alphabetically those are campaign
-        // backgrounds, which carry a background clip and nothing facial.
-        int scanned = 0, clips = 0, materialCurves = 0, highlightCurves = 0;
-        var main = UmaViewerMain.Instance;
-        if (main != null)
-        {
-            var candidates = main.AbMotions.Where(entry => Contains(entry.Name, "chara")).ToList();
-            Debug.Log($"[shaders] motion scan: {candidates.Count} character motion bundle(s) of "
-                      + $"{main.AbMotions.Count} available, sampling 8");
-            foreach (var entry in candidates.Take(8))
-            {
-                try
-                {
-                    var bundle = UmaAssetManager.LoadAssetBundle(entry, true, false);
-                    if (bundle == null) continue;
-                    scanned++;
-                    var loaded = bundle.LoadAllAssets<AnimationClip>();
-                    int before = clips;
-                    foreach (var clip in loaded)
-                    {
-                        if (clip == null) continue;
-                        clips++;
-                        foreach (var binding in AnimationUtility.GetCurveBindings(clip))
-                        {
-                            if (binding.propertyName.IndexOf("aterial", StringComparison.Ordinal) < 0) continue;
-                            materialCurves++;
-                            if (binding.propertyName.IndexOf("_Limit", StringComparison.Ordinal) < 0
-                                && binding.propertyName.IndexOf("_High", StringComparison.Ordinal) < 0) continue;
-                            highlightCurves++;
-                            Debug.Log($"[shaders] MATERIAL CURVE '{entry.Name}' clip '{clip.name}' "
-                                      + $"{binding.path} -> {binding.propertyName}");
-                        }
-                    }
-                    Debug.Log($"[shaders]   motion '{entry.Name}': {clips - before} clip(s)");
-                }
-                catch (Exception exception)
-                {
-                    Debug.Log($"[shaders] skipping motion '{entry.Name}': "
-                              + $"{exception.GetType().Name}: {exception.Message}");
-                }
-            }
-        }
-        else
-        {
-            Debug.Log("[shaders] no UmaViewerMain instance, skipped the motion scan");
-        }
-        Debug.Log($"[shaders] motion scan: {scanned} bundle(s), {clips} clip(s), {materialCurves} material "
-                  + $"curve(s), {highlightCurves} on _Limit/_High");
-        Debug.Log("[shaders] done");
+        CliEditorProbeHooks.DumpShaderFacts(container);
     }
 
-    private static bool Contains(string text, string needle) =>
+    /// <summary>Case insensitive containment, shared with the editor probes.</summary>
+    public static bool Contains(string text, string needle) =>
         !string.IsNullOrEmpty(text) && text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
 
     /// <summary>
@@ -3650,161 +3433,22 @@ public static class UmaHeadlessExport
     /// </summary>
     private static void DumpShaderEffectData(string label, CharaShaderEffectData data)
     {
-        if (data == null)
+        if (CliEditorProbeHooks.DumpShaderEffectData == null)
         {
-            Debug.Log($"[shaders] chara_shader_effect ({label}): none");
+            Debug.LogWarning($"{Tag} DumpShaderEffectData needs the editor: it reads animation data through UnityEditor");
             return;
         }
-        var serialized = new SerializedObject(data);
-        var settings = serialized.FindProperty("_settingDataArray");
-        int count = settings != null && settings.isArray ? settings.arraySize : 0;
-        Debug.Log($"[shaders] chara_shader_effect ({label}) '{data.name}': {count} setting(s)");
-        for (int i = 0; i < count; i++)
-        {
-            var element = settings.GetArrayElementAtIndex(i);
-            var type = element.FindPropertyRelative("Type");
-            var target = element.FindPropertyRelative("TargetMaterial");
-            var parameters = element.FindPropertyRelative("ParamArray");
-            var curves = element.FindPropertyRelative("ParamCurveArray");
-
-            string kind = "?";
-            if (type != null && type.enumNames != null
-                && type.enumValueIndex >= 0 && type.enumValueIndex < type.enumNames.Length)
-            {
-                kind = type.enumNames[type.enumValueIndex];
-            }
-            string targetName = target != null && target.objectReferenceValue != null
-                ? target.objectReferenceValue.name
-                : "none";
-            var values = new List<string>();
-            if (parameters != null && parameters.isArray)
-            {
-                for (int p = 0; p < parameters.arraySize; p++)
-                    values.Add(parameters.GetArrayElementAtIndex(p).intValue.ToString());
-            }
-            int curveCount = curves != null && curves.isArray ? curves.arraySize : 0;
-            Debug.Log($"[shaders]   [{i}] {kind} material '{targetName}' "
-                      + $"params=[{string.Join(",", values)}] curves={curveCount}");
-        }
+        CliEditorProbeHooks.DumpShaderEffectData(label, data);
     }
 
     private static void DumpFacePipeline(GameObject root, string stem)
     {
-        // once only: this sits in the stage loop, and without the guard it wrote a four gigabyte log
-        if (_faceDumped) return;
-        _faceDumped = true;
-
-        foreach (var renderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        if (CliEditorProbeHooks.DumpFacePipeline == null)
         {
-            string lower = renderer.name.ToLowerInvariant();
-            if (!lower.Contains("face") && !lower.Contains("head")) continue;
-
-            Debug.Log($"{Tag} [face] {stem} renderer '{renderer.name}' mesh '{renderer.sharedMesh?.name}'");
-
-            var mesh = renderer.sharedMesh;
-            if (mesh != null)
-            {
-                var normals = mesh.normals;
-                if (normals != null && normals.Length > 0)
-                {
-                    float min = float.MaxValue, max = 0f, total = 0f;
-                    foreach (var n in normals)
-                    {
-                        float length = n.magnitude;
-                        if (length < min) min = length;
-                        if (length > max) max = length;
-                        total += length;
-                    }
-                    float mean = total / normals.Length;
-                    Debug.Log($"{Tag} [face] normals: {normals.Length} entries, length min {min:F6} mean {mean:F6} "
-                              + $"max {max:F6}");
-                }
-
-                var colours = mesh.colors;
-                if (colours == null || colours.Length == 0)
-                {
-                    Debug.Log($"{Tag} [face] vertex colours: none on the mesh");
-                }
-                else
-                {
-                    Vector4 min = new Vector4(float.MaxValue, float.MaxValue, float.MaxValue, float.MaxValue);
-                    Vector4 max = new Vector4(float.MinValue, float.MinValue, float.MinValue, float.MinValue);
-                    foreach (var c in colours)
-                    {
-                        min = Vector4.Min(min, c);
-                        max = Vector4.Max(max, c);
-                    }
-                if (normals != null && normals.Length > 0)
-                {
-                    Vector3 sum = Vector3.zero;
-                    foreach (var n in normals) sum += n;
-                    Vector3 mean = (sum / normals.Length).normalized;
-                    var bins = new int[19];
-                    foreach (var n in normals)
-                        bins[Mathf.Clamp((int)(Vector3.Angle(n, mean) / 5f), 0, 18)]++;
-                    var parts = new List<string>();
-                    for (int i = 0; i < bins.Length; i++)
-                        if (bins[i] > 0) parts.Add($"{i * 5}-{i * 5 + 5}:{bins[i]}");
-                    Debug.Log($"{Tag} [face] normal fingerprint: mean "
-                              + $"({mean.x:F4},{mean.y:F4},{mean.z:F4}) angles to mean -> "
-                              + string.Join(" ", parts));
-                }
-                    Vector4 colourTotal = Vector4.zero;
-                    foreach (var c in colours) colourTotal += (Vector4)c;
-                    Vector4 meanColour = colourTotal / colours.Length;
-                    Debug.Log($"{Tag} [face] vertex colours: {colours.Length} entries, "
-                              + $"r {min.x:F3}-{max.x:F3} g {min.y:F3}-{max.y:F3} "
-                              + $"b {min.z:F3}-{max.z:F3} a {min.w:F3}-{max.w:F3}");
-                    // the four means separately: the export packs this colour into the pmx's third
-                    // extra uv as (r,g,b,a), so which channel is the blue is a question of order,
-                    // and r and b measure close enough on this model that blue's mean alone cannot
-                    // tell them apart
-                    Debug.Log($"{Tag} [face] colour channel means: r {meanColour.x:F4} g {meanColour.y:F4} "
-                              + $"b {meanColour.z:F4} a {meanColour.w:F4}");
-                }
-            }
-
-            DumpMeshArrays(renderer, mesh, root);
-
-            foreach (var material in renderer.sharedMaterials)
-            {
-                if (material == null) continue;
-                Debug.Log($"{Tag} [face] material '{material.name}' shader "
-                          + $"'{(material.shader != null ? material.shader.name : "<none>")}'");
-                var keywords = material.shaderKeywords;
-                Debug.Log($"{Tag} [face]   enabled keywords: "
-                          + (keywords == null || keywords.Length == 0
-                              ? "<none>"
-                              : string.Join(", ", keywords)));
-
-                foreach (string property in material.GetTexturePropertyNames())
-                {
-                    var texture = material.GetTexture(property);
-                    Debug.Log($"{Tag} [face]   texture {property} = "
-                              + $"{(texture == null ? "<null>" : $"'{texture.name}' {texture.width}x{texture.height}")}");
-                }
-
-                var shader = material.shader;
-                if (shader == null) continue;
-                int count = ShaderUtil.GetPropertyCount(shader);
-                for (int i = 0; i < count; i++)
-                {
-                    var type = ShaderUtil.GetPropertyType(shader, i);
-                    string property = ShaderUtil.GetPropertyName(shader, i);
-                    if (type == ShaderUtil.ShaderPropertyType.Float
-                        || type == ShaderUtil.ShaderPropertyType.Range)
-                    {
-                        Debug.Log($"{Tag} [face]   float {property} = {material.GetFloat(property):F6}");
-                    }
-                    else if (type == ShaderUtil.ShaderPropertyType.Color)
-                    {
-                        var colour = material.GetColor(property);
-                        Debug.Log($"{Tag} [face]   colour {property} = "
-                                  + $"{colour.r:F3},{colour.g:F3},{colour.b:F3},{colour.a:F3}");
-                    }
-                }
-            }
+            Debug.LogWarning($"{Tag} DumpFacePipeline needs the editor: it reads shader keywords through UnityEditor");
+            return;
         }
+        CliEditorProbeHooks.DumpFacePipeline(root, stem);
     }
 
     /// <summary>
@@ -3814,9 +3458,9 @@ public static class UmaHeadlessExport
     /// (root.InverseTransformPoint(renderer.transform.TransformPoint(baked.vertices[i]))), which makes
     /// the pmx's own order a valid alignment for the rest.
     /// </summary>
-    private static void DumpMeshArrays(SkinnedMeshRenderer renderer, Mesh mesh, GameObject root)
+    public static void DumpMeshArrays(SkinnedMeshRenderer renderer, Mesh mesh, GameObject root)
     {
-        string exportPath = SessionState.GetString(KeyOutPath, "");
+        string exportPath = CliState.GetString(KeyOutPath, "");
         if (string.IsNullOrEmpty(exportPath)) return;
 
         var baked = new Mesh();
@@ -4252,7 +3896,7 @@ public static class UmaHeadlessExport
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
 
         AudioTranscriptTag? tag = AudioTranscripts.Tag(entry, options.ExportClip);
-        SessionState.SetString(KeyOutPath, path);
+        CliState.SetString(KeyOutPath, path);
         _audioExported = false;
         Debug.Log($"{Tag} exporting {entry.Name} clip {options.ExportClip} of {streams.Count} to {path}"
                   + (tag.HasValue ? " with a transcript tag" : " (no transcript for this clip)"));
@@ -4341,7 +3985,7 @@ public static class UmaHeadlessExport
         var options = CurrentOptions;
         if (options == null || !options.Json) return;
 
-        string written = SessionState.GetString(KeyOutPath, "");
+        string written = CliState.GetString(KeyOutPath, "");
         var result = new RunResult
         {
             ok = error == null,
@@ -4354,7 +3998,7 @@ public static class UmaHeadlessExport
             seconds = RunStartedUtc == default
                 ? 0
                 : Math.Round((DateTime.UtcNow - RunStartedUtc).TotalSeconds, 1),
-            failures = SessionState.GetInt(KeyScanFailures, 0),
+            failures = CliState.GetInt(KeyScanFailures, 0),
             error = error ?? "",
         };
         Debug.Log($"{Tag} JSON {JsonUtility.ToJson(result)}");
@@ -4381,22 +4025,21 @@ public static class UmaHeadlessExport
         // the result line is written first: it reads the options back out of the session, and clearing them
         // here is what makes the next run start clean
         EmitResult(null);
-        SessionState.SetString(KeyOptions, "");
-        EditorApplication.update -= Tick;
+        CliState.SetString(KeyOptions, "");
+        CliHost.Disarm();
         // every mode has to emit this marker: the wrappers wait for it, and a mode that only logs its
         // own summary looks like a hang to them
         Debug.Log($"{Tag} OK");
-        EditorApplication.Exit(0);
+        CliHost.Exit(0);
     }
 
     private static void Fail(string message)
     {
         CurrentStage = Stage.Done;
         EmitResult(message);
-        SessionState.SetString(KeyOptions, "");
-        EditorApplication.update -= Tick;
+        CliState.SetString(KeyOptions, "");
+        CliHost.Disarm();
         Debug.LogError($"{Tag} FAILED: {message}");
-        EditorApplication.Exit(1);
+        CliHost.Exit(1);
     }
 }
-#endif
