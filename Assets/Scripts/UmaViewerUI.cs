@@ -550,13 +550,38 @@ public class UmaViewerUI : MonoBehaviour
     }
 
     /// <summary>
-    /// The prefab name prefixes the prop panel lists - see <see cref="PropCatalog"/>, which the grid browser
-    /// reads too, so the list and the grid can never disagree about what a prop is.
+    /// The prefab name prefixes the prop panel lists.
+    ///
+    /// The game names each `3d/chara` family its own way, so the single `pfb_chr_prop` substring this panel
+    /// used to filter on reached exactly one family and left others unreachable in the UI even though their
+    /// bundles are in the manifest: `toonprop` (held/effect props, one per character) and `richprop` (three
+    /// live-show props). `docs/ASSET_FAMILIES.md` has the measured counts, from `-umaListFamilies`.
+    ///
+    /// `attach` is deliberately absent and `sweat` always was: attach prefabs are not props at all - they carry
+    /// a copy of the character rig and belong to a character, so they are toggles on the character
+    /// (`UISettingsModel.LoadAttachPanel`, `UmaContainerCharacter.AttachAccessory`), not scene objects. A
+    /// sweat prefab is a `..._sweatlocator` with no geometry.
     /// </summary>
-    private static bool IsPropAsset(string path) => PropCatalog.IsProp(path);
+    private static readonly string[] PropPrefixes =
+        { "pfb_chr_prop", "pfb_toon_prop", "pfb_rich_prop" };
+
+    /// <summary>True for a manifest path the prop panel should offer (the family's prefab, not its clothes).</summary>
+    private static bool IsPropAsset(string path)
+    {
+        if (path.Contains("clothes")) return false;
+        string name = Path.GetFileName(path);
+        return PropPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal));
+    }
 
     /// <summary>The `3d/chara` family a manifest path belongs to ("attach", "prop", ...), or "" outside it.</summary>
-    private static string CharaFamily(string path) => PropCatalog.Family(path);
+    private static string CharaFamily(string path)
+    {
+        const string root = "3d/chara/";
+        if (!path.StartsWith(root, StringComparison.Ordinal)) return "";
+        string rest = path.Substring(root.Length);
+        int slash = rest.IndexOf('/');
+        return slash > 0 ? rest.Substring(0, slash) : rest;
+    }
 
     public void LoadPropPanel()
     {
@@ -576,62 +601,6 @@ public class UmaViewerUI : MonoBehaviour
             pageentrys.Add(pageentry);
         }
         PropPageCtrl.Initialize(pageentrys, PropList);
-        EnsureGridEntryButton();
-    }
-
-    /// <summary>
-    /// Opens the prop grid browser on top of the panel: the same props, as pictures, with a batch export.
-    ///
-    /// It is a separate window rather than a mode of the list because a grid needs room - a page of thumbnails
-    /// in the list's 350 pixel column would show about eight - and because the list is still the faster way to
-    /// reach a prop whose id you already know. Nothing here replaces it: closing the grid puts it back.
-    /// </summary>
-    public void OpenPropBrowser()
-    {
-        PropBrowser.Open(this);
-    }
-
-    /// <summary>Name of the grid button the prop panel adds to its own page control.</summary>
-    private const string GridEntryButtonName = "PropGridButton";
-
-    /// <summary>
-    /// Puts the panel's way into the grid under its paging controls, once.
-    ///
-    /// Built in code and parented to <see cref="PropPageCtrl"/> rather than placed in the scene: the page control
-    /// is a prefab every list shares, and a button saved into it would appear on the character, costume, motion
-    /// and sound panels too. Here it exists only while the prop panel is the panel that was loaded.
-    /// </summary>
-    private void EnsureGridEntryButton()
-    {
-        if (PropPageCtrl == null) return;
-        var host = PropPageCtrl.transform;
-        if (host.Find(GridEntryButtonName)) return;
-
-        var clone = Instantiate(UmaContainerPrefab, host);
-        clone.name = GridEntryButtonName;
-        var container = clone.GetComponent<UmaUIContainer>();
-        if (container == null)
-        {
-            Destroy(clone);
-            return;
-        }
-
-        container.Name = "Grid view";
-        var rect = (RectTransform)clone.transform;
-        rect.anchorMin = new Vector2(0f, 0f);
-        rect.anchorMax = new Vector2(1f, 0f);
-        rect.pivot = new Vector2(0.5f, 0f);
-        rect.offsetMin = new Vector2(12f, 4f);
-        rect.offsetMax = new Vector2(-12f, 44f);
-
-        if (container.Button != null)
-        {
-            container.Button.onClick.RemoveAllListeners();
-            container.Button.onClick.AddListener(OpenPropBrowser);
-            container.Button.navigation = new Navigation { mode = Navigation.Mode.None };
-        }
-
-        Debug.Log($"[UmaViewerUI] prop grid entry button under the page control: {rect.rect}");
     }
 
     public void LoadMapPanel()

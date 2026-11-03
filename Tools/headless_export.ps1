@@ -56,8 +56,6 @@ param(
     [int]$ScanCount = 10,
     [switch]$ScanExport,
     [string]$ScanOut = "",
-    [string]$PropAtlas = "",
-    [switch]$PropGridCheck,
     [string]$Transcript = "",
     [string]$ExportAudio = "",
     [int]$ExportClip = 0,
@@ -156,7 +154,7 @@ if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $PropAtlas -or $PropGridCheck -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -200,14 +198,12 @@ if ($ListFamilies) {
 }
 if ($ScanProps) {
     $arguments += @("-umaScanProps", $ScanProps, "-umaScanCount", $ScanCount)
-    if ($PropAtlas) { $arguments += @("-umaPropAtlas", $PropAtlas) }
     if ($ScanExport) { $arguments += "-umaScanExport" }
     if ($ScanOut) {
         New-Item -ItemType Directory -Force -Path $ScanOut | Out-Null
         $arguments += @("-umaScanOut", (Resolve-Path $ScanOut).Path)
     }
 }
-if ($PropGridCheck) { $arguments += "-umaPropGridCheck" }
 if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
 if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
