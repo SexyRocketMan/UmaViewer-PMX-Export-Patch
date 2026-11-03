@@ -124,6 +124,14 @@ public static class UmaHeadlessExport
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
     private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
     private const string KeyBootReported = "UmaHeadlessExport.BootReported";
+    private const string KeyDumpIndex = "UmaHeadlessExport.DumpIndex";
+    private const string KeyDumpTotal = "UmaHeadlessExport.DumpTotal";
+
+    /// <summary>What a `-umaDumpProps` run knows about the models it has written. Seeded from an existing
+    /// index.json when the run resumes, so a second run keeps what the first one recorded.</summary>
+    private static readonly Dictionary<string, DumpEntry> _dumpEntries = new Dictionary<string, DumpEntry>(StringComparer.Ordinal);
+
+    private static bool _dumpIndexLoaded;
 
     private enum Stage
     {
@@ -179,6 +187,19 @@ public static class UmaHeadlessExport
         /// the viewer booting, and a sweep boots it once for the whole batch.
         /// </summary>
         public bool ScanExport;
+
+        /// <summary>
+        /// `-umaDumpProps <dir>`: export *every* prop into its own folder, plus an index.json describing the
+        /// lot. This is the dump a web viewer or a picker reads: one model per folder with its own textures, so
+        /// each one can be fetched on its own, and an index so a page never has to walk a folder tree.
+        /// </summary>
+        public string DumpProps = "";
+
+        /// <summary>Only dump props whose asset path contains this (e.g. `rich_prop`). Empty dumps all of them.</summary>
+        public string DumpPropsFilter = "";
+
+        /// <summary>How many props to dump; 0 means every prop in the manifest.</summary>
+        public int DumpPropsCount;
         /// <summary>Where the sweep writes: one `.pmx` per prop, plus the shared `Texture2D/` folder.</summary>
         public string ScanOutDir = "";
         public bool DumpMaterials;
@@ -287,6 +308,9 @@ public static class UmaHeadlessExport
                     case "-umaScanProps": options.ScanProps = Next(); break;
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaScanExport": options.ScanExport = true; break;
+                case "-umaDumpProps": options.DumpProps = Next(); break;
+                case "-umaDumpPropsFilter": options.DumpPropsFilter = Next(); break;
+                case "-umaDumpPropsCount": options.DumpPropsCount = int.Parse(Next()); break;
                     case "-umaScanOut": options.ScanOutDir = Next(); break;
                     case "-umaTranscript": options.Transcript = Next(); break;
                     case "-umaExportAudio": options.ExportAudio = Next(); break;
@@ -366,12 +390,12 @@ public static class UmaHeadlessExport
         if (!options.ListChars && !options.ListCostumes && !options.ListProps && !options.ListTextures
             && !options.ListFamilies
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
-            && string.IsNullOrEmpty(options.ExportAudio)
+            && string.IsNullOrEmpty(options.ExportAudio) && string.IsNullOrEmpty(options.DumpProps)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
                            + "or -umaListChars / -umaListCostumes / -umaListProps / -umaListTextures "
-                           + "/ -umaListFamilies / -umaScanProps / -umaTranscript");
+                           + "/ -umaListFamilies / -umaScanProps / -umaDumpProps / -umaTranscript");
             EditorApplication.Exit(2);
             return;
         }
@@ -591,6 +615,59 @@ public static class UmaHeadlessExport
                         Succeed();
                         return;
                     }
+
+                    if (!string.IsNullOrEmpty(options.DumpProps))
+                    {
+                        // The dump a picker or a web viewer reads: every prop, one folder each (its own textures
+                        // inside), and an index.json the page can load once instead of walking the tree.
+                        string root = Path.GetFullPath(options.DumpProps);
+                        Directory.CreateDirectory(root);
+                        LoadDumpIndex(root);
+
+                        var dumpList = DumpCandidates(options.DumpPropsFilter, options.DumpPropsCount);
+                        if (dumpList.Count == 0)
+                        {
+                            Fail("no props to dump"
+                                 + (string.IsNullOrEmpty(options.DumpPropsFilter)
+                                     ? "; is the manifest loaded?"
+                                     : $" matching '{options.DumpPropsFilter}'"));
+                            return;
+                        }
+                        SessionState.SetInt(KeyDumpTotal, dumpList.Count);
+
+                        int dumpIndex = SessionState.GetInt(KeyDumpIndex, 0);
+                        if (dumpIndex >= dumpList.Count)
+                        {
+                            WriteDumpIndex(root, dumpList.Count);
+                            int skipped = File.Exists(Path.Combine(root, DumpIndexName)) ? _dumpEntries.Count : 0;
+                            Debug.Log($"{Tag} prop dump: {dumpList.Count} model(s) in {root} "
+                                      + $"({_dumpEntries.Count} recorded in index.json)");
+                            Succeed();
+                            return;
+                        }
+
+                        var dumpEntry = dumpList[dumpIndex];
+                        string dumpPath = DumpPath(root, dumpEntry, out string dumpFamily);
+                        if (File.Exists(dumpPath) && new FileInfo(dumpPath).Length > 0)
+                        {
+                            // a resume: the file is already there, so only the index needs to know about it
+                            RecordDump(root, dumpEntry, dumpFamily, dumpPath, null);
+                            SessionState.SetInt(KeyDumpIndex, dumpIndex + 1);
+                            Debug.Log($"{Tag} [{dumpIndex + 1}/{dumpList.Count}] {Path.GetFileName(dumpEntry.Name)}: "
+                                      + "already dumped, skipping");
+                            return;
+                        }
+
+                        SessionState.SetString(KeyOutPath, dumpPath);
+                        SessionState.SetInt(KeyIsProp, 1);
+                        SessionState.SetString(KeyPropName, dumpEntry.Name);
+                        Debug.Log($"{Tag} [{dumpIndex + 1}/{dumpList.Count}] dumping {dumpEntry.Name}");
+                        builder.UnloadProp();
+                        builder.LoadProp(dumpEntry);
+                        CurrentStage = Stage.WaitModel;
+                        return;
+                    }
+
 
                     if (!string.IsNullOrEmpty(options.ScanProps))
                     {
@@ -1066,11 +1143,33 @@ public static class UmaHeadlessExport
                     {
                         string missing = $"the export wrote no {exportPath}";
                         if (options.ScanExport) { ContinueSweep(missing); return; }
+                        if (!string.IsNullOrEmpty(options.DumpProps))
+                        {
+                            var dumpEntry = DumpCurrentEntry();
+                            if (dumpEntry != null)
+                            {
+                                DumpPath(options.DumpProps, dumpEntry, out string dumpFamily);
+                                ContinueDump(Path.GetFullPath(options.DumpProps), dumpEntry, dumpFamily, exportPath,
+                                             container, missing);
+                                return;
+                            }
+                        }
                         Fail(missing);
                         return;
                     }
                     Debug.Log($"{Tag} OK {exportPath} ({new FileInfo(exportPath).Length} bytes)");
                     if (options.ScanExport) { ContinueSweep(null); return; }
+                    if (!string.IsNullOrEmpty(options.DumpProps))
+                    {
+                        var dumpEntry = DumpCurrentEntry();
+                        if (dumpEntry != null)
+                        {
+                            DumpPath(options.DumpProps, dumpEntry, out string dumpFamily);
+                            ContinueDump(Path.GetFullPath(options.DumpProps), dumpEntry, dumpFamily, exportPath,
+                                         container, null);
+                            return;
+                        }
+                    }
                     Succeed();
                     return;
                 }
@@ -1084,6 +1183,21 @@ public static class UmaHeadlessExport
             {
                 ContinueSweep($"{ex.GetType().Name}: {ex.Message}");
                 return;
+            }
+            // a dump is a sweep over 1 300 models: one that throws is recorded and skipped, like a sweep's
+            if (!string.IsNullOrEmpty(CurrentOptions.DumpProps)
+                && (CurrentStage == Stage.Export || CurrentStage == Stage.WaitModel || CurrentStage == Stage.Settle))
+            {
+                var dumpEntry = DumpCurrentEntry();
+                if (dumpEntry != null)
+                {
+                    DumpPath(CurrentOptions.DumpProps, dumpEntry, out string dumpFamily);
+                    string dumpPath = Path.Combine(Path.GetFullPath(CurrentOptions.DumpProps), "unwritten");
+                    dumpPath = SessionState.GetString(KeyOutPath, dumpPath);
+                    ContinueDump(Path.GetFullPath(CurrentOptions.DumpProps), dumpEntry, dumpFamily, dumpPath, null,
+                                 $"{ex.GetType().Name}: {ex.Message}");
+                    return;
+                }
             }
             Fail($"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
@@ -1178,6 +1292,267 @@ public static class UmaHeadlessExport
         SessionState.SetString(KeyPropName, "");
         CurrentStage = Stage.WaitStartup;
     }
+
+    /// <summary>Name of the file a dump describes itself with, next to the model folders.</summary>
+    private const string DumpIndexName = "index.json";
+
+    /// <summary>The three prop families, by manifest path prefix. `attach` and `sweat` are not props - see
+    /// docs/ASSET_FAMILIES.md - and their `clothes` variants are parts of a prop, not props.</summary>
+    private static readonly string[] PropPrefixes = { "pfb_chr_prop", "pfb_toon_prop", "pfb_rich_prop" };
+
+    /// <summary>Every prop the manifest holds, in path order, optionally filtered and capped.</summary>
+    private static List<UmaDatabaseEntry> DumpCandidates(string filter, int count)
+    {
+        var main = UmaViewerMain.Instance;
+        if (main == null || main.AbList == null) return new List<UmaDatabaseEntry>();
+
+        var all = main.AbList.Values
+            .Where(entry => IsPropPath(entry.Name))
+            // a dump is meant to be complete: a prop whose bundle is not in the local cache yet is downloaded as
+            // it is loaded (Config.DownloadMissingResources), and one that cannot be is reported and skipped
+            .Where(entry => string.IsNullOrEmpty(filter) || entry.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderBy(entry => entry.Name, StringComparer.Ordinal)
+            .ToList();
+
+        return count > 0 ? all.Take(count).ToList() : all;
+    }
+
+    /// <summary>True for a manifest path that is a prop.</summary>
+    private static bool IsPropPath(string path)
+    {
+        if (string.IsNullOrEmpty(path) || path.IndexOf("clothes", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+        string name = Path.GetFileName(path);
+        foreach (string prefix in PropPrefixes)
+        {
+            if (name.StartsWith(prefix, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>The `3d/chara` family of a manifest path: "prop", "toonprop", "richprop", ...</summary>
+    private static string PropFamilyOf(string path)
+    {
+        const string root = "3d/chara/";
+        if (string.IsNullOrEmpty(path) || !path.StartsWith(root, StringComparison.Ordinal)) return "other";
+        string rest = path.Substring(root.Length);
+        int slash = rest.IndexOf('/');
+        return slash > 0 ? rest.Substring(0, slash) : rest;
+    }
+
+    /// <summary>
+    /// Where a prop's model goes: `&lt;root&gt;/&lt;family&gt;/&lt;prop folder&gt;/&lt;prefab&gt;.pmx`.
+    ///
+    /// One folder per model, because the exporter writes its textures into `Texture2D/` beside the file: a single
+    /// flat folder would have every prop's maps in one place, which is fine on disk and wrong for a web page that
+    /// fetches one model at a time.
+    /// </summary>
+    private static string DumpPath(string root, UmaDatabaseEntry entry, out string family)
+    {
+        family = PropFamilyOf(entry.Name);
+        string prefab = Path.GetFileName(entry.Name);
+        // the prop's own folder under the family, without the family prefix and without the prefab file name:
+        // "3d/chara/richprop/rich_prop1005_00/pfb_rich_prop1005_00" -> "richprop/rich_prop1005_00"
+        // the path already carries the family, so the root is the only thing to add
+        string folder = Path.GetDirectoryName(entry.Name.Substring("3d/chara/".Length));
+        return Path.Combine(root, folder ?? family, prefab + ".pmx");
+    }
+
+    /// <summary>One model in the dump's index.json.</summary>
+    [Serializable]
+    private class DumpEntry
+    {
+        /// <summary>Prefab name, e.g. `pfb_chr_prop1003_10`. Unique within the dump.</summary>
+        public string name;
+        /// <summary>Family folder: prop, toonprop, richprop.</summary>
+        public string family;
+        /// <summary>Manifest path the model came from.</summary>
+        public string source;
+        /// <summary>The model, relative to the dump root and always with forward slashes.</summary>
+        public string model;
+        /// <summary>Its texture folder, relative to the dump root, or "" when it has no textures.</summary>
+        public string textures;
+        /// <summary>Size of the .pmx in bytes.</summary>
+        public long bytes;
+        /// <summary>Everything under its folder, textures included.</summary>
+        public long bytesTotal;
+        /// <summary>Bone references in its skin, 0 for a mesh with no skin.</summary>
+        public int bones;
+        /// <summary>Bone references that are hand or finger bones: a prop held in a hand says so here.</summary>
+        public int handBones;
+        /// <summary>Renderer bounds, "x,y,z" in world units - how big the thing actually is.</summary>
+        public string size;
+        /// <summary>Why it was not written, or "" for one that was.</summary>
+        public string failure;
+    }
+
+    /// <summary>The dump as a whole: what a page loads to know every model it could show.</summary>
+    [Serializable]
+    private class DumpIndex
+    {
+        public string generated;
+        public string root;
+        public int count;
+        public List<DumpEntry> models = new List<DumpEntry>();
+    }
+
+    /// <summary>Reads an existing index.json into memory, so a resumed run keeps what the first one recorded.</summary>
+    private static void LoadDumpIndex(string root)
+    {
+        if (_dumpIndexLoaded) return;
+        _dumpIndexLoaded = true;
+
+        string path = Path.Combine(root, DumpIndexName);
+        if (!File.Exists(path)) return;
+        try
+        {
+            var index = JsonUtility.FromJson<DumpIndex>(File.ReadAllText(path));
+            if (index?.models == null) return;
+            foreach (var model in index.models)
+            {
+                if (model != null && !string.IsNullOrEmpty(model.model)) _dumpEntries[model.model] = model;
+            }
+            Debug.Log($"{Tag} resumed from an index of {_dumpEntries.Count} model(s)");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"{Tag} could not read {path}, starting the index fresh: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Records one model in the index and writes index.json.
+    ///
+    /// It is rewritten after every model rather than at the end: a full dump is 1 300 models and twenty minutes,
+    /// and a run that is stopped - by the user, by a crash, by one bad bundle - should still leave an index that
+    /// describes everything on disk.
+    /// </summary>
+    private static void RecordDump(string root, UmaDatabaseEntry entry, string family, string modelPath,
+                                   UmaContainer container, string failure = null)
+    {
+        string modelRelative = RelativeTo(root, modelPath);
+        string textureFolder = Path.Combine(Path.GetDirectoryName(modelPath), "Texture2D");
+
+        var record = new DumpEntry
+        {
+            name = Path.GetFileName(entry.Name),
+            family = family,
+            source = entry.Name,
+            model = modelRelative,
+            textures = Directory.Exists(textureFolder) ? RelativeTo(root, textureFolder) : "",
+            bytes = File.Exists(modelPath) ? new FileInfo(modelPath).Length : 0,
+            bytesTotal = Directory.Exists(Path.GetDirectoryName(modelPath))
+                ? Directory.GetFiles(Path.GetDirectoryName(modelPath), "*", SearchOption.AllDirectories)
+                    .Sum(file => new FileInfo(file).Length)
+                : 0,
+            failure = failure ?? "",
+        };
+        if (container != null) FillRigFacts(record, container);
+
+        _dumpEntries[modelRelative] = record;
+        WriteDumpIndex(root, SessionState.GetInt(KeyDumpTotal, _dumpEntries.Count));
+    }
+
+    /// <summary>Bone count, hand bone count and bounds - the three facts a picker wants without loading the model.</summary>
+    private static void FillRigFacts(DumpEntry record, UmaContainer container)
+    {
+        int bones = 0;
+        int handBones = 0;
+        foreach (var skin in container.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            foreach (var bone in skin.bones)
+            {
+                if (!bone) continue;
+                bones++;
+                string name = bone.name;
+                if (name.IndexOf("Wrist", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Hand_Attach", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Index_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Thumb_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Middle_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Ring_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Pinky_", StringComparison.Ordinal) >= 0)
+                {
+                    handBones++;
+                }
+            }
+        }
+        record.bones = bones;
+        record.handBones = handBones;
+
+        bool any = false;
+        var bounds = new Bounds(container.transform.position, Vector3.zero);
+        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer) continue;
+            if (!any) { bounds = renderer.bounds; any = true; }
+            else bounds.Encapsulate(renderer.bounds);
+        }
+        record.size = any
+            ? FormattableString.Invariant($"{bounds.size.x:F3},{bounds.size.y:F3},{bounds.size.z:F3}")
+            : "";
+    }
+
+    /// <summary>A path as the index should carry it: relative to the dump root, forward slashes.</summary>
+    private static string RelativeTo(string root, string path)
+    {
+        string relative = Path.GetRelativePath(root, path);
+        return relative.Replace('\\', '/');
+    }
+
+    /// <summary>Writes index.json: every model recorded so far, sorted by model path.</summary>
+    private static void WriteDumpIndex(string root, int expected)
+    {
+        var index = new DumpIndex
+        {
+            generated = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            root = root.Replace('\\', '/'),
+            count = expected > 0 ? expected : _dumpEntries.Count,
+            models = _dumpEntries.Values
+                .OrderBy(model => model.model, StringComparer.Ordinal)
+                .ToList(),
+        };
+        File.WriteAllText(Path.Combine(root, DumpIndexName), JsonUtility.ToJson(index, true));
+    }
+
+    /// <summary>
+    /// Ends one model of a `-umaDumpProps` run and starts the next: records it, then goes back to the stage that
+    /// walks the list. The per-prop state is cleared with it, so the next model cannot inherit the last one's path.
+    /// </summary>
+    private static void ContinueDump(string root, UmaDatabaseEntry entry, string family, string modelPath,
+                                     UmaContainer container, string failure)
+    {
+        RecordDump(root, entry, family, modelPath, container, failure);
+
+        if (failure != null)
+        {
+            SessionState.SetInt(KeyScanFailures, SessionState.GetInt(KeyScanFailures, 0) + 1);
+            Debug.Log($"{Tag} {Path.GetFileName(entry.Name)}: FAILED: {failure}");
+        }
+        else
+        {
+            var record = _dumpEntries[RelativeTo(root, modelPath)];
+            Debug.Log($"{Tag} {record.name}: {record.bytes} bytes, {record.bytesTotal} with textures"
+                      + (record.textures == "" ? "" : $" in {record.textures}")
+                      + (record.handBones > 0 ? $", {record.handBones} hand bone(s)" : ""));
+        }
+
+        SessionState.SetInt(KeyDumpIndex, SessionState.GetInt(KeyDumpIndex, 0) + 1);
+        SessionState.SetString(KeyOutPath, "");
+        SessionState.SetInt(KeyIsProp, 0);
+        SessionState.SetString(KeyPropName, "");
+        CurrentStage = Stage.WaitStartup;
+    }
+
+    /// <summary>The prop being dumped by the run in progress, found again from the state the export stage reads.</summary>
+    private static UmaDatabaseEntry DumpCurrentEntry()
+    {
+        string name = SessionState.GetString(KeyPropName, "");
+        if (string.IsNullOrEmpty(name)) return null;
+        var main = UmaViewerMain.Instance;
+        if (main == null || main.AbList == null) return null;
+        return main.AbList.TryGetValue(name, out var entry) ? entry : null;
+    }
+
 
     /// <summary>Props/scenes to scan, most useful ones first, capped at <paramref name="count"/>.</summary>
     private static List<UmaDatabaseEntry> ScanCandidates(string filter, int count)

@@ -12,6 +12,7 @@ argument, and what the errors mean. This file is only the map.
 | `pmx_inspect.py` | Blender-free PMX inspector and differ: `summary`, `bones`, `tails`, `weights`, `morphs`, `names`, `integrity`, `check`, `diff`. |
 | `vmd_inspect.py` | Blender-free VMD inspector and loop validator: `summary`, `loop`, `motion`. |
 | `prop_rig_names.py` | Reads `-ScanProps` output and tallies what a family's prefabs are: held in a hand, worn on a body part, or self-rigged, plus every bone name that carries a word - the only description the game ships for a prop. `python Tools/prop_rig_names.py Logs/headless_export_*.log --vocab`. |
+| `headless_export.ps1 -DumpProps` | Dumps every prop as its own folder with its own textures, plus an `index.json` (name, family, paths, bytes, bones, hand bones, bounds). The pack a web viewer or a picker reads - see [`../docs/PROP_DUMP.md`](../docs/PROP_DUMP.md). |
 | `mp3_transcript.py` | Reads the transcript an exported mp3 carries in its ID3 tag - title, speaker, story, full text - and exits non-zero when a file has none. Standard library only, so it doubles as the check that an export was tagged. |
 
 Both Python tools are PEP-723 scripts with no dependencies, so `uv run` needs nothing installed:

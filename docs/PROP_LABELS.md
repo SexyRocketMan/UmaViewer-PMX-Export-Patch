@@ -79,6 +79,11 @@ or a finger, so their skin follows a hand — the prop browser needs that to kno
 What the words are good for, then: as a **seed** for the 25% of `prop` prefabs that name an object, and as a
 fallback label (`Cover/Page` rather than a bare `pfb_chr_prop1003_10`) for the rest of the named ones.
 
+> **What actually happened next:** an in-app grid of rendered thumbnails was built and then
+> reverted - it was not well received. The props are now dumped as a model pack instead
+> ([`PROP_DUMP.md`](PROP_DUMP.md)), so they can be browsed in a web PMX viewer or picked from a list
+> rather than guessed at from pictures.
+
 ## What this means for the plan
 
 * **The VLM/render pipeline is warranted** — there is nothing to read for two thirds of the family, so the

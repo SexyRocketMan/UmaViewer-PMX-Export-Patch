@@ -56,6 +56,10 @@ param(
     [int]$ScanCount = 10,
     [switch]$ScanExport,
     [string]$ScanOut = "",
+    # export every prop into its own folder, with index.json: the dump a web viewer reads
+    [string]$DumpProps = "",
+    [string]$DumpPropsFilter = "",
+    [int]$DumpPropsCount = 0,
     [string]$Transcript = "",
     [string]$ExportAudio = "",
     [int]$ExportClip = 0,
@@ -154,7 +158,7 @@ if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -203,6 +207,10 @@ if ($ScanProps) {
         New-Item -ItemType Directory -Force -Path $ScanOut | Out-Null
         $arguments += @("-umaScanOut", (Resolve-Path $ScanOut).Path)
     }
+}
+if ($DumpProps) {
+    $arguments += @("-umaDumpProps", $DumpProps, "-umaDumpPropsFilter", $DumpPropsFilter,
+                    "-umaDumpPropsCount", $DumpPropsCount)
 }
 if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
 if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }

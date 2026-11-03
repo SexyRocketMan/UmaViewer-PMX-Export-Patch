@@ -34,6 +34,7 @@ line, runs it, and prints the interesting lines of the log afterwards.
 | Export a character wearing its attachment set | `./Tools/headless_export.ps1 -Char 1048 -Costume 00 -Attach pfb_attach1048_00_0001_00 -Out D:/out/worn.pmx` |
 | Find out why a scene renders white | `./Tools/headless_export.ps1 -ScanProps "3d/env/home" -ScanCount 12` |
 | Find every scene that fails to export | `./Tools/headless_export.ps1 -ScanProps "3d/env" -ScanCount 60 -ScanExport` |
+| Dump every prop as a browsable model pack | `./Tools/headless_export.ps1 -DumpProps D:/umaprops` (one folder per prop plus `index.json` - see [PROP_DUMP](PROP_DUMP.md)) |
 | See what a sound clip says | `./Tools/headless_export.ps1 -Transcript snd_voi_home_100100` |
 | Export a voice clip to mp3 with its line in the tag | `./Tools/headless_export.ps1 -ExportAudio snd_voi_story_041047007 -ExportClip 3 -Out D:/out/line.mp3` |
 | Check what you exported | `uv run Tools/pmx_inspect.py summary <file.pmx>`, `uv run Tools/vmd_inspect.py loop <file.vmd>` |
@@ -416,6 +417,9 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-ScanProps <filter>` | - | Load every matching `3d/env` scene **or `3d/chara` prop** in turn and report its material health plus how it is rigged: skinned renderers, bone count, and up to eight of the hand bones and eight of the other bone names it carries, which is the only description the game ships for a prop (see [PROP_LABELS](PROP_LABELS.md)). One editor boot answers a whole family's question - `-ScanProps pfb_chr_prop -ScanCount 60` reports sixty character props as single-`Root` meshes, and `Tools/prop_rig_names.py <log>` tallies a whole family's names |
 | `-ScanCount <n>` | 10 | How many entries `-ScanProps` covers |
 | `-ScanExport` | off | With `-ScanProps`: export each scene instead of reporting it, and continue past the ones that throw |
+| `-DumpProps <dir>` | - | Export **every prop** into its own folder - `&lt;family&gt;/&lt;prop folder&gt;/&lt;prefab&gt;.pmx` with its own `Texture2D/` - and write an `index.json` describing all of them: name, family, manifest path, relative paths, bytes, bone count, hand bone count and bounds. Re-running resumes: a model already on disk is skipped and the index keeps what was written. About 1 377 models, roughly 180 MB and 15-25 minutes. See [PROP_DUMP](PROP_DUMP.md) |
+| `-DumpPropsFilter <substring>` | - | Only dump props whose manifest path contains this: `rich_prop`, `toon_prop`, `chr_prop`, or a single prop's folder |
+| `-DumpPropsCount <n>` | 0 | How many props to dump; 0 means all of them |
 | `-ScanOut <dir>` | `<project>/HeadlessExports/scan` | Where `-ScanExport` writes its `.pmx` files and the shared `Texture2D/` folder |
 | `-Transcript <sheet>` | - | Print the dialogue a story voice sheet carries, and what the viewer would label each clip of that asset, then exit |
 | `-ExportAudio <sheet>` | - | Write a sound asset to an mp3 (with `-Out`) carrying its transcript in the ID3 tag |
@@ -540,6 +544,7 @@ positional, unvalidated, and Unity swallows anything it does not recognise.
 | `-Attach <pattern>` | `-umaAttach <pattern>` |
 | `-DumpMaterials` / `-DumpFace` / `-ScanProps` / `-ScanCount` | `-umaDumpMaterials` / `-umaDumpFace` / `-umaScanProps` / `-umaScanCount` |
 | `-ScanExport` / `-ScanOut` | `-umaScanExport` / `-umaScanOut` |
+| `-DumpProps` / `-DumpPropsFilter` / `-DumpPropsCount` | `-umaDumpProps` / `-umaDumpPropsFilter` / `-umaDumpPropsCount` |
 | `-Transcript` / `-ExportAudio` / `-ExportClip` | `-umaTranscript` / `-umaExportAudio` / `-umaExportClip` |
 | `-ShotView` / `-ShotWidth` / `-ShotHeight` / `-ShotYaw` / `-ShotYaws` | `-umaShotView` / `-umaShotWidth` / `-umaShotHeight` / `-umaShotYaw` / `-umaShotYaws` |
 | `-ShotAzimuths` / `-ShotLightElevation` / `-ShotTransparent` / `-ShotOnly` | `-umaShotAzimuths` / `-umaShotLightElevation` / `-umaShotTransparent` / `-umaShotOnly` |
