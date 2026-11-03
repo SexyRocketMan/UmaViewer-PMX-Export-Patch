@@ -309,7 +309,11 @@ public static class UmaHeadlessExport
                     case "-umaScanCount": options.ScanCount = int.Parse(Next()); break;
                     case "-umaScanExport": options.ScanExport = true; break;
                 case "-umaDumpProps": options.DumpProps = Next(); break;
-                case "-umaDumpPropsFilter": options.DumpPropsFilter = Next(); break;
+                case "-umaDumpPropsFilter":
+                    // optional value: the wrapper omits an empty filter, but a script that passes one
+                    // anyway must not swallow the next switch as the filter
+                    if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.DumpPropsFilter = argv[++i];
+                    break;
                 case "-umaDumpPropsCount": options.DumpPropsCount = int.Parse(Next()); break;
                     case "-umaScanOut": options.ScanOutDir = Next(); break;
                     case "-umaTranscript": options.Transcript = Next(); break;

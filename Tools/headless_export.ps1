@@ -209,8 +209,11 @@ if ($ScanProps) {
     }
 }
 if ($DumpProps) {
-    $arguments += @("-umaDumpProps", $DumpProps, "-umaDumpPropsFilter", $DumpPropsFilter,
-                    "-umaDumpPropsCount", $DumpPropsCount)
+    $arguments += @("-umaDumpProps", $DumpProps)
+    # both are optional: an empty string would be dropped by PowerShell and the next switch taken as
+    # its value, which is how a full dump once turned into "no props matching -umaDumpPropsCount"
+    if ($DumpPropsFilter) { $arguments += @("-umaDumpPropsFilter", $DumpPropsFilter) }
+    if ($DumpPropsCount -gt 0) { $arguments += @("-umaDumpPropsCount", $DumpPropsCount) }
 }
 if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
 if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }
