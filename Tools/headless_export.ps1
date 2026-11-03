@@ -73,6 +73,10 @@ param(
     [switch]$Help,
     [switch]$About,
     # the harness's machine readable result line (the double-dash flags are the harness's own)
+    # batches: one boot, many models (docs/CLI.md)
+    [switch]$AllCostumes,
+    [switch]$AllChars,
+    [double]$BootTimeout = 0,
     [switch]$Json,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
@@ -164,7 +168,7 @@ if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $Help -or $About -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $Help -or $About -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -270,6 +274,9 @@ foreach ($entry in ($ShotTexture -split ';')) {
 if ($PlaySeconds -gt 0) { $arguments += @("-umaPlaySeconds", $PlaySeconds) }
 
 if ($Json) { $arguments += "--json" }
+if ($AllCostumes) { $arguments += "-umaAllCostumes" }
+if ($AllChars) { $arguments += "-umaAllChars" }
+if ($BootTimeout -gt 0) { $arguments += @("-umaBootTimeout", $BootTimeout) }
 if ($Help) { $arguments += "--help" }
 if ($About) { $arguments += "--about" }
 Write-Verbose ("arguments: " + ($arguments -join " "))

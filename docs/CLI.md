@@ -109,7 +109,10 @@ without `--char`, `export motion` without `--record-vmd`, and a verb with no nou
 of thing. `--help` lists every command with an example.
 
 Verbs and the flags work in both hosts; through the PowerShell wrapper only the flags do, because its
-parameters are `-Char`-style and PowerShell binds a bare word to nothing.
+parameters are `-Char`-style and PowerShell binds a bare word to nothing. The batches are the exception worth
+knowing: `./Tools/headless_export.ps1 -Char 1001 -AllCostumes -Out D:/out/costumes` is the same run the verb
+form gives you, and `Tools/check_cli_parity.py` is what keeps the wrapper able to pass every flag the runner
+knows.
 
 ### Batches: one boot, many models
 
@@ -167,10 +170,24 @@ one at that.
                             "seconds":10.2,"failures":0,"error":""}
   ```
 
-  `mode` is what ran (`export`, `export-prop`, `vmd`, `screenshot`, `scan`, `scan-export`, `dump`, `list`,
-  `transcript`, `audio`), `failures` counts models that failed inside a sweep or a dump where the run itself
-  still succeeded, and the line is written on failure too - so a caller never has to tell "no JSON" from
-  "the run died before it could write one".
+  `mode` is what ran (`export`, `export-prop`, `vmd`, `batch`, `screenshot`, `scan`, `scan-export`, `dump`,
+  `list`, `doctor`, `transcript`, `audio`), `failures` counts models that failed inside a sweep or a dump where
+  the run itself still succeeded, and the line is written on failure too - so a caller never has to tell
+  "no JSON" from "the run died before it could write one".
+
+  `list` and `doctor` answer with their own payload instead:
+
+  ```json
+  {"ok":true,"mode":"list","list":"costumes","count":4,"truncated":false,
+   "items":[{"id":"00","asset":"3d/chara/body/bdy1001_00/pfb_bdy1001_00"}, ...]}
+  {"ok":true,"mode":"doctor","host":"editor","assets":360456,"charaAssets":37579,
+   "motions":93122,"characters":169,"shaders":497,"translated":174,"props":1337,
+   "meta":true,"masterMdb":true,"dat":true, ...}
+  ```
+
+  `--out <file>` on a `list` writes the *whole* list there (a `file` field names it), which is what to use for
+  the big ones: `list textures --json --out D:/textures.json` is 15 717 items, and only the first 2 000 are put
+  in the log line, with `"truncated":true` to say so.
 
 ---
 

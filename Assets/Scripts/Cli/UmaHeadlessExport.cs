@@ -818,6 +818,37 @@ public static class UmaHeadlessExport
             : 0;
         Debug.Log($"{Tag}   translated   {translated} uma name(s)");
         Debug.Log($"{Tag}   props        {DumpCandidates("", 0).Count} (docs/PROP_FAMILIES.md)");
+
+        if (CurrentOptions != null && CurrentOptions.Json)
+        {
+            // the same numbers the report printed, in a shape a script can read: "is this machine set up" is a
+            // question about booleans and counts, not about a paragraph
+            bool standalone = config.WorkMode == WorkMode.Standalone;
+            _jsonPayload = "{"
+                + J("ok", true) + "," + J("mode", "doctor")
+                + "," + J("host", CliHost.IsEditor ? "editor" : "player")
+                + "," + J("build", Application.productName + " " + Application.version)
+                + "," + J("unity", Application.unityVersion)
+                + "," + J("config", ConfigPath())
+                + "," + J("scene", CliState.GetString(KeyScene, DefaultScene))
+                + "," + J("dataPath", config.MainPath)
+                + "," + J("workMode", config.WorkMode.ToString())
+                + "," + J("language", config.Language.ToString())
+                + "," + J("downloads", config.DownloadMissingResources)
+                + "," + J("meta", File.Exists(Path.Combine(config.MainPath, standalone ? "meta_umaviewer" : "meta"))
+                                 || Directory.Exists(Path.Combine(config.MainPath, standalone ? "meta_umaviewer" : "meta")))
+                + "," + J("masterMdb", File.Exists(Path.Combine(config.MainPath, "master",
+                                                               standalone ? "master_umaviewer.mdb" : "master.mdb")))
+                + "," + J("dat", Directory.Exists(Path.Combine(config.MainPath, "dat")))
+                + "," + J("assets", main.AbList?.Count ?? 0)
+                + "," + J("charaAssets", main.AbChara?.Count ?? 0)
+                + "," + J("motions", main.AbMotions?.Count ?? 0)
+                + "," + J("characters", main.Characters?.Count ?? 0)
+                + "," + J("shaders", builder.ShaderList?.Count ?? 0)
+                + "," + J("translated", translated)
+                + "," + J("props", DumpCandidates("", 0).Count)
+                + "}";
+        }
     }
 
     /// <summary>Where the config actually is, in the host this is running in.</summary>
@@ -2853,19 +2884,33 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag} character textures ({textures.Count} matching '{filter}'):");
         foreach (var entry in textures.Take(4000)) Debug.Log($"{Tag}   {entry.Name}");
         if (textures.Count > 4000) Debug.Log($"{Tag}   ... and {textures.Count - 4000} more");
+        if (CurrentOptions != null && CurrentOptions.Json)
+        {
+            _jsonPayload = ListPayload("textures", textures.Select(entry =>
+                "{" + J("name", Path.GetFileName(entry.Name)) + "," + J("path", entry.Name) + "}").ToList());
+        }
     }
 
     private static void PrintProps(string filter)
     {
         var props = UmaViewerMain.Instance.AbList.Values
             .Where(e => e.Name.StartsWith("3d/env") && Path.GetFileName(e.Name).StartsWith("pfb_")
-                        || (e.Name.StartsWith("cutt/cutt_son") && Path.GetFileName(e.Name).StartsWith("cutt_son")))
+                        || (e.Name.StartsWith("cutt/cutt_son") && Path.GetFileName(e.Name).StartsWith("cutt_son"))
+                        // the prop families too: "list props" is asked by someone looking for a prop, and the
+                        // character props are the ones the prop panel shows
+                        || IsPropPath(e.Name))
             .Where(e => string.IsNullOrEmpty(filter) || e.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
             .OrderBy(e => e.Name)
             .ToList();
         Debug.Log($"{Tag} props/scenes ({props.Count} matching '{filter}'):");
         foreach (var entry in props.Take(2000)) Debug.Log($"{Tag}   {entry.Name}");
         if (props.Count > 2000) Debug.Log($"{Tag}   ... and {props.Count - 2000} more");
+        if (CurrentOptions != null && CurrentOptions.Json)
+        {
+            _jsonPayload = ListPayload("props", props.Select(entry =>
+                "{" + J("name", Path.GetFileName(entry.Name)) + "," + J("path", entry.Name) +
+                "," + J("family", PropFamilyOf(entry.Name)) + "}").ToList());
+        }
     }
 
     /// <summary>
@@ -2916,6 +2961,7 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag} 3d/chara families ({families.Count} of {byFamily.Count} matching '{filter}', "
                   + $"{main.AbChara.Count} entries under '{charaPath}'):");
         Debug.Log($"{Tag}   family        entries prefabs  panel  prefab names");
+        var items = new List<string>();
         foreach (string family in families)
         {
             var entries = byFamily[family];
@@ -2929,6 +2975,8 @@ public static class UmaHeadlessExport
                 .ToList();
             string stemText = string.Join(" ", stems.Take(6)) + (stems.Count > 6 ? $" (+{stems.Count - 6})" : "");
             Debug.Log($"{Tag}   {family,-12} {entries.Count,7} {prefabs,7} {panel,6}  {stemText}");
+            items.Add("{" + J("family", family) + "," + J("entries", entries.Count) + "," + J("prefabs", prefabs)
+                      + "," + J("panel", panel) + ",\"patterns\":[" + string.Join(",", stems.Select(stem => $"\"{JsonText(stem)}\"")) + "]}");
 
             // three samples per family, sorted so the same run prints the same three
             foreach (string sample in entries.Select(e => e.Name).OrderBy(n => n, StringComparer.Ordinal).Take(3))
@@ -2941,6 +2989,8 @@ public static class UmaHeadlessExport
             if (families.Count == 1)
                 PrintFamilyFolders(entries, charaPath, family);
         }
+
+        if (CurrentOptions != null && CurrentOptions.Json) _jsonPayload = ListPayload("families", items);
     }
 
     /// <summary>The distinct `&lt;family&gt;/&lt;folder&gt;/` names a family is grouped into, with entry counts.</summary>
@@ -4451,6 +4501,7 @@ public static class UmaHeadlessExport
     private static void PrintCharacters()
     {
         var main = UmaViewerMain.Instance;
+        var items = new List<string>();
         Debug.Log($"{Tag} characters:");
         foreach (var chara in main.Characters.OrderBy(c => c.Id))
         {
@@ -4460,7 +4511,11 @@ public static class UmaHeadlessExport
                 .Distinct()
                 .OrderBy(x => x));
             Debug.Log($"{Tag}   {chara.Id}\t{chara.Name}\t[{costumes}]");
+            items.Add("{" + J("id", chara.Id) + "," + J("name", chara.Name) + "," + J("en", chara.EnName)
+                      + ",\"costumes\":[" + string.Join(",", costumes.Split(',').Where(c => c.Length > 0).Select(c => $"\"{JsonText(c)}\"")
+                      ) + "]}");
         }
+        if (CurrentOptions != null && CurrentOptions.Json) _jsonPayload = ListPayload("chars", items);
     }
 
     /// <summary>
@@ -4635,8 +4690,71 @@ public static class UmaHeadlessExport
             .OrderBy(a => a)
             .ToList();
         Debug.Log($"{Tag} costumes for {chara.Id} ({chara.Name}):");
-        foreach (var name in costumes) Debug.Log($"{Tag}   {name.Split('_').Last()}\t{name}");
+        var items = new List<string>();
+        foreach (var name in costumes)
+        {
+            Debug.Log($"{Tag}   {name.Split('_').Last()}\t{name}");
+            items.Add("{" + J("id", name.Split('_').Last()) + "," + J("asset", name) + "}");
+        }
+        if (CurrentOptions != null && CurrentOptions.Json) _jsonPayload = ListPayload("costumes", items);
     }
+
+    /// <summary>
+    /// The JSON a `list` or `doctor` run answers with, when `--json` was asked for. It is built where the data
+    /// already is, rather than re-read from the shapes the log prints, so the two cannot disagree.
+    /// </summary>
+    private static string _jsonPayload;
+
+    /// <summary>How many items of a list are put in the result line before it is marked truncated.</summary>
+    private const int InlineItemLimit = 2000;
+
+    /// <summary>Escapes a string for the hand-built JSON lines. The lists are built by hand because they are
+    /// arrays of shapes, which `JsonUtility` cannot express.</summary>
+    private static string JsonText(string value) =>
+        (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", " ").Replace("\r", "");
+
+    /// <summary>
+    /// Finishes a `list` run's JSON: the items inline when there are few enough to read, all of them in `--out`
+    /// when the run asked for a file, and a truncated array with a count when there are too many for a log line.
+    /// </summary>
+    private static string ListPayload(string kind, List<string> items, string note = null)
+    {
+        string options = CliState.GetString(KeyOptions, "");
+        Options parsed = string.IsNullOrEmpty(options) ? null : JsonUtility.FromJson<Options>(options);
+        string file = parsed != null ? parsed.OutPath : "";
+
+        bool truncated = items.Count > InlineItemLimit;
+        var shown = truncated ? items.Take(InlineItemLimit).ToList() : items;
+
+        if (!string.IsNullOrEmpty(file))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(file)));
+            var all = new System.Text.StringBuilder();
+            all.Append("{").Append($"\"ok\":true,\"mode\":\"list\",\"list\":\"{JsonText(kind)}\",");
+            all.Append($"\"count\":{items.Count},\"items\":[");
+            all.Append(string.Join(",", items));
+            all.Append("]}");
+            File.WriteAllText(file, all.ToString());
+            Debug.Log($"{Tag} wrote {items.Count} item(s) to {Path.GetFullPath(file)}");
+        }
+
+        var json = new System.Text.StringBuilder();
+        json.Append("{").Append($"\"ok\":true,\"mode\":\"list\",\"list\":\"{JsonText(kind)}\",");
+        json.Append($"\"count\":{items.Count},");
+        if (!string.IsNullOrEmpty(file)) json.Append($"\"file\":\"{JsonText(Path.GetFullPath(file).Replace('\\', '/'))}\",");
+        if (note != null) json.Append($"\"note\":\"{JsonText(note)}\",");
+        json.Append($"\"truncated\":{(truncated ? "true" : "false")},");
+        json.Append($"\"items\":[");
+        json.Append(string.Join(",", shown));
+        json.Append("]}");
+        return json.ToString();
+    }
+
+    /// <summary>A JSON string field, quoted and escaped.</summary>
+    private static string J(string name, string value) => $"\"{name}\":\"{JsonText(value)}\"";
+    private static string J(string name, int value) => $"\"{name}\":{value}";
+    private static string J(string name, long value) => $"\"{name}\":{value}";
+    private static string J(string name, bool value) => $"\"{name}\":{(value ? "true" : "false")}";
 
     /// <summary>A run's result as one line, for anything that would rather parse than read a log.</summary>
     [Serializable]
@@ -4667,6 +4785,13 @@ public static class UmaHeadlessExport
     {
         var options = CurrentOptions;
         if (options == null || !options.Json) return;
+
+        if (_jsonPayload != null)
+        {
+            // a `list` or `doctor` run has a payload of its own; the plain result line would only repeat it
+            Debug.Log($"{Tag} JSON {_jsonPayload}");
+            return;
+        }
 
         string written = CliState.GetString(KeyOutPath, "");
         var result = new RunResult
