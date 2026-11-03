@@ -92,3 +92,6 @@ __pycache__/
 
 # a scratch clone of an unrelated repository (Blender's goo-engine) kept only for reading its source
 /_survey_repos/
+
+# the english uma names, downloaded at startup and cached for offline runs
+translations_en.json

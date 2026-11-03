@@ -140,6 +140,16 @@ public static class UmaHeadlessExport
     private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
     private const string KeyBootReported = "UmaHeadlessExport.BootReported";
     private const string KeyRunStarted = "UmaHeadlessExport.RunStarted";
+    /// <summary>The scene a run was asked for, so `--doctor` can report it before anything is loaded.</summary>
+    private const string KeyScene = "UmaHeadlessExport.Scene";
+
+    /// <summary>
+    /// When the boot wait started. It lives in the session, not in a field, because a player never goes through
+    /// the editor's play-mode stage that used to set the clock - so in a player the age of the boot was measured
+    /// from year one, every wait it guards was skipped, and a run could export before the english names had
+    /// arrived.
+    /// </summary>
+    private const string KeyBootStarted = "UmaHeadlessExport.BootStarted";
     private const string KeyDumpIndex = "UmaHeadlessExport.DumpIndex";
     private const string KeyDumpTotal = "UmaHeadlessExport.DumpTotal";
 
@@ -336,6 +346,8 @@ public static class UmaHeadlessExport
                    Help = "finish with one JSON line describing the result" },
         // not --version: Unity answers that one itself and exits before this code runs, with no log file and no
         // explanation. Anything the editor has its own flag for has to be spelled differently here.
+        new Flag { Long = "--doctor", Internal = "", Kind = FlagKind.Switch, Group = "run",
+                   Help = "report the paths, the game data and the manifest a run would use, then exit" },
         new Flag { Long = "--about", Internal = "", Kind = FlagKind.Switch, Group = "run",
                    Help = "print this build and exit (--version belongs to Unity)" },
         new Flag { Long = "--help", Internal = "", Kind = FlagKind.Switch, Group = "run",
@@ -344,6 +356,239 @@ public static class UmaHeadlessExport
 
     /// <summary>True when <paramref name="name"/> is a flag this build knows (takes `--x` or `--x=value`).</summary>
     public static bool IsKnownFlagName(string name) => FlagsByLongName.ContainsKey(name);
+
+    /// <summary>One command a person can type: a verb, an optional noun, and what it means in flags.</summary>
+    private class Verb
+    {
+        /// <summary>`export`, `list`, `dump`, `scan`.</summary>
+        public string Name;
+
+        /// <summary>`model`, `motion`, `props`, ... - what the verb acts on, or "" when it acts on nothing.</summary>
+        public string Noun;
+
+        /// <summary>The flags this word implies, as the single-dash names the parser takes.</summary>
+        public string[] Implies;
+
+        /// <summary>The flags the command cannot work without.</summary>
+        public string[] Requires;
+
+        public string Help;
+        public string Example;
+
+        /// <summary>True when <paramref name="argv"/> starts with this command's words.</summary>
+        public bool Matches(string[] argv, int at, out int consumed)
+        {
+            consumed = 0;
+            if (at >= argv.Length || !Same(argv[at], Name)) return false;
+            consumed = 1;
+            if (string.IsNullOrEmpty(Noun)) return true;
+            if (at + 1 < argv.Length && Same(argv[at + 1], Noun))
+            {
+                consumed = 2;
+                return true;
+            }
+            return false;
+        }
+
+        private static bool Same(string a, string b) =>
+            string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+        public string FullName => string.IsNullOrEmpty(Noun) ? Name : Name + " " + Noun;
+
+        /// <summary>True when the command needs this flag (by either spelling).</summary>
+        public bool Needs(string flagInternal, string flagLong) => Requires.Any(r => r == flagInternal || r == flagLong);
+    }
+
+    /// <summary>
+    /// The commands. A verb is sugar with a purpose: it says what a run *is* in the words a person would use, it
+    /// fills in the flag that choice implies, and it refuses to start when the run could not produce what was
+    /// asked for - `export model` without an `--out`, `list costumes` without a `--char`. The flags underneath are
+    /// unchanged, so nothing that worked before stops working; `--char 1001 --out x.pmx` is still a valid
+    /// command, it just has no verb in front of it.
+    /// </summary>
+    private static readonly Verb[] Verbs =
+    {
+        new Verb { Name = "export", Noun = "model",
+                   Implies = new string[0],
+                   Requires = new[] { "-umaOut" },
+                   Help = "a character or prop as .pmx or .fbx",
+                   Example = "export model --char 1001 --costume 00 --out D:/out/1001.pmx" },
+        new Verb { Name = "export", Noun = "motion",
+                   Requires = new[] { "-umaRecordVmd" },
+                   Help = "one loop of a motion as .vmd, with the model if --out is given too",
+                   Example = "export motion --char 1001 --motion anm_rac_type01_run02_stride --record-vmd D:/out/run.vmd" },
+        new Verb { Name = "export", Noun = "screenshot",
+                   Implies = new string[0],
+                   Requires = new[] { "-umaScreenshot" },
+                   Help = "the game's own view as a .png",
+                   Example = "export screenshot --char 1001 --screenshot D:/out/shot.png" },
+        new Verb { Name = "export", Noun = "audio",
+                   Requires = new[] { "-umaExportAudio" },
+                   Help = "one sound clip as an mp3, its line of text in the tag",
+                   Example = "export audio --export-audio snd_voi_story_041047007 --export-clip 3 --out D:/out/line.mp3" },
+        new Verb { Name = "list", Noun = "chars", Implies = new[] { "-umaListChars" }, Requires = new string[0],
+                   Help = "every character and its id",
+                   Example = "list chars" },
+        new Verb { Name = "list", Noun = "costumes", Implies = new[] { "-umaListCostumes" }, Requires = new[] { "-umaChar" },
+                   Help = "the costumes of one character",
+                   Example = "list costumes --char 1001" },
+        new Verb { Name = "list", Noun = "props", Implies = new[] { "-umaListProps" }, Requires = new string[0],
+                   Help = "props and scenes, optionally filtered",
+                   Example = "list props book" },
+        new Verb { Name = "list", Noun = "textures", Implies = new[] { "-umaListTextures" }, Requires = new string[0],
+                   Help = "textures, optionally filtered",
+                   Example = "list textures prop" },
+        new Verb { Name = "list", Noun = "families", Implies = new[] { "-umaListFamilies" }, Requires = new string[0],
+                   Help = "the 3d/chara families and their counts",
+                   Example = "list families" },
+        new Verb { Name = "dump", Noun = "props", Requires = new[] { "-umaDumpProps" },
+                   Help = "every prop into its own folder with index.json",
+                   Example = "dump props D:/props --dump-props-filter toon_prop" },
+        new Verb { Name = "scan", Noun = "props", Requires = new[] { "-umaScanProps" },
+                   Help = "load a family and report how it is rigged",
+                   Example = "scan props pfb_chr_prop --scan-count 60" },
+        new Verb { Name = "doctor", Noun = "", Implies = new[] { "--doctor" }, Requires = new string[0],
+                   Help = "what this build sees: paths, game data, manifest",
+                   Example = "doctor" },
+    };
+
+    /// <summary>
+    /// Rewrites a leading verb into the flags it implies, and checks that the run can do what was asked.
+    ///
+    /// `dump props D:/props` is also accepted: a command that needs a folder takes the next word as `--dump-props`
+    /// when it is not a flag, because typing the flag twice is the sort of thing a person forgets.
+    /// </summary>
+    /// <summary>True for the program's own path, which is argument zero of every command line.</summary>
+    private static bool LooksLikeExecutable(string argument) =>
+        argument.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+        || argument.IndexOf('/') >= 0
+        || argument.IndexOf('\\') >= 0;
+
+    private static string[] ApplyVerb(string[] argv, out string error)
+    {
+        error = null;
+        var expanded = new List<string>(argv);
+        if (expanded.Count == 0) return argv;
+        // the program's own path is not an argument to anything, and a path sitting next to an optional-value flag
+        // gets taken for its value: drop it here rather than let it become a family filter
+        for (int drop = 0; drop < expanded.Count && LooksLikeExecutable(expanded[drop]); drop++)
+        {
+            expanded.RemoveAt(drop);
+            break;
+        }
+        argv = expanded.ToArray();
+
+        // The command can be anywhere on the line, not just first: an editor run is `Unity.exe -batchmode
+        // -projectPath . -executeMethod UmaHeadlessExport.Run <command> ...`, so looking at argument zero (or one)
+        // finds Unity's own flags and nothing else. Measured - the first version of this did exactly that and
+        // every verb was silently ignored.
+        int verbAt = -1;
+        int consumed = 0;
+        Verb verb = null;
+        for (int at = 0; at < argv.Length && verb == null; at++)
+        {
+            if (string.IsNullOrEmpty(argv[at]) || argv[at].StartsWith("-", StringComparison.Ordinal)) continue;
+
+            foreach (var candidate in Verbs)
+            {
+                if (!candidate.Matches(argv, at, out int words)) continue;
+                verb = candidate;
+                verbAt = at;
+                consumed = words;
+                break;
+            }
+            if (verb != null) break;
+
+            // a verb name with nothing after it: say what can follow rather than "unknown command"
+            if (Verbs.Any(candidate => string.Equals(candidate.Name, argv[at], StringComparison.OrdinalIgnoreCase)
+                                       && !string.IsNullOrEmpty(candidate.Noun)))
+            {
+                error = $"'{argv[at]}' needs something to act on. Try one of: "
+                        + string.Join(", ", Verbs.Where(candidate => candidate.Name.Equals(argv[at], StringComparison.OrdinalIgnoreCase))
+                                                 .Select(candidate => candidate.FullName))
+                        + ". See --help.";
+                return argv;
+            }
+        }
+        if (verb == null) return argv;      // no command: the plain flags, as they always were
+
+        expanded.RemoveRange(verbAt, consumed);
+
+        // The flag this command is really about: the one it requires, or - for the commands whose flag takes an
+        // optional value - the one it implies. A bare word after the command becomes that flag's value, because
+        // `dump props D:/props` is what a person types and `--dump-props D:/props` is what the parser wants.
+        string subject = null;
+        if (verb.Requires.Contains("-umaDumpProps")) subject = "-umaDumpProps";
+        else if (verb.Requires.Contains("-umaScanProps")) subject = "-umaScanProps";
+        else if (verb.Requires.Contains("-umaExportAudio")) subject = "-umaExportAudio";
+        else if (verb.Implies != null)
+        {
+            subject = verb.Implies.FirstOrDefault(flag =>
+                flag == "-umaListProps" || flag == "-umaListTextures" || flag == "-umaListFamilies");
+        }
+
+        bool bareWord = expanded.Count > verbAt && !expanded[verbAt].StartsWith("-", StringComparison.Ordinal);
+        if (bareWord && subject != null) expanded.Insert(verbAt + 1, expanded[verbAt]);
+
+        // the implied flags go where the command was, so the word stays next to the flag that takes it
+        int insertAt = verbAt;
+        if (subject != null)
+        {
+            expanded.Insert(insertAt, subject);
+            insertAt++;
+        }
+        foreach (string implied in verb.Implies ?? new string[0])
+        {
+            if (implied == subject) continue;
+            expanded.Insert(insertAt, implied);
+            insertAt++;
+        }
+
+        expanded.Insert(0, "--verb=" + verb.FullName);
+        return expanded.ToArray();
+    }
+
+    /// <summary>
+    /// Checks a run against the command it was given: `export model` has to have somewhere to write, `list
+    /// costumes` has to know which character. Returns null when the run can go ahead.
+    /// </summary>
+    private static string VerbProblem(Options options, Verb verb)
+    {
+        if (verb == null) return null;
+        if (verb.Needs("-umaOut", "--out") && string.IsNullOrEmpty(options.OutPath))
+        {
+            return $"{verb.FullName} needs --out <file> to write";
+        }
+        if (verb.Needs("-umaChar", "--char") && options.CharId < 0)
+        {
+            return $"{verb.FullName} needs --char <id> (see `list chars`)";
+        }
+        if (verb.Needs("-umaMotion", "--motion") && string.IsNullOrEmpty(options.Motion))
+        {
+            return $"{verb.FullName} needs --motion <asset> (see `list props`)";
+        }
+        if (verb.Needs("-umaRecordVmd", "--record-vmd") && string.IsNullOrEmpty(options.RecordVmd))
+        {
+            return $"{verb.FullName} needs --record-vmd <file>";
+        }
+        if (verb.Needs("-umaScreenshot", "--screenshot") && string.IsNullOrEmpty(options.Screenshot))
+        {
+            return $"{verb.FullName} needs --screenshot <file>";
+        }
+        if (verb.Needs("-umaExportAudio", "--export-audio") && string.IsNullOrEmpty(options.ExportAudio))
+        {
+            return $"{verb.FullName} needs --export-audio <sheet> (see `list` in docs/CLI.md)";
+        }
+        return null;
+    }
+
+    /// <summary>The command a run was given, or null for the plain-flag form.</summary>
+    private static Verb VerbOf(Options options)
+    {
+        if (string.IsNullOrEmpty(options.Verb)) return null;
+        return Verbs.FirstOrDefault(v => v.FullName == options.Verb);
+    }
+
 
     private static readonly Dictionary<string, Flag> FlagsByLongName =
         Flags.Where(flag => flag.Long.StartsWith("--", StringComparison.Ordinal))
@@ -473,6 +718,14 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag}   Both spellings work here: --out is the name to type, -umaOut the one that always has.");
         Debug.Log($"{Tag}   Values with spaces need quotes. Repeatable flags take one value each time.");
 
+        Debug.Log($"{Tag}");
+        Debug.Log($"{Tag} commands (or pass the flags alone, without a command)");
+        foreach (var verb in Verbs)
+        {
+            Debug.Log($"{Tag}   {verb.FullName,-18} {verb.Help}");
+            Debug.Log($"{Tag}   {new string(' ', 18)} {verb.Example}");
+        }
+
         foreach (var group in Flags.GroupBy(flag => flag.Group))
         {
             Debug.Log($"{Tag}");
@@ -490,6 +743,107 @@ public static class UmaHeadlessExport
             }
         }
     }
+
+    /// <summary>
+    /// Prints the environment a run would use: where the game data is, what the manifest holds, whether the scene
+    /// and the shaders are there, and which of the usual traps are set.
+    ///
+    /// It exists because every way this tool fails for a person is an environment question - the wrong data
+    /// folder, a missing `master.mdb`, a manifest that never loaded, a shader list that came back empty because
+    /// the editor is offline - and the alternative is a one line exception that says none of it.
+    /// </summary>
+    /// <param name="stage">What to call this report, or null for the full one taken after the viewer booted.</param>
+    private static void PrintDoctor(string stage)
+    {
+        var config = Config.Instance;
+        var main = UmaViewerMain.Instance;
+        var builder = UmaViewerBuilder.Instance;
+        if (config == null)
+        {
+            Debug.Log($"{Tag} --- environment ---");
+            Debug.Log($"{Tag}   the viewer's configuration is not loaded yet; nothing to report");
+            return;
+        }
+
+        Debug.Log($"{Tag} --- environment ---");
+        Debug.Log($"{Tag}   build        {Application.productName} {Application.version}"
+                  + (CliHost.IsEditor ? " (editor)" : " (player)"));
+        if (!CliHost.IsEditor)
+        {
+            Debug.Log($"{Tag}   unity        {Application.unityVersion}");
+            Debug.Log($"{Tag}   executable   {Application.dataPath}");
+        }
+        Debug.Log($"{Tag}   config file  {ConfigPath()}");
+        Debug.Log($"{Tag}   scene        {CliState.GetString(KeyScene, DefaultScene)}");
+        Debug.Log($"{Tag}   data path    {config.MainPath}");
+        Debug.Log($"{Tag}   work mode    {config.WorkMode}");
+        Debug.Log($"{Tag}   language     {config.Language} (uma names come out "
+                  + (config.Language == Language.En ? "english if the translation download worked" : "japanese")
+                  + ")");
+        Debug.Log($"{Tag}   downloads    {config.DownloadMissingResources}");
+
+        Debug.Log($"{Tag} --- game data ---");
+        foreach (string entry in GameDataReport(config))
+        {
+            Debug.Log($"{Tag}   {entry}");
+        }
+
+        if (main == null || builder == null)
+        {
+            Debug.Log($"{Tag} --- viewer ---");
+            Debug.Log($"{Tag}   not up yet, so the manifest and the shaders are not reported"
+                      + (stage != null ? $" ({stage})" : ""));
+            return;
+        }
+
+        Debug.Log($"{Tag} --- manifest ---");
+        Debug.Log($"{Tag}   assets       {main.AbList?.Count ?? 0}");
+        Debug.Log($"{Tag}   3d/chara     {main.AbChara?.Count ?? 0}");
+        Debug.Log($"{Tag}   scenes       {main.AbList?.Values.Count(e => e.Name.StartsWith("3d/env", StringComparison.OrdinalIgnoreCase)) ?? 0}");
+        Debug.Log($"{Tag}   motions      {main.AbMotions?.Count ?? 0}");
+        Debug.Log($"{Tag}   characters   {main.Characters?.Count ?? 0}");
+        Debug.Log($"{Tag}   shaders      {builder.ShaderList?.Count ?? 0}");
+        int translated = main.Translations != null && main.Translations.ContainsKey(TranslationTables.UmaNames)
+            ? main.Translations[TranslationTables.UmaNames].Count
+            : 0;
+        Debug.Log($"{Tag}   translated   {translated} uma name(s)");
+        Debug.Log($"{Tag}   props        {DumpCandidates("", 0).Count} (docs/PROP_FAMILIES.md)");
+    }
+
+    /// <summary>Where the config actually is, in the host this is running in.</summary>
+    private static string ConfigPath()
+    {
+        string folder = Path.GetDirectoryName(Application.dataPath);
+        string next = Path.Combine(folder, "Config.json");
+        return File.Exists(next) ? next : "(not next to the executable; defaults are in use)";
+    }
+
+    /// <summary>The files a run needs to find, and whether each is there.</summary>
+    private static IEnumerable<string> GameDataReport(Config config)
+    {
+        bool standalone = config.WorkMode == WorkMode.Standalone;
+        yield return Check("meta", Path.Combine(config.MainPath, standalone ? "meta_umaviewer" : "meta"));
+        yield return Check("master.mdb", Path.Combine(config.MainPath, "master",
+                                                     standalone ? "master_umaviewer.mdb" : "master.mdb"));
+        yield return Check("dat folder", Path.Combine(config.MainPath, "dat"));
+        yield return Check("scene asset", CliState.GetString(KeyScene, DefaultScene));
+    }
+
+    /// <summary>One `name path PRESENT/MISSING` line.</summary>
+    private static string Check(string label, string path)
+    {
+        bool file = File.Exists(path);
+        bool directory = Directory.Exists(path);
+        string state = file || directory ? "ok     " : "MISSING";
+        string extra = directory ? " (folder)" : "";
+        return $"{state} {label,-11} {path}{extra}";
+    }
+
+    /// <summary>
+    /// The doctor's scene line reads the option that was asked for, so a run pointed at another scene reports
+    /// that one rather than the default.
+    /// </summary>
+    private static void RememberScene(Options options) => CliState.SetString(KeyScene, options.ScenePath);
 
     /// <summary>What this build is: the one line a bug report needs.</summary>
     private static void PrintVersion()
@@ -589,6 +943,15 @@ public static class UmaHeadlessExport
         /// <summary>`--json`: finish with one machine readable line describing the result.</summary>
         public bool Json;
 
+        /// <summary>`--doctor`: report the environment a run would use and exit.</summary>
+        public bool Doctor;
+
+        /// <summary>
+        /// The command this run was given ("export model"), or "" for the plain-flag form. Set by
+        /// <see cref="ApplyVerb"/> and used for validation and for the summary line, not for behaviour.
+        /// </summary>
+        public string Verb = "";
+
         public double TimeoutSeconds = 600;
         public double BootTimeoutSeconds = 120;
         public int ExtraFrames = 30;
@@ -632,6 +995,18 @@ public static class UmaHeadlessExport
         public static Options Parse(string[] argv)
         {
             var options = new Options();
+            // a verb, if there is one, becomes the flags it stands for before anything else looks at the arguments
+            argv = ApplyVerb(argv, out string verbError);
+            if (verbError != null) throw new Exception(verbError);
+            foreach (string argument in argv)
+            {
+                if (argument.StartsWith("--verb=", StringComparison.Ordinal))
+                {
+                    options.Verb = argument.Substring("--verb=".Length);
+                }
+            }
+            // the marker is not a flag: drop it so the switch below never sees it
+            argv = argv.Where(argument => !argument.StartsWith("--verb=", StringComparison.Ordinal)).ToArray();
             // the double-dash names are rewritten into the single-dash ones the switch below knows, so there is one
             // parser and one set of cases however a caller spells a flag
             string[] normalised = Normalise(argv);
@@ -656,15 +1031,15 @@ public static class UmaHeadlessExport
                         options.ListProps = true;
                         // the filter is optional: only consume the next argument if it is a value,
                         // not another -umaX switch
-                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.ListPropsFilter = normalised[++i];
+                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-")) options.ListPropsFilter = normalised[++i];
                         break;
                     case "-umaListTextures":
                         options.ListTextures = true;
-                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.ListTexturesFilter = normalised[++i];
+                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-")) options.ListTexturesFilter = normalised[++i];
                         break;
                     case "-umaListFamilies":
                         options.ListFamilies = true;
-                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.ListFamiliesFilter = normalised[++i];
+                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-")) options.ListFamiliesFilter = normalised[++i];
                         break;
                     case "-umaAttach": options.Attach.Add(Next()); break;
                     case "-umaScanProps": options.ScanProps = Next(); break;
@@ -674,7 +1049,7 @@ public static class UmaHeadlessExport
                 case "-umaDumpPropsFilter":
                     // optional value: the wrapper omits an empty filter, but a script that passes one
                     // anyway must not swallow the next switch as the filter
-                    if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.DumpPropsFilter = normalised[++i];
+                    if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-")) options.DumpPropsFilter = normalised[++i];
                     break;
                 case "-umaDumpPropsCount": options.DumpPropsCount = int.Parse(Next()); break;
                     case "-umaScanOut": options.ScanOutDir = Next(); break;
@@ -717,6 +1092,7 @@ public static class UmaHeadlessExport
                     case "-umaShotOnly": options.ShotOnly = true; break;
                     case "--help": options.Help = true; break;
                     case "--about": options.Version = true; break;
+                    case "--doctor": options.Doctor = true; break;
                     case "--json": options.Json = true; break;
                     default:
                         // anything else is Unity's own argument or the shell's; but a -uma flag nobody handles
@@ -743,6 +1119,10 @@ public static class UmaHeadlessExport
 
     private static int _settleFramesLeft;
     private static bool _attachmentsApplied;
+    private static bool _translationWarned;
+
+    /// <summary>How long a run waits for the english name translations before going ahead without them.</summary>
+    private const double TranslationWaitSeconds = 15.0;
     private static double _playDeadline;
     private static DateTime _playModeEnteredUtc;
     /// <summary>
@@ -782,7 +1162,11 @@ public static class UmaHeadlessExport
             if (!argument.StartsWith("--", StringComparison.Ordinal)) continue;
             if (IsKnownFlagName(argument.Split('=')[0])) return true;
         }
-        return false;
+
+        // a command line can be nothing but a verb: `UmaViewer.exe list families` has no flags at all. Asking the
+        // verb table is the only way to tell that apart from a normal launch, and forgetting it meant those
+        // commands started the viewer and did nothing at all.
+        return ApplyVerb(argv, out _).Any(argument => argument.StartsWith("--verb=", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -802,6 +1186,18 @@ public static class UmaHeadlessExport
             Debug.LogError($"{Tag} invalid arguments: {ex.Message}");
             CliHost.Exit(2);
             return;
+        }
+
+        if (!string.IsNullOrEmpty(options.Verb))
+        {
+            string problem = VerbProblem(options, VerbOf(options));
+            if (problem != null)
+            {
+                Debug.LogError($"{Tag} {problem}");
+                Debug.LogError($"{Tag} run it as: {VerbOf(options)?.Example}");
+                CliHost.Exit(2);
+                return;
+            }
         }
 
         if (options.Help)
@@ -826,6 +1222,7 @@ public static class UmaHeadlessExport
             && !options.ListFamilies
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
             && string.IsNullOrEmpty(options.ExportAudio) && string.IsNullOrEmpty(options.DumpProps)
+            && !options.Doctor
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass --char <id> or --prop <path> (optionally --out), "
@@ -842,15 +1239,18 @@ public static class UmaHeadlessExport
             return;
         }
 
+        RememberScene(options);
         CliState.SetString(KeyOptions, JsonUtility.ToJson(options));
         CliState.SetString(KeyDeadline, DateTime.UtcNow.AddSeconds(options.TimeoutSeconds).Ticks.ToString());
         CliState.SetString(KeyOutPath, "");
         CliState.SetInt(KeyScanFailures, 0);
         CliState.SetInt(KeyBootReported, 0);
+        CliState.SetString(KeyBootStarted, "");
         CliState.SetString(KeyRunStarted, DateTime.UtcNow.Ticks.ToString());
         _playModeRetries = 0;
         FaceDumped = false;
         _attachmentsApplied = false;
+        _translationWarned = false;
 
         // a player is already past "start the scene and enter play mode": the scene it was built with is running
         // and the viewer is booting in it, so the run starts at the stage that waits for that boot
@@ -931,6 +1331,11 @@ public static class UmaHeadlessExport
 
                 case Stage.WaitStartup:
                 {
+                    if (CliState.GetString(KeyBootStarted, "") == "")
+                    {
+                        CliState.SetString(KeyBootStarted, DateTime.UtcNow.Ticks.ToString());
+                    }
+
                     var main = UmaViewerMain.Instance;
                     var builder = UmaViewerBuilder.Instance;
                     if (main == null || builder == null) return;
@@ -940,9 +1345,22 @@ public static class UmaHeadlessExport
                     // completes, so fall through after a while instead of hanging forever.
                     bool fullyBooted = builder.ShaderList != null && builder.ShaderList.Count > 0;
                     bool usable = main.AbList != null && main.AbList.Count > 0;
-                    double bootSeconds = (DateTime.UtcNow - _playModeEnteredUtc).TotalSeconds;
+                    long bootTicks = long.TryParse(CliState.GetString(KeyBootStarted, ""), out long started) ? started : 0;
+                    double bootSeconds = bootTicks > 0
+                        ? (DateTime.UtcNow - new DateTime(bootTicks, DateTimeKind.Utc)).TotalSeconds
+                        : 0;
 
-                    if (!usable || (!fullyBooted && bootSeconds < options.BootTimeoutSeconds)) return;
+                    // The english names arrive from a download that runs beside the rest of the boot, and a run
+                    // that starts without them writes the japanese name into the model's english name field. Give
+                    // them a few seconds of their own - not the whole boot timeout, which would stall an offline
+                    // machine for two minutes over a nicety.
+                    bool wantNames = Config.Instance != null && Config.Instance.Language == Language.En;
+                    int nameCount = main.Translations != null && main.Translations.ContainsKey(TranslationTables.UmaNames)
+                        ? main.Translations[TranslationTables.UmaNames].Count
+                        : 0;
+                    bool namesSettled = !wantNames || nameCount > 0 || bootSeconds >= TranslationWaitSeconds;
+
+                    if (!usable || !namesSettled || (!fullyBooted && bootSeconds < options.BootTimeoutSeconds)) return;
 
                     // once per run: a -umaScanExport sweep comes back through this stage for every prop, and
                     // the boot summary is about the run, not about the prop
@@ -952,6 +1370,27 @@ public static class UmaHeadlessExport
                         Debug.Log($"{Tag} viewer booted: {main.Characters.Count} characters, {main.AbChara.Count} chara assets, "
                                   + $"{builder.ShaderList.Count} shaders"
                                   + (fullyBooted ? "" : $" (after {bootSeconds:F0}s without the startup download finishing)"));
+                    }
+
+                    if (Config.Instance.Language == Language.En && !_translationWarned)
+                    {
+                        int names = main.Translations != null && main.Translations.ContainsKey(TranslationTables.UmaNames)
+                            ? main.Translations[TranslationTables.UmaNames].Count
+                            : 0;
+                        if (names == 0)
+                        {
+                            _translationWarned = true;
+                            Debug.LogWarning($"{Tag} no english name translations arrived (they are downloaded from "
+                                             + "GitHub at startup); a model exported now carries the japanese name "
+                                             + "in its english name field. --doctor reports what did arrive.");
+                        }
+                    }
+
+                    if (options.Doctor)
+                    {
+                        PrintDoctor(null);
+                        Succeed();
+                        return;
                     }
 
                     if (options.MorphNameMode >= 0)

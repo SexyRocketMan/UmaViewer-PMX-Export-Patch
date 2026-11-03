@@ -24,6 +24,13 @@ public static class UmaCliBootstrap
     {
         if (Engaged) return;
 
+        // This fires in the editor as well, because the editor also runs runtime initialisation when it enters
+        // play mode - and an editor run already has its own entry point (`-executeMethod Run`, which opens the
+        // scene and arms the runner). Engaging here too would run the whole pipeline twice, disable the canvases
+        // the editor run may want, and leave two drivers ticking one state machine. Measured: it did exactly
+        // that, and the run then hung until its timeout.
+        if (CliHost.IsEditor) return;
+
         string[] argv = Environment.GetCommandLineArgs();
         if (!UmaHeadlessExport.LooksLikeCommandLine(argv)) return;
         if (!Application.isPlaying) return;

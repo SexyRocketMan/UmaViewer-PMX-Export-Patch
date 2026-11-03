@@ -75,12 +75,51 @@ a PMX of the same 14 492 vertices, 82 074 indices, 437 bones and 205 morphs. Two
   Japanese one (`スペシャルウィーク`), because the English names arrive from a translation download the
   editor's cache already has. Everything else in the file is identical.
 
+### Commands
+
+A verb in front of the flags says what the run *is*, fills in the flag that choice implies, and refuses to start
+when the run could not produce what was asked for:
+
+```powershell
+UmaViewer.exe export model --char 1001 --costume 00 --out D:/out/1001.pmx
+UmaViewer.exe export motion --char 1001 --motion anm_rac_type01_run02_stride --record-vmd D:/out/run.vmd
+UmaViewer.exe export screenshot --char 1001 --screenshot D:/out/shot.png
+UmaViewer.exe export audio --export-audio snd_voi_story_041047007 --export-clip 3 --out D:/out/line.mp3
+UmaViewer.exe list chars | list costumes --char 1001 | list props book | list textures prop | list families
+UmaViewer.exe dump props D:/props --dump-props-filter toon_prop
+UmaViewer.exe scan props pfb_chr_prop --scan-count 60
+UmaViewer.exe doctor
+```
+
+`dump props`, `scan props` and the `list` commands take a **bare word** as the thing they act on, so
+`dump props D:/props` and `--dump-props D:/props` are the same run. Everything else is a flag, exactly as
+before: the flags alone (`--char 1001 --out x.pmx`) are still a complete command, and every existing script
+keeps working - a verb is sugar, not a new parser.
+
+What a verb adds is the *checking*. `export model` without `--out` says
+
+```
+export model needs --out <file> to write
+run it as: export model --char 1001 --costume 00 --out D:/out/1001.pmx
+```
+
+and exits 2, instead of writing to the default folder and leaving you to work out where. `list costumes`
+without `--char`, `export motion` without `--record-vmd`, and a verb with no noun (`export`) say the same kind
+of thing. `--help` lists every command with an example.
+
+Verbs and the flags work in both hosts; through the PowerShell wrapper only the flags do, because its
+parameters are `-Char`-style and PowerShell binds a bare word to nothing.
+
 ### `--help`, `--about`, `--json`
 
 * `--help` prints every flag, grouped by what it is for, with the old name next to the new one. It is the
   table below, generated from the parser, so it cannot drift.
 * `--about` prints the build, the Unity version and the flag count. It is not `--version`: Unity answers that
   one itself and exits before this code runs, with no log and no explanation.
+* `--doctor` (or the `doctor` command) prints what a run would use and exits: the build, the scene, the data
+  folder and its work mode, whether `meta`, `master.mdb` and `dat/` are actually there, then the manifest -
+  assets, characters, shaders, how many english names arrived, how many props - and it runs in the editor and in
+  a player alike. It is the answer to every "why did nothing happen" that is really an environment question.
 * `--json` (`-Json` on the wrapper) finishes a run with one machine readable line:
 
   ```
@@ -672,6 +711,13 @@ compiled into the player:
 Verified both hosts on the same jobs: a character export (identical structure, 5.3 s in the player against
 10-11 s in the editor), a prop dump with its `index.json`, `--help`, `--json`, and the editor-only probe
 reporting itself as unavailable in the player.
+
+The interface on top of that is now in place as well: a table of commands (`export model`, `list props`,
+`dump props`, `doctor`, ...) that validates what it can before the run starts, `--doctor` for the environment,
+and english names that survive a failed download - the tables are cached beside `Config.json`, and a run waits a
+few seconds for them instead of silently exporting the japanese name in the english name field. That last one
+was found the honest way: the same model exported from the editor and from the player came out 18 bytes apart,
+and the difference was the name.
 
 **What is still open**
 
