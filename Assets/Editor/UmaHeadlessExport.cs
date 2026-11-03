@@ -124,6 +124,7 @@ public static class UmaHeadlessExport
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
     private const string KeyScanFailures = "UmaHeadlessExport.ScanFailures";
     private const string KeyBootReported = "UmaHeadlessExport.BootReported";
+    private const string KeyRunStarted = "UmaHeadlessExport.RunStarted";
     private const string KeyDumpIndex = "UmaHeadlessExport.DumpIndex";
     private const string KeyDumpTotal = "UmaHeadlessExport.DumpTotal";
 
@@ -147,7 +148,338 @@ public static class UmaHeadlessExport
         ExportAudio
     }
 
-    [Serializable]
+        /// <summary>How a flag takes its value, which is what `--help` prints and what the normaliser knows.</summary>
+    private enum FlagKind
+    {
+        /// <summary>`--flag`: the flag is the whole argument.</summary>
+        Switch,
+
+        /// <summary>`--flag value`: one value follows.</summary>
+        Value,
+
+        /// <summary>`--flag value`: repeatable, one value each time.</summary>
+        Repeat,
+
+        /// <summary>`--flag [value]`: takes a value unless the next argument is another flag.</summary>
+        Optional,
+    }
+
+    /// <summary>One row of the CLI: the name a human types, the name the parser has always taken, what it means.</summary>
+    private class Flag
+    {
+        public string Long;
+        public string Internal;
+        public FlagKind Kind;
+        public string Group;
+        public string Help;
+
+        public bool TakesValue => Kind == FlagKind.Value || Kind == FlagKind.Repeat;
+    }
+
+    /// <summary>
+    /// Every flag this build understands, grouped the way `--help` prints it.
+    ///
+    /// The single-dash names are the original interface and stay supported - `docs/CLI.md`, the PowerShell
+    /// wrapper and every existing script are written in them - but they exist only to stay clear of Unity's own
+    /// arguments, which is a problem the double-dash form does not have. So `--out` is the name to type now and
+    /// `-umaOut` is the name that still works.
+    /// </summary>
+    private static readonly Flag[] Flags =
+    {
+        // model
+        new Flag { Long = "--char", Internal = "-umaChar", Kind = FlagKind.Value, Group = "model",
+                   Help = "character id, e.g. 1001 (see --list-chars)" },
+        new Flag { Long = "--costume", Internal = "-umaCostume", Kind = FlagKind.Value, Group = "model",
+                   Help = "costume id inside that character, e.g. 00 (see --list-costumes)" },
+        new Flag { Long = "--out", Internal = "-umaOut", Kind = FlagKind.Value, Group = "model",
+                   Help = "file to write: .pmx or .fbx" },
+        new Flag { Long = "--prop", Internal = "-umaProp", Kind = FlagKind.Value, Group = "model",
+                   Help = "prop or scene asset path, or a part of one (see --list-props)" },
+        new Flag { Long = "--scene", Internal = "-umaScene", Kind = FlagKind.Value, Group = "model",
+                   Help = "the viewer scene to boot; defaults to Assets/Scenes/Version2.unity" },
+        new Flag { Long = "--variant", Internal = "-umaVariant", Kind = FlagKind.Value, Group = "model",
+                   Help = "a prop's texture set to apply before export" },
+        new Flag { Long = "--attach", Internal = "-umaAttach", Kind = FlagKind.Repeat, Group = "model",
+                   Help = "wear an attach prefab on the character; repeatable" },
+        new Flag { Long = "--refine", Internal = "-umaRefine", Kind = FlagKind.Value, Group = "model",
+                   Help = "FBX only: true/false, the uma eye-bone refinement" },
+        new Flag { Long = "--embed-textures", Internal = "-umaEmbedTextures", Kind = FlagKind.Value, Group = "model",
+                   Help = "FBX only: true/false, embed the textures in the file" },
+
+        // motion
+        new Flag { Long = "--motion", Internal = "-umaMotion", Kind = FlagKind.Value, Group = "motion",
+                   Help = "motion asset to play, or part of one" },
+        new Flag { Long = "--record-vmd", Internal = "-umaRecordVmd", Kind = FlagKind.Value, Group = "motion",
+                   Help = "record one loop of the motion into this .vmd" },
+        new Flag { Long = "--record-fps", Internal = "-umaRecordFps", Kind = FlagKind.Value, Group = "motion",
+                   Help = "frames per second for that take; default 30" },
+        new Flag { Long = "--record-reduction", Internal = "-umaRecordReduction", Kind = FlagKind.Value, Group = "motion",
+                   Help = "key reduction level for that take" },
+        new Flag { Long = "--record-mode", Internal = "-umaRecordMode", Kind = FlagKind.Value, Group = "motion",
+                   Help = "how frames are sampled: deterministic or realtime" },
+        new Flag { Long = "--play-seconds", Internal = "-umaPlaySeconds", Kind = FlagKind.Value, Group = "motion",
+                   Help = "let the motion run this long before measuring" },
+        new Flag { Long = "--extra-frames", Internal = "-umaExtraFrames", Kind = FlagKind.Value, Group = "motion",
+                   Help = "frames to settle before measuring; default 30" },
+
+        // listing
+        new Flag { Long = "--list-chars", Internal = "-umaListChars", Kind = FlagKind.Switch, Group = "listing",
+                   Help = "print every character" },
+        new Flag { Long = "--list-costumes", Internal = "-umaListCostumes", Kind = FlagKind.Switch, Group = "listing",
+                   Help = "print the costumes of --char" },
+        new Flag { Long = "--list-props", Internal = "-umaListProps", Kind = FlagKind.Optional, Group = "listing",
+                   Help = "print props/scenes, optionally filtered by a substring" },
+        new Flag { Long = "--list-textures", Internal = "-umaListTextures", Kind = FlagKind.Optional, Group = "listing",
+                   Help = "print textures, optionally filtered by a substring" },
+        new Flag { Long = "--list-families", Internal = "-umaListFamilies", Kind = FlagKind.Optional, Group = "listing",
+                   Help = "print the 3d/chara families with counts, optionally filtered" },
+
+        // scan and dump
+        new Flag { Long = "--scan-props", Internal = "-umaScanProps", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "load every prop/scene matching this and report it" },
+        new Flag { Long = "--scan-count", Internal = "-umaScanCount", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "how many to scan or dump; default 10" },
+        new Flag { Long = "--scan-export", Internal = "-umaScanExport", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "export each scanned prop instead of only reporting it" },
+        new Flag { Long = "--scan-out", Internal = "-umaScanOut", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "where a scan export writes; default HeadlessExports/scan" },
+        new Flag { Long = "--dump-props", Internal = "-umaDumpProps", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "dump every prop into this folder with an index.json (docs/PROP_DUMP.md)" },
+        new Flag { Long = "--dump-props-filter", Internal = "-umaDumpPropsFilter", Kind = FlagKind.Optional, Group = "scanning",
+                   Help = "only dump props whose path contains this" },
+        new Flag { Long = "--dump-props-count", Internal = "-umaDumpPropsCount", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "how many props to dump; 0 is all of them" },
+        new Flag { Long = "--probe-morphs", Internal = "-umaProbeMorphs", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "print what the facial morph system holds at runtime" },
+        new Flag { Long = "--probe-tears", Internal = "-umaProbeTears", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "print how the animated tears are built, while they play" },
+        new Flag { Long = "--dump-shaders", Internal = "-umaDumpShaders", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "print the shader facts of what is loaded" },
+        new Flag { Long = "--dump-materials", Internal = "-umaDumpMaterials", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "print every material and its shader properties" },
+        new Flag { Long = "--dump-face", Internal = "-umaDumpFace", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "print the face pipeline and write the vertices beside the model" },
+
+        // screenshots
+        new Flag { Long = "--screenshot", Internal = "-umaScreenshot", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "render the game's own view to this .png" },
+        new Flag { Long = "--shot-view", Internal = "-umaShotView", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "full, upper, head or face" },
+        new Flag { Long = "--shot-width", Internal = "-umaShotWidth", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "pixels; 0 follows the screen" },
+        new Flag { Long = "--shot-height", Internal = "-umaShotHeight", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "pixels; 0 follows the screen" },
+        new Flag { Long = "--shot-yaw", Internal = "-umaShotYaw", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "camera angle around the model, in degrees" },
+        new Flag { Long = "--shot-yaws", Internal = "-umaShotYaws", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "several angles, comma separated: one png each" },
+        new Flag { Long = "--shot-azimuths", Internal = "-umaShotAzimuths", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "face-light azimuths, comma separated" },
+        new Flag { Long = "--shot-light-elevation", Internal = "-umaShotLightElevation", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "rebuild the key light at this height" },
+        new Flag { Long = "--shot-transparent", Internal = "-umaShotTransparent", Kind = FlagKind.Switch, Group = "screenshot",
+                   Help = "screenshot without the background" },
+        new Flag { Long = "--shot-only", Internal = "-umaShotOnly", Kind = FlagKind.Switch, Group = "screenshot",
+                   Help = "screenshot and write nothing else" },
+        new Flag { Long = "--pin-pose", Internal = "-umaPinPose", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "freeze the model at this normalised time before shooting" },
+        new Flag { Long = "--shot-material", Internal = "-umaShotMaterial", Kind = FlagKind.Value, Group = "screenshot",
+                   Help = "limit a shot override to materials whose name contains this" },
+        new Flag { Long = "--shot-texture", Internal = "-umaShotTexture", Kind = FlagKind.Repeat, Group = "screenshot",
+                   Help = "redirect a shader texture term: Property=r,g,b or Property=null" },
+        new Flag { Long = "--shot-global", Internal = "-umaShotGlobal", Kind = FlagKind.Repeat, Group = "screenshot",
+                   Help = "override a shader global for the shots: Name=r,g,b" },
+        new Flag { Long = "--shot-float", Internal = "-umaShotFloat", Kind = FlagKind.Repeat, Group = "screenshot",
+                   Help = "override a material float for the shots: Property=value" },
+
+        // what the exporters write
+        new Flag { Long = "--morph-name-mode", Internal = "-umaMorphNameMode", Kind = FlagKind.Value, Group = "export",
+                   Help = "0 tagged, 1 short english, 2 unified" },
+        new Flag { Long = "--a-pose", Internal = "-umaAPose", Kind = FlagKind.Switch, Group = "export",
+                   Help = "export the model in the A-pose rest pose" },
+        new Flag { Long = "--plain-materials", Internal = "-umaPlainMaterials", Kind = FlagKind.Switch, Group = "export",
+                   Help = "export plain MMD materials, without uma shader settings" },
+        new Flag { Long = "--no-extra-morphs", Internal = "-umaNoExtraMorphs", Kind = FlagKind.Switch, Group = "export",
+                   Help = "export without the deploy and tear morphs" },
+        new Flag { Long = "--texture-variants", Internal = "-umaTextureVariants", Kind = FlagKind.Switch, Group = "export",
+                   Help = "also write the game's wet and dirt maps" },
+
+        // sound and text
+        new Flag { Long = "--transcript", Internal = "-umaTranscript", Kind = FlagKind.Value, Group = "sound",
+                   Help = "print the dialogue a story voice sheet carries" },
+        new Flag { Long = "--export-audio", Internal = "-umaExportAudio", Kind = FlagKind.Value, Group = "sound",
+                   Help = "write a sound asset to an mp3, transcript in its tag" },
+        new Flag { Long = "--export-clip", Internal = "-umaExportClip", Kind = FlagKind.Value, Group = "sound",
+                   Help = "which clip of that asset; -1 mixes the whole asset" },
+
+        // the run itself
+        new Flag { Long = "--timeout", Internal = "-umaTimeout", Kind = FlagKind.Value, Group = "run",
+                   Help = "give up after this many seconds; default 600" },
+        new Flag { Long = "--boot-timeout", Internal = "-umaBootTimeout", Kind = FlagKind.Value, Group = "run",
+                   Help = "how long to wait for the viewer to boot; default 120" },
+        new Flag { Long = "--json", Internal = "", Kind = FlagKind.Switch, Group = "run",
+                   Help = "finish with one JSON line describing the result" },
+        // not --version: Unity answers that one itself and exits before this code runs, with no log file and no
+        // explanation. Anything the editor has its own flag for has to be spelled differently here.
+        new Flag { Long = "--about", Internal = "", Kind = FlagKind.Switch, Group = "run",
+                   Help = "print this build and exit (--version belongs to Unity)" },
+        new Flag { Long = "--help", Internal = "", Kind = FlagKind.Switch, Group = "run",
+                   Help = "print this and exit" },
+    };
+
+    private static readonly Dictionary<string, Flag> FlagsByLongName =
+        Flags.Where(flag => flag.Long.StartsWith("--", StringComparison.Ordinal))
+             .ToDictionary(flag => flag.Long, flag => flag, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Rewrites the double-dash form into the single-dash one the parser has always taken, and expands
+    /// `--flag=value`. Anything else - Unity's own arguments, a path, a filter - is passed through untouched.
+    ///
+    /// Arguments after a bare `--` are passed through even if they look like flags, so a value that starts with
+    /// a dash can still be given.
+    /// </summary>
+    private static string[] Normalise(string[] argv)
+    {
+        var expanded = new List<string>(argv.Length);
+        bool passthrough = false;
+
+        foreach (string argument in argv)
+        {
+            if (passthrough || string.IsNullOrEmpty(argument))
+            {
+                expanded.Add(argument);
+                continue;
+            }
+            if (argument == "--")
+            {
+                passthrough = true;
+                continue;
+            }
+            if (!argument.StartsWith("--", StringComparison.Ordinal))
+            {
+                expanded.Add(argument);
+                continue;
+            }
+
+            string name = argument;
+            string inlineValue = null;
+            int equals = argument.IndexOf('=');
+            if (equals > 2)
+            {
+                name = argument.Substring(0, equals);
+                inlineValue = argument.Substring(equals + 1);
+            }
+
+            if (!FlagsByLongName.TryGetValue(name, out Flag flag))
+            {
+                string suggestion = SuggestFlag(name);
+                throw new Exception($"unknown option {name}"
+                                    + (suggestion != null ? $"; did you mean {suggestion}?" : "; try --help"));
+            }
+
+            if (string.IsNullOrEmpty(flag.Internal))
+            {
+                // a flag the harness itself handles (--help, --json, ...)
+                expanded.Add(name);
+            }
+            else
+            {
+                expanded.Add(flag.Internal);
+            }
+            if (inlineValue != null)
+            {
+                if (!flag.TakesValue && flag.Kind != FlagKind.Optional)
+                {
+                    throw new Exception($"{name} does not take a value");
+                }
+                expanded.Add(inlineValue);
+            }
+        }
+        return expanded.ToArray();
+    }
+
+    /// <summary>
+    /// The flag a mistyped one was probably meant to be: the closest name by edit distance, when it is close
+    /// enough to be a typo rather than a different word. A "did you mean" is worth ten lines of help text.
+    /// </summary>
+    private static string SuggestFlag(string typed)
+    {
+        string best = null;
+        int bestDistance = int.MaxValue;
+        foreach (string candidate in FlagsByLongName.Keys)
+        {
+            int distance = EditDistance(typed, candidate);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = candidate;
+            }
+        }
+        int allowed = Mathf.Max(2, typed.Length / 3);
+        return bestDistance <= allowed ? best : null;
+    }
+
+    /// <summary>Levenshtein distance, for <see cref="SuggestFlag"/>.</summary>
+    private static int EditDistance(string a, string b)
+    {
+        var previous = new int[b.Length + 1];
+        var current = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) previous[j] = j;
+
+        for (int i = 1; i <= a.Length; i++)
+        {
+            current[0] = i;
+            for (int j = 1; j <= b.Length; j++)
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                current[j] = Mathf.Min(Mathf.Min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+            }
+            var swapBuffer = previous;
+            previous = current;
+            current = swapBuffer;
+        }
+        return previous[b.Length];
+    }
+
+    /// <summary>The `--help` text: one line per flag, grouped the way the commands are used.</summary>
+    private static void PrintHelp(string why = null)
+    {
+        if (!string.IsNullOrEmpty(why)) Debug.LogError($"{Tag} {why}");
+        Debug.Log($"{Tag} UmaViewer headless CLI");
+        Debug.Log($"{Tag}   exports, records and inspects the game's assets without clicking.");
+        Debug.Log($"{Tag}");
+        Debug.Log($"{Tag}   Through the wrapper:  ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001.pmx");
+        Debug.Log($"{Tag}   Or straight from Unity, with the double-dash flags:");
+        Debug.Log($"{Tag}     Unity.exe -batchmode -projectPath . -executeMethod UmaHeadlessExport.Run --char 1001 --out x.pmx");
+        Debug.Log($"{Tag}");
+        Debug.Log($"{Tag}   Both spellings work here: --out is the name to type, -umaOut the one that always has.");
+        Debug.Log($"{Tag}   Values with spaces need quotes. Repeatable flags take one value each time.");
+
+        foreach (var group in Flags.GroupBy(flag => flag.Group))
+        {
+            Debug.Log($"{Tag}");
+            Debug.Log($"{Tag} {group.Key}");
+            foreach (var flag in group)
+            {
+                string value = flag.Kind switch
+                {
+                    FlagKind.Switch => "",
+                    FlagKind.Optional => " [value]",
+                    _ => " <value>",
+                };
+                string alias = string.IsNullOrEmpty(flag.Internal) ? "" : $"  (also {flag.Internal})";
+                Debug.Log($"{Tag}   {flag.Long + value,-26} {flag.Help}{alias}");
+            }
+        }
+    }
+
+    /// <summary>What this build is: the one line a bug report needs.</summary>
+    private static void PrintVersion()
+    {
+        Debug.Log($"{Tag} UmaViewer headless CLI, {Application.unityVersion}, "
+                  + $"{Flags.Length} flag(s); docs/CLI.md");
+    }
+[Serializable]
     private class Options
     {
         public string ScenePath = DefaultScene;
@@ -230,6 +562,15 @@ public static class UmaHeadlessExport
         public int RecordFps = 30;
         public int RecordReduction = 0;
         public string RecordMode = "deterministic";
+        /// <summary>`--help`: print the flags and exit without running anything.</summary>
+        public bool Help;
+
+        /// <summary>`--version`: print what this build is and exit.</summary>
+        public bool Version;
+
+        /// <summary>`--json`: finish with one machine readable line describing the result.</summary>
+        public bool Json;
+
         public double TimeoutSeconds = 600;
         public double BootTimeoutSeconds = 120;
         public int ExtraFrames = 30;
@@ -273,10 +614,13 @@ public static class UmaHeadlessExport
         public static Options Parse(string[] argv)
         {
             var options = new Options();
-            for (int i = 0; i < argv.Length; i++)
+            // the double-dash names are rewritten into the single-dash ones the switch below knows, so there is one
+            // parser and one set of cases however a caller spells a flag
+            string[] normalised = Normalise(argv);
+            for (int i = 0; i < normalised.Length; i++)
             {
-                string key = argv[i];
-                string Next() => i + 1 < argv.Length ? argv[++i] : throw new Exception($"missing value for {key}");
+                string key = normalised[i];
+                string Next() => i + 1 < normalised.Length ? normalised[++i] : throw new Exception($"missing value for {key}");
 
                 switch (key)
                 {
@@ -294,15 +638,15 @@ public static class UmaHeadlessExport
                         options.ListProps = true;
                         // the filter is optional: only consume the next argument if it is a value,
                         // not another -umaX switch
-                        if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListPropsFilter = argv[++i];
+                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.ListPropsFilter = normalised[++i];
                         break;
                     case "-umaListTextures":
                         options.ListTextures = true;
-                        if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListTexturesFilter = argv[++i];
+                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.ListTexturesFilter = normalised[++i];
                         break;
                     case "-umaListFamilies":
                         options.ListFamilies = true;
-                        if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.ListFamiliesFilter = argv[++i];
+                        if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.ListFamiliesFilter = normalised[++i];
                         break;
                     case "-umaAttach": options.Attach.Add(Next()); break;
                     case "-umaScanProps": options.ScanProps = Next(); break;
@@ -312,7 +656,7 @@ public static class UmaHeadlessExport
                 case "-umaDumpPropsFilter":
                     // optional value: the wrapper omits an empty filter, but a script that passes one
                     // anyway must not swallow the next switch as the filter
-                    if (i + 1 < argv.Length && !argv[i + 1].StartsWith("-uma")) options.DumpPropsFilter = argv[++i];
+                    if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-uma")) options.DumpPropsFilter = normalised[++i];
                     break;
                 case "-umaDumpPropsCount": options.DumpPropsCount = int.Parse(Next()); break;
                     case "-umaScanOut": options.ScanOutDir = Next(); break;
@@ -353,7 +697,17 @@ public static class UmaHeadlessExport
                     case "-umaShotLightElevation": options.ShotLightElevation = double.Parse(Next()); break;
                     case "-umaShotTransparent": options.ShotTransparent = true; break;
                     case "-umaShotOnly": options.ShotOnly = true; break;
-                    default: break; // ignore everything else Unity/the shell passes through
+                    case "--help": options.Help = true; break;
+                    case "--about": options.Version = true; break;
+                    case "--json": options.Json = true; break;
+                    default:
+                        // anything else is Unity's own argument or the shell's; but a -uma flag nobody handles
+                        // means the flag table and this switch have drifted apart, which is worth saying out loud
+                        if (key.StartsWith("-uma", StringComparison.Ordinal))
+                        {
+                            Debug.LogWarning($"{Tag} ignoring unknown flag {key} (is the flag table out of date?)");
+                        }
+                        break;
                 }
             }
             return options;
@@ -373,7 +727,21 @@ public static class UmaHeadlessExport
     private static bool _attachmentsApplied;
     private static double _playDeadline;
     private static DateTime _playModeEnteredUtc;
-    private static DateTime _runStartedUtc;
+    /// <summary>
+    /// When the run started. It lives in the session rather than in a field because entering play mode reloads
+    /// the domain: a field reads back as year one after that, which made the play mode retry heuristic fire on
+    /// every tick and the result line report zero seconds.
+    /// </summary>
+    private static DateTime RunStartedUtc
+    {
+        get
+        {
+            string ticks = SessionState.GetString(KeyRunStarted, "");
+            return long.TryParse(ticks, out long value) && value > 0
+                ? new DateTime(value, DateTimeKind.Utc)
+                : default;
+        }
+    }
     private static int _playModeRetries;
 
     /// <summary>Entry point for -executeMethod.</summary>
@@ -391,15 +759,33 @@ public static class UmaHeadlessExport
             return;
         }
 
+        if (options.Help)
+        {
+            PrintHelp();
+            // every mode ends with this marker, including the ones that print and exit: a wrapper waits for it
+            // and a mode that only logs its own summary looks like a hang
+            Debug.Log($"{Tag} OK");
+            EditorApplication.Exit(0);
+            return;
+        }
+
+        if (options.Version)
+        {
+            PrintVersion();
+            Debug.Log($"{Tag} OK");
+            EditorApplication.Exit(0);
+            return;
+        }
+
         if (!options.ListChars && !options.ListCostumes && !options.ListProps && !options.ListTextures
             && !options.ListFamilies
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
             && string.IsNullOrEmpty(options.ExportAudio) && string.IsNullOrEmpty(options.DumpProps)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
-            Debug.LogError($"{Tag} nothing to do: pass -umaChar <id> or -umaProp <path> (optionally -umaOut), "
-                           + "or -umaListChars / -umaListCostumes / -umaListProps / -umaListTextures "
-                           + "/ -umaListFamilies / -umaScanProps / -umaDumpProps / -umaTranscript");
+            Debug.LogError($"{Tag} nothing to do: pass --char <id> or --prop <path> (optionally --out), "
+                           + "or --list-chars / --list-costumes / --list-props / --list-textures "
+                           + "/ --list-families / --scan-props / --dump-props / --transcript. See --help.");
             EditorApplication.Exit(2);
             return;
         }
@@ -416,7 +802,7 @@ public static class UmaHeadlessExport
         SessionState.SetString(KeyOutPath, "");
         SessionState.SetInt(KeyScanFailures, 0);
         SessionState.SetInt(KeyBootReported, 0);
-        _runStartedUtc = DateTime.UtcNow;
+        SessionState.SetString(KeyRunStarted, DateTime.UtcNow.Ticks.ToString());
         _playModeRetries = 0;
         _faceDumped = false;
         _attachmentsApplied = false;
@@ -472,7 +858,7 @@ public static class UmaHeadlessExport
 
                     // Entering play mode is cancelled by a script recompile while the editor is starting,
                     // which otherwise leaves the run sitting here until the timeout.
-                    if ((DateTime.UtcNow - _runStartedUtc).TotalSeconds > 20)
+                    if ((DateTime.UtcNow - RunStartedUtc).TotalSeconds > 20)
                     {
                         _playModeRetries++;
                         if (_playModeRetries > 6)
@@ -3929,9 +4315,72 @@ public static class UmaHeadlessExport
         foreach (var name in costumes) Debug.Log($"{Tag}   {name.Split('_').Last()}\t{name}");
     }
 
+    /// <summary>A run's result as one line, for anything that would rather parse than read a log.</summary>
+    [Serializable]
+    private class RunResult
+    {
+        public bool ok;
+        /// <summary>What kind of run it was: export, export-prop, vmd, screenshot, scan, scan-export, dump, list,
+        /// transcript, audio.</summary>
+        public string mode;
+        /// <summary>The file the run wrote, with forward slashes, or "" when it wrote none.</summary>
+        public string path;
+        public long bytes;
+        public double seconds;
+        /// <summary>Models that failed inside a sweep or a dump, where the run itself still succeeded.</summary>
+        public int failures;
+        public string error;
+    }
+
+    /// <summary>
+    /// Writes the `JSON` line when `--json` was given. It is emitted on success and on failure alike, so a caller
+    /// never has to tell "no JSON" from "the run died before it could write one" by reading the exit code as well.
+    /// </summary>
+    private static void EmitResult(string error)
+    {
+        var options = CurrentOptions;
+        if (options == null || !options.Json) return;
+
+        string written = SessionState.GetString(KeyOutPath, "");
+        var result = new RunResult
+        {
+            ok = error == null,
+            mode = RunMode(options),
+            // a dump writes a folder, not a file: name the folder, so the line is useful for both kinds of run
+            path = (string.IsNullOrEmpty(written) && !string.IsNullOrEmpty(options.DumpProps)
+                        ? options.DumpProps
+                        : written).Replace('\\', '/'),
+            bytes = !string.IsNullOrEmpty(written) && File.Exists(written) ? new FileInfo(written).Length : 0,
+            seconds = RunStartedUtc == default
+                ? 0
+                : Math.Round((DateTime.UtcNow - RunStartedUtc).TotalSeconds, 1),
+            failures = SessionState.GetInt(KeyScanFailures, 0),
+            error = error ?? "",
+        };
+        Debug.Log($"{Tag} JSON {JsonUtility.ToJson(result)}");
+    }
+
+    /// <summary>What this run is doing, in one word, for the result line.</summary>
+    private static string RunMode(Options options)
+    {
+        if (!string.IsNullOrEmpty(options.DumpProps)) return "dump";
+        if (!string.IsNullOrEmpty(options.ScanProps)) return options.ScanExport ? "scan-export" : "scan";
+        if (!string.IsNullOrEmpty(options.ExportAudio)) return "audio";
+        if (!string.IsNullOrEmpty(options.Transcript)) return "transcript";
+        if (options.ListChars || options.ListCostumes || options.ListProps || options.ListTextures
+            || options.ListFamilies) return "list";
+        if (!string.IsNullOrEmpty(options.Screenshot)) return "screenshot";
+        if (!string.IsNullOrEmpty(options.RecordVmd)) return "vmd";
+        if (!string.IsNullOrEmpty(options.Prop)) return "export-prop";
+        return "export";
+    }
+
     private static void Succeed()
     {
         CurrentStage = Stage.Done;
+        // the result line is written first: it reads the options back out of the session, and clearing them
+        // here is what makes the next run start clean
+        EmitResult(null);
         SessionState.SetString(KeyOptions, "");
         EditorApplication.update -= Tick;
         // every mode has to emit this marker: the wrappers wait for it, and a mode that only logs its
@@ -3943,6 +4392,7 @@ public static class UmaHeadlessExport
     private static void Fail(string message)
     {
         CurrentStage = Stage.Done;
+        EmitResult(message);
         SessionState.SetString(KeyOptions, "");
         EditorApplication.update -= Tick;
         Debug.LogError($"{Tag} FAILED: {message}");

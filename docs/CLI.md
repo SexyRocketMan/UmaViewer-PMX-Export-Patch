@@ -11,11 +11,54 @@ line, runs it, and prints the interesting lines of the log afterwards.
 > ### Status: this runs the Unity Editor, not the released build
 > The CLI is an editor entry point - `Assets/Editor/UmaHeadlessExport.cs`, which Unity executes with
 > `-batchmode -executeMethod UmaHeadlessExport.Run` - and `Tools/headless_export.ps1` is the wrapper that
-> assembles that command line for you. **Using it today needs the project source and the matching Unity
+> assembles that command line for you. Every flag has a double-dash name (`--char`) and its original
+> single-dash one (`-umaChar`), `--help` lists them, and `--json` gives a machine readable result. **Using it today needs the project source and the matching Unity
 > editor.** The `UmaViewer.exe` from a release has no argument handling at all, so none of this works from
 > a release build yet. If the CLI is meant to be a feature of the shipped viewer, read
 > [What a shipped CLI would need](#what-a-shipped-cli-would-need) at the end - that section is the
 > starting point for reworking this interface.
+
+### Two spellings, one parser
+
+The harness behind the wrapper takes two names for every flag: the double-dash one to type, and the
+single-dash one that has always worked. They are the same switch - `--out` and `-umaOut` are one case in one
+parser - so scripts written years ago keep working, and nobody has to read a table to guess a flag name.
+
+```powershell
+./Tools/headless_export.ps1 -Char 1001 -Out D:/out/1001.pmx        # the wrapper's own switches
+```
+
+The wrapper is a PowerShell script, so **its** parameters are `-Char` (one dash, no `uma`). The double-dash
+names are the harness's, which is what you use when calling Unity yourself:
+
+```powershell
+& "C:\Program Files\Unity\Hub\Editor\2022.3.62f1\Editor\Unity.exe" `
+    -batchmode -projectPath . -executeMethod UmaHeadlessExport.Run `
+    --char 1001 --costume 00 --out D:\out\1001.pmx -logFile D:\out\run.log
+```
+
+That needs no wrapper at all. Its exit code is the run's (0 ok, 1 the run failed, 2 bad arguments), and the
+log says `[UmaHeadlessExport] OK` or `FAILED: <why>` either way. What the wrapper still does for you: finds
+Unity, clears a `Temp/UnityLockfile` left by a crashed run, waits out Unity's launcher process, and filters
+the log down to the lines worth reading.
+
+### `--help`, `--about`, `--json`
+
+* `--help` prints every flag, grouped by what it is for, with the old name next to the new one. It is the
+  table below, generated from the parser, so it cannot drift.
+* `--about` prints the build, the Unity version and the flag count. It is not `--version`: Unity answers that
+  one itself and exits before this code runs, with no log and no explanation.
+* `--json` (`-Json` on the wrapper) finishes a run with one machine readable line:
+
+  ```
+  [UmaHeadlessExport] JSON {"ok":true,"mode":"export","path":"D:/out/1001.pmx","bytes":5801991,
+                            "seconds":10.2,"failures":0,"error":""}
+  ```
+
+  `mode` is what ran (`export`, `export-prop`, `vmd`, `screenshot`, `scan`, `scan-export`, `dump`, `list`,
+  `transcript`, `audio`), `failures` counts models that failed inside a sweep or a dump where the run itself
+  still succeeded, and the line is written on failure too - so a caller never has to tell "no JSON" from
+  "the run died before it could write one".
 
 ---
 
@@ -574,6 +617,17 @@ a poor user interface, for reasons that are all in the code:
 * It assumes it is the only thing running: the run is a state machine advanced by editor frames, keyed by
   `SessionState` strings, and it terminates the process (`EditorApplication.Exit`) rather than returning.
 * The wrapper is PowerShell, i.e. Windows-only, and its only progress channel is scraping the log.
+
+**What has been done, and what is still open**
+
+The first step of that rework is in: the parser is table-driven, every flag has a `--long` name with the old
+`-uma*` one as an alias, `--help` prints the table it is parsed from, `--about` names the build, `--json` gives
+a result line, and Unity can be driven directly without the wrapper (see *Two spellings, one parser* above).
+That buys discoverability and a machine-readable result without moving any code out of the editor.
+
+The rest is still open, and the reasoning above is unchanged: the CLI cannot be a feature of the shipped
+viewer until the driver lives in runtime code, and the 15 second editor boot per invocation is the floor for
+anything editor-hosted. Deciding whether to spend that is a product question, not a technical one.
 
 **To make it a real feature of the shipped viewer**
 
