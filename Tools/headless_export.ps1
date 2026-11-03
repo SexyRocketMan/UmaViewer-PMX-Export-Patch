@@ -74,6 +74,12 @@ param(
     [switch]$About,
     # the harness's machine readable result line (the double-dash flags are the harness's own)
     # batches: one boot, many models (docs/CLI.md)
+    # the dump a browser reads: characters and props, one index.json, shared textures
+    [string]$DumpModels = "",
+    [int]$DumpModelsCount = 0,
+    [switch]$DumpModelsChars,
+    [switch]$DumpModelsProps,
+    [switch]$Packs,
     [switch]$AllCostumes,
     [switch]$AllChars,
     [double]$BootTimeout = 0,
@@ -168,7 +174,7 @@ if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
 if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
 Clear-StaleUnityLock -Project $ProjectPath
 
-$doingSomething = $Help -or $About -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $Help -or $About -or $DumpModels -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -274,6 +280,13 @@ foreach ($entry in ($ShotTexture -split ';')) {
 if ($PlaySeconds -gt 0) { $arguments += @("-umaPlaySeconds", $PlaySeconds) }
 
 if ($Json) { $arguments += "--json" }
+if ($DumpModels) {
+    $arguments += @("-umaDumpModels", $DumpModels)
+    if ($DumpModelsCount -gt 0) { $arguments += @("-umaDumpModelsCount", $DumpModelsCount) }
+    if ($DumpModelsChars) { $arguments += "-umaDumpModelsChars" }
+    if ($DumpModelsProps) { $arguments += "-umaDumpModelsProps" }
+    if ($Packs) { $arguments += "-umaPacks" }
+}
 if ($AllCostumes) { $arguments += "-umaAllCostumes" }
 if ($AllChars) { $arguments += "-umaAllChars" }
 if ($BootTimeout -gt 0) { $arguments += @("-umaBootTimeout", $BootTimeout) }

@@ -88,6 +88,7 @@ UmaViewer.exe export audio --export-audio snd_voi_story_041047007 --export-clip 
 UmaViewer.exe list chars | list costumes --char 1001 | list props book | list textures prop | list families
 UmaViewer.exe export model --char 1001 --all-costumes --out D:/out/costumes
 UmaViewer.exe dump props D:/props --dump-props-filter toon_prop
+UmaViewer.exe dump models D:/web --packs
 UmaViewer.exe scan props pfb_chr_prop --scan-count 60
 UmaViewer.exe doctor
 ```
@@ -152,6 +153,49 @@ records it and carries on - and the run only fails outright when nothing at all 
 How long a full sweep takes, from that rate: ~5 s a model, so 169 characters at one costume each is about
 fifteen minutes, and every costume in the game (about 1 700 models, ~10 GB) is a couple of hours and a resumable
 one at that.
+
+### The dump a browser reads: `dump models`
+
+`dump props` writes the prop families for a picker. `dump models` is the one for a web service: characters **and**
+props under one root, one `index.json`, and a shared texture folder per kind.
+
+```powershell
+UmaViewer.exe dump models D:/web --packs                  # everything, with a zip per model
+UmaViewer.exe dump models D:/web --dump-models-count 8     # try it on a few first
+UmaViewer.exe dump models D:/web --dump-models-props       # props only
+python Tools/check_dump.py D:/web --packs                  # then check it
+```
+
+```
+D:/web/index.json
+D:/web/characters/1001_00.pmx      D:/web/characters/Texture2D/*.png
+D:/web/props/pfb_chr_prop1003_10.pmx   D:/web/props/Texture2D/*.png
+D:/web/packs/character/1001_00.zip
+```
+
+**Why the textures are shared per kind.** A PMX names its maps as relative paths - `Texture2D/tex_x_diff.png` -
+which are resolved next to the model. So the models and their maps have to sit side by side, and putting every
+character's models in one folder lets them share one `Texture2D/`: four costumes of character 1001 share 48 of
+their 180 maps. Everything that opens a PMX (MMD, Blender, a browser) then resolves it with no help at all.
+
+**One model on its own.** `--packs` writes a zip per model with the PMX at the root and only *its* maps in
+`Texture2D/` inside - 32 entries for `1001_00` (the model and its 31 maps) - so a user can download one
+character and open it without fetching the rest of the dump. The pack is stored, not deflated: a PMX and PNGs
+are already compressed, and the extra pass would cost minutes across a thousand models for a few per cent.
+
+**Resume that repairs.** A model already on disk is skipped - but only if it is *complete*: the file, every map
+its PMX names, and its pack when `--packs` was asked for. Reading the PMX back is what lets a resumed dump fix
+itself instead of skipping past a hole; deleting one texture from a finished dump and re-running re-exports
+exactly that model.
+
+**index.json** (schema `umaviewer-models/1`) is the whole dump in one file: per model the kind, id, costume,
+name (japanese and english), the prop family, the model and texture paths relative to the root, the list of map
+files it needs, its byte size, bounds, bone and hand-bone counts, its pack, and any failure. Plus the totals a
+browser wants before loading anything: written, failed, bytes, texture files and their bytes, packs.
+
+`Tools/check_dump.py` is the other half: it reads a dump and its index and reports missing models, missing maps,
+size disagreements, truncated files and packs that do not contain what they should. It exits 1, so it can gate a
+deploy - and it is how the resume check above was found to be necessary in the first place.
 
 ### `--help`, `--about`, `--json`
 
@@ -778,6 +822,10 @@ and the difference was the name.
 
 Batches (`--all-costumes`, `--all-chars`) are in as well: one boot for a whole character or the whole game,
 resumable by skipping what is already on disk.
+
+`dump models` is the last piece the web side needed from us: one index for characters and props, textures shared
+per kind so a PMX resolves them with no help, a zip per model for a single download, and a validator that says
+whether a dump is complete. Browser rendering is the plan there; prerendered previews stay the fallback.
 
 **What is still open**
 

@@ -238,6 +238,16 @@ public static class UmaHeadlessExport
                    Help = "FBX only: true/false, embed the textures in the file" },
 
         // motion
+        new Flag { Long = "--dump-models", Internal = "-umaDumpModels", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "dump characters and props for a browser: one folder per kind, shared textures, index.json" },
+        new Flag { Long = "--dump-models-chars", Internal = "-umaDumpModelsChars", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "with --dump-models: characters only" },
+        new Flag { Long = "--dump-models-props", Internal = "-umaDumpModelsProps", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "with --dump-models: props only" },
+        new Flag { Long = "--dump-models-count", Internal = "-umaDumpModelsCount", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "how many models to dump; 0 is all of them" },
+        new Flag { Long = "--packs", Internal = "-umaPacks", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "with --dump-models: also write one .zip per model, for a single-model download" },
         new Flag { Long = "--all-costumes", Internal = "-umaAllCostumes", Kind = FlagKind.Switch, Group = "motion",
                    Help = "with --char: export every costume that character has, into --out <folder>" },
         new Flag { Long = "--all-chars", Internal = "-umaAllChars", Kind = FlagKind.Switch, Group = "motion",
@@ -451,6 +461,9 @@ public static class UmaHeadlessExport
         new Verb { Name = "list", Noun = "families", Implies = new[] { "-umaListFamilies" }, Requires = new string[0],
                    Help = "the 3d/chara families and their counts",
                    Example = "list families" },
+        new Verb { Name = "dump", Noun = "models", Requires = new[] { "-umaDumpModels" },
+                   Help = "characters and props for a browser, with one index.json and shared textures",
+                   Example = "dump models D:/web --packs" },
         new Verb { Name = "dump", Noun = "props", Requires = new[] { "-umaDumpProps" },
                    Help = "every prop into its own folder with index.json",
                    Example = "dump props D:/props --dump-props-filter toon_prop" },
@@ -528,7 +541,8 @@ public static class UmaHeadlessExport
         // optional value - the one it implies. A bare word after the command becomes that flag's value, because
         // `dump props D:/props` is what a person types and `--dump-props D:/props` is what the parser wants.
         string subject = null;
-        if (verb.Requires.Contains("-umaDumpProps")) subject = "-umaDumpProps";
+        if (verb.Requires.Contains("-umaDumpModels")) subject = "-umaDumpModels";
+        else if (verb.Requires.Contains("-umaDumpProps")) subject = "-umaDumpProps";
         else if (verb.Requires.Contains("-umaScanProps")) subject = "-umaScanProps";
         else if (verb.Requires.Contains("-umaExportAudio")) subject = "-umaExportAudio";
         else if (verb.Implies != null)
@@ -993,6 +1007,19 @@ public static class UmaHeadlessExport
         /// <summary>`--all-chars`: every character, into `--out` as a folder.</summary>
         public bool AllChars;
 
+        /// <summary>`--dump-models`: the dump a browser reads - characters and props, one index.json.</summary>
+        public string DumpModels = "";
+
+        /// <summary>`--dump-models-chars` / `--dump-models-props`: restrict that dump to one kind.</summary>
+        public bool DumpModelsChars;
+        public bool DumpModelsProps;
+
+        /// <summary>`--packs`: also write one .zip per model, so a single model can be downloaded on its own.</summary>
+        public bool Packs;
+
+        /// <summary>`--dump-models-count`: how many models to dump; 0 is all of them.</summary>
+        public int DumpModelsCount;
+
         /// <summary>
         /// The command this run was given ("export model"), or "" for the plain-flag form. Set by
         /// <see cref="ApplyVerb"/> and used for validation and for the summary line, not for behaviour.
@@ -1072,6 +1099,11 @@ public static class UmaHeadlessExport
                     case "-umaScene": options.ScenePath = Next(); break;
                     case "-umaProp": options.Prop = Next(); break;
                     case "-umaMotion": options.Motion = Next(); break;
+                case "-umaDumpModels": options.DumpModels = Next(); break;
+                case "-umaDumpModelsChars": options.DumpModelsChars = true; break;
+                case "-umaDumpModelsProps": options.DumpModelsProps = true; break;
+                case "-umaDumpModelsCount": options.DumpModelsCount = int.Parse(Next()); break;
+                case "-umaPacks": options.Packs = true; break;
                 case "-umaAllCostumes": options.AllCostumes = true; break;
                 case "-umaAllChars": options.AllChars = true; break;
                     case "-umaListChars": options.ListChars = true; break;
@@ -1273,6 +1305,7 @@ public static class UmaHeadlessExport
             && string.IsNullOrEmpty(options.ExportAudio) && string.IsNullOrEmpty(options.DumpProps)
             && !options.Doctor
             && !options.AllCostumes && !options.AllChars
+            && string.IsNullOrEmpty(options.DumpModels)
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass --char <id> or --prop <path> (optionally --out), "
@@ -1689,6 +1722,12 @@ public static class UmaHeadlessExport
                         break;
                     }
 
+                    if (!string.IsNullOrEmpty(options.DumpModels))
+                    {
+                        ModelDumpStep(options);
+                        return;
+                    }
+
                     if (options.AllCostumes || options.AllChars)
                     {
                         BatchStep(options);
@@ -2081,6 +2120,12 @@ public static class UmaHeadlessExport
                         string missing = $"the export wrote no {exportPath}";
                         if (options.ScanExport) { ContinueSweep(missing); return; }
                         if (options.AllCostumes || options.AllChars) { ContinueBatch(missing); return; }
+                        if (!string.IsNullOrEmpty(options.DumpModels))
+                        {
+                            var job = ModelDumpJobFor(options, exportPath);
+                            ContinueModelDump(options, Path.GetFullPath(options.DumpModels), job, container, missing);
+                            return;
+                        }
                         if (!string.IsNullOrEmpty(options.DumpProps))
                         {
                             var dumpEntry = DumpCurrentEntry();
@@ -2111,6 +2156,12 @@ public static class UmaHeadlessExport
                     if (options.AllCostumes || options.AllChars)
                     {
                         ContinueBatch(null);
+                        return;
+                    }
+                    if (!string.IsNullOrEmpty(options.DumpModels))
+                    {
+                        var job = ModelDumpJobFor(options, CliState.GetString(KeyOutPath, ""));
+                        ContinueModelDump(options, Path.GetFullPath(options.DumpModels), job, container, null);
                         return;
                     }
                     Succeed();
@@ -4225,6 +4276,497 @@ public static class UmaHeadlessExport
         return name;
     }
 
+    /// <summary>One model of a `--dump-models` run: a character in one costume, or a prop.</summary>
+    [Serializable]
+    private class ModelDumpJob
+    {
+        /// <summary>"character" or "prop" - which folder it goes in and which loader loads it.</summary>
+        public string kind;
+        /// <summary>Character id, or 0 for a prop.</summary>
+        public int id;
+        /// <summary>Costume suffix for a character; the manifest path for a prop.</summary>
+        public string key;
+        /// <summary>Where the model goes, relative to the dump root.</summary>
+        public string model;
+    }
+
+    /// <summary>One model of a `--dump-models` index.json.</summary>
+    [Serializable]
+    private class ModelDumpEntry
+    {
+        /// <summary>Bumped when the shape of this file changes, so a page can refuse an old dump.</summary>
+        public int schema = 1;
+        public string kind;
+        public int id;
+        public string costume;
+        /// <summary>Prefab name for a prop, `&lt;id&gt;_&lt;costume&gt;` for a character.</summary>
+        public string name;
+        /// <summary>Character name, japanese and english, and "" for a prop.</summary>
+        public string nameJp;
+        public string nameEn;
+        /// <summary>The `3d/chara` family, for a prop: prop, toonprop, richprop.</summary>
+        public string family;
+        /// <summary>The model, relative to the dump root, forward slashes.</summary>
+        public string model;
+        /// <summary>Its shared texture folder, relative to the dump root.</summary>
+        public string textures;
+        /// <summary>Every map file the model names, so one model can be downloaded on its own.</summary>
+        public List<string> maps = new List<string>();
+        public long bytes;
+        /// <summary>Renderer bounds "x,y,z" in world units.</summary>
+        public string size;
+        public int bones;
+        /// <summary>Hand and finger bones: a prop that says so is meant to be held.</summary>
+        public int handBones;
+        /// <summary>Why it is not on disk, or "" for one that is.</summary>
+        public string failure;
+        /// <summary>The per-model download, relative to the dump root, when --packs was given.</summary>
+        public string pack;
+    }
+
+    /// <summary>A `--dump-models` index: the whole dump in one file.</summary>
+    [Serializable]
+    private class ModelDumpIndex
+    {
+        public string schema = "umaviewer-models/1";
+        public string generated;
+        public string root;
+        public int counted;
+        public int written;
+        public int failed;
+        public long bytes;
+        public int textureFiles;
+        public long textureBytes;
+        public int packs;
+        public List<ModelDumpEntry> models = new List<ModelDumpEntry>();
+    }
+
+    private const string KeyModelDumpPlanned = "UmaHeadlessExport.ModelDumpPlanned";
+    private const string KeyModelDumpIndex = "UmaHeadlessExport.ModelDumpIndex";
+
+    /// <summary>
+    /// The dump a browser reads: characters and props under one root, one index.json, and one shared `Texture2D/`
+    /// folder per kind.
+    ///
+    /// The texture folder is shared *per kind* rather than per model because a PMX names its maps as relative
+    /// paths (`Texture2D/tex_x_diff.png`, resolved next to the model): models and their maps have to sit side by
+    /// side, and putting every character's models in one folder lets them share one `Texture2D/` - four costumes
+    /// of one character share 48 of their 180 maps - while everything that opens a PMX (MMD, Blender, a browser)
+    /// still resolves it with no help. `--packs` writes a `.zip` per model with the same layout inside, for a
+    /// single-model download.
+    /// </summary>
+    private static void ModelDumpStep(Options options)
+    {
+        string root = Path.GetFullPath(options.DumpModels);
+        Directory.CreateDirectory(root);
+
+        var plan = ModelDumpPlan(options, out string failure);
+        if (failure != null)
+        {
+            Fail(failure);
+            return;
+        }
+        if (plan.Count == 0)
+        {
+            Fail("nothing to dump: no characters or props matched");
+            return;
+        }
+
+        // the plan is rebuilt from the manifest every time, so only the index has to survive the play-mode domain
+        // reload a long dump spans
+        var entries = LoadModelDumpIndex(root);
+        int index = CliState.GetInt(KeyModelDumpIndex, 0);
+        if (CliState.GetInt(KeyModelDumpPlanned, 0) == 0)
+        {
+            CliState.SetInt(KeyModelDumpPlanned, 1);
+            CliState.SetInt(KeyModelDumpIndex, 0);
+            index = 0;
+            Debug.Log($"{Tag} model dump: {plan.Count} model(s) into {root}"
+                      + (options.Packs ? " with a pack each" : ""));
+        }
+
+        // skip what is already on disk *and complete*: a model whose file is there but whose maps are not would
+        // otherwise be skipped for ever, and the dump would stay quietly broken
+        int skipped = 0;
+        while (index < plan.Count && IsModelAlreadyDumped(root, plan[index], options.Packs))
+        {
+            index++;
+            skipped++;
+        }
+        if (skipped > 0)
+        {
+            CliState.SetInt(KeyModelDumpIndex, index);
+            Debug.Log($"{Tag} model dump: {skipped} model(s) already there, continuing at {index}/{plan.Count}");
+        }
+
+        if (index >= plan.Count)
+        {
+            WriteModelDumpIndex(root, plan.Count, entries);
+            var indexFile = entries.FirstOrDefault();
+            Debug.Log($"{Tag} model dump: {entries.Count} model(s) in the index, "
+                      + $"{entries.Sum(e => e.bytes) / (1024 * 1024)} MB of models, "
+                      + $"{entries.Sum(e => e.maps.Count)} map reference(s)"
+                      + (options.Packs ? $", {entries.Count(e => !string.IsNullOrEmpty(e.pack))} pack(s)" : ""));
+            CliState.SetInt(KeyModelDumpPlanned, 0);
+            CliState.SetString(KeyOutPath, root);
+            Succeed();
+            return;
+        }
+
+        var job = plan[index];
+        string target = Path.Combine(root, job.model);
+        Directory.CreateDirectory(Path.GetDirectoryName(target));
+        CliState.SetString(KeyOutPath, target);
+        CliState.SetString(KeyPropName, job.kind == "prop" ? job.key : "");
+        CliState.SetInt(KeyIsProp, job.kind == "prop" ? 1 : 0);
+        Debug.Log($"{Tag} [{index + 1}/{plan.Count}] dumping {job.model}");
+
+        if (job.kind == "prop")
+        {
+            if (!UmaViewerMain.Instance.AbList.TryGetValue(job.key, out var propEntry))
+            {
+                ContinueModelDump(options, root, job, null, "the manifest has no such asset");
+                return;
+            }
+            UmaViewerBuilder.Instance.UnloadProp();
+            UmaViewerBuilder.Instance.LoadProp(propEntry);
+        }
+        else
+        {
+            var chara = FindCharacter(job.id);
+            if (chara == null)
+            {
+                ContinueModelDump(options, root, job, null, $"character {job.id} is not in this install");
+                return;
+            }
+            if (!TryResolveCostume(chara, job.key, out string costumeId, out string costumeFailure))
+            {
+                ContinueModelDump(options, root, job, null, costumeFailure);
+                return;
+            }
+            job.key = costumeId;
+            job.model = $"characters/{job.id}_{costumeId}.pmx";
+            CliState.SetString(KeyOutPath, Path.Combine(root, job.model));
+            StartLoad(chara, costumeId);
+        }
+
+        CurrentStage = Stage.WaitModel;
+    }
+
+    /// <summary>
+    /// The job behind a file a dump just wrote: the path carries everything the record needs, so the export stage
+    /// does not have to keep one in a field that the play-mode reload would clear.
+    /// </summary>
+    private static ModelDumpJob ModelDumpJobFor(Options options, string writtenPath)
+    {
+        string root = Path.GetFullPath(options.DumpModels);
+        string relative = Path.GetRelativePath(root, writtenPath).Replace('\\', '/');
+        string name = Path.GetFileNameWithoutExtension(writtenPath);
+        if (relative.StartsWith("characters/", StringComparison.Ordinal))
+        {
+            string[] parts = name.Split('_');
+            int id = int.TryParse(parts[0], out int parsed) ? parsed : 0;
+            string costume = parts.Length > 1 ? string.Join("_", parts.Skip(1)) : "";
+            return new ModelDumpJob { kind = "character", id = id, key = costume, model = relative };
+        }
+        return new ModelDumpJob { kind = "prop", key = CliState.GetString(KeyPropName, ""), model = relative };
+    }
+
+    /// <summary>
+    /// Whether a dump already holds this model, completely: the file, every map it names, and its pack.
+    /// Reading the PMX back is what makes a resumed dump able to repair itself instead of skipping past a hole -
+    /// deleting one texture is enough to make a model unloadable, and the skip used to be file existence alone.
+    /// </summary>
+    private static bool IsModelAlreadyDumped(string root, ModelDumpJob job, bool wantPack)
+    {
+        string path = Path.Combine(root, job.model);
+        if (!File.Exists(path) || new FileInfo(path).Length == 0) return false;
+
+        if (wantPack)
+        {
+            string pack = Path.Combine(root, "packs", job.kind,
+                                      Path.GetFileNameWithoutExtension(path) + ".zip");
+            if (!File.Exists(pack) || new FileInfo(pack).Length == 0) return false;
+        }
+
+        try
+        {
+            string folder = Path.Combine(Path.GetDirectoryName(path), "Texture2D");
+            foreach (string map in PmxTextureList.FileNames(path))
+            {
+                if (!File.Exists(Path.Combine(folder, map))) return false;
+            }
+            return true;
+        }
+        catch (Exception)
+        {
+            // a PMX that cannot be read back is not done, whatever its size says
+            return false;
+        }
+    }
+
+    /// <summary>Everything a `--dump-models` run will write, from the manifest alone.</summary>
+    private static List<ModelDumpJob> ModelDumpPlan(Options options, out string failure)
+    {
+        failure = null;
+        var plan = new List<ModelDumpJob>();
+        bool chars = !options.DumpModelsProps || options.DumpModelsChars;
+        bool props = !options.DumpModelsChars || options.DumpModelsProps;
+
+        if (chars)
+        {
+            foreach (var chara in UmaViewerMain.Instance.Characters.OrderBy(chara => chara.Id))
+            {
+                foreach (string costume in CostumeIds(chara))
+                {
+                    plan.Add(new ModelDumpJob
+                    {
+                        kind = "character",
+                        id = chara.Id,
+                        key = costume,
+                        model = $"characters/{chara.Id}_{costume}.pmx",
+                    });
+                }
+            }
+        }
+
+        if (props)
+        {
+            foreach (var entry in DumpCandidates("", 0))
+            {
+                plan.Add(new ModelDumpJob
+                {
+                    kind = "prop",
+                    key = entry.Name,
+                    model = $"props/{Path.GetFileName(entry.Name)}.pmx",
+                });
+            }
+        }
+
+        if (options.DumpModelsCount > 0 && plan.Count > options.DumpModelsCount)
+        {
+            plan = plan.Take(options.DumpModelsCount).ToList();
+        }
+        return plan;
+    }
+
+    /// <summary>
+    /// Records one model of a dump and moves to the next: reads the maps it names out of the PMX, writes its pack
+    /// when asked, and keeps the index current so an interrupted dump still describes what is on disk.
+    /// </summary>
+    private static void ContinueModelDump(Options options, string root, ModelDumpJob job, UmaContainer container,
+                                          string failure)
+    {
+        string target = CliState.GetString(KeyOutPath, "");
+        var entries = LoadModelDumpIndex(root);
+
+        if (failure == null && (!File.Exists(target) || new FileInfo(target).Length == 0))
+        {
+            failure = "the export wrote no file";
+        }
+
+        var record = new ModelDumpEntry
+        {
+            kind = job.kind,
+            id = job.kind == "character" ? job.id : 0,
+            costume = job.kind == "character" ? job.key : "",
+            name = job.kind == "character"
+                ? $"{job.id}_{job.key}"
+                : Path.GetFileNameWithoutExtension(target),
+            family = job.kind == "prop" ? PropFamilyOf(job.key) : "",
+            model = job.model.Replace('\\', '/'),
+            textures = (job.kind == "character" ? "characters/Texture2D" : "props/Texture2D"),
+            bytes = failure == null ? new FileInfo(target).Length : 0,
+            failure = failure ?? "",
+        };
+
+        if (job.kind == "character")
+        {
+            var chara = FindCharacter(job.id);
+            if (chara != null)
+            {
+                record.nameJp = chara.Name;
+                record.nameEn = chara.EnName;
+                record.bones = 0;
+            }
+        }
+        if (container != null) FillRigFactsInto(record, container);
+
+        if (failure == null)
+        {
+            try
+            {
+                record.maps = PmxTextureList.FileNames(target);
+            }
+            catch (Exception e)
+            {
+                record.failure = $"the PMX could not be read back: {e.Message}";
+                Debug.LogWarning($"{Tag} {job.model}: {record.failure}");
+            }
+
+            if (options.Packs)
+            {
+                record.pack = WriteModelPack(root, job, target, record.maps, out string packFailure);
+                if (packFailure != null) Debug.LogWarning($"{Tag} {job.model}: pack not written: {packFailure}");
+            }
+        }
+
+        string key = record.model;
+        entries.RemoveAll(existing => existing.model == key);
+        entries.Add(record);
+        WriteModelDumpIndex(root, CliState.GetInt(KeyScanFailures, 0) > -1 ? 0 : 0, entries);
+
+        if (failure != null)
+        {
+            CliState.SetInt(KeyScanFailures, CliState.GetInt(KeyScanFailures, 0) + 1);
+            Debug.Log($"{Tag} {job.model}: FAILED: {failure}");
+        }
+        else
+        {
+            Debug.Log($"{Tag} {job.model}: {record.bytes} bytes, {record.maps.Count} map(s)"
+                      + (string.IsNullOrEmpty(record.pack) ? "" : $", pack {record.pack}"));
+        }
+
+        CliState.SetInt(KeyModelDumpIndex, CliState.GetInt(KeyModelDumpIndex, 0) + 1);
+        CliState.SetString(KeyOutPath, "");
+        CliState.SetInt(KeyIsProp, 0);
+        CliState.SetString(KeyPropName, "");
+        CurrentStage = Stage.WaitStartup;
+    }
+
+    /// <summary>
+    /// One model as a zip a person can download on its own: the PMX at the root and its maps in `Texture2D/`
+    /// beside it, which is the layout a PMX expects when it resolves `Texture2D/tex_x.png`.
+    /// </summary>
+    private static string WriteModelPack(string root, ModelDumpJob job, string modelPath, List<string> maps,
+                                         out string failure)
+    {
+        failure = null;
+        try
+        {
+            string relative = $"packs/{job.kind}/{Path.GetFileNameWithoutExtension(modelPath)}.zip";
+            string packPath = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(packPath));
+            if (File.Exists(packPath)) File.Delete(packPath);
+
+            string textureFolder = Path.Combine(Path.GetDirectoryName(modelPath), "Texture2D");
+            using (var stream = File.Create(packPath))
+            using (var zip = new System.IO.Compression.ZipArchive(stream, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                AddZipEntry(zip, modelPath, Path.GetFileName(modelPath));
+                foreach (string map in maps)
+                {
+                    string source = Path.Combine(textureFolder, map);
+                    if (!File.Exists(source)) continue;
+                    AddZipEntry(zip, source, "Texture2D/" + map);
+                }
+            }
+            return relative;
+        }
+        catch (Exception e)
+        {
+            failure = $"{e.GetType().Name}: {e.Message}";
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Adds one file to a pack. The entries are stored, not deflated: they are a PMX and PNGs, which are already
+    /// compressed, so the extra pass buys a few per cent for a lot of time on a thousand models.
+    /// </summary>
+    private static void AddZipEntry(System.IO.Compression.ZipArchive zip, string source, string entryName)
+    {
+        var entry = zip.CreateEntry(entryName, System.IO.Compression.CompressionLevel.NoCompression);
+        using var writer = entry.Open();
+        using var reader = File.OpenRead(source);
+        reader.CopyTo(writer);
+    }
+
+    /// <summary>The index so far, read back from disk - the dump's durable state across reloads.</summary>
+    private static List<ModelDumpEntry> LoadModelDumpIndex(string root)
+    {
+        string path = Path.Combine(root, "index.json");
+        if (!File.Exists(path)) return new List<ModelDumpEntry>();
+        try
+        {
+            var index = JsonUtility.FromJson<ModelDumpIndex>(File.ReadAllText(path));
+            return index?.models ?? new List<ModelDumpEntry>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"{Tag} could not read {path}, starting the index fresh: {e.Message}");
+            return new List<ModelDumpEntry>();
+        }
+    }
+
+    /// <summary>Writes the dump's index.json: every model recorded so far, sorted, plus the totals.</summary>
+    private static void WriteModelDumpIndex(string root, int counted, List<ModelDumpEntry> entries)
+    {
+        var textureFolderChars = Path.Combine(root, "characters", "Texture2D");
+        var textureFolderProps = Path.Combine(root, "props", "Texture2D");
+
+        var files = new List<FileInfo>();
+        foreach (string folder in new[] { textureFolderChars, textureFolderProps })
+        {
+            if (Directory.Exists(folder)) files.AddRange(new DirectoryInfo(folder).GetFiles("*.png"));
+        }
+
+        var index = new ModelDumpIndex
+        {
+            generated = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            root = root.Replace('\\', '/'),
+            counted = counted,
+            written = entries.Count(entry => string.IsNullOrEmpty(entry.failure)),
+            failed = entries.Count(entry => !string.IsNullOrEmpty(entry.failure)),
+            bytes = entries.Sum(entry => entry.bytes),
+            textureFiles = files.Count,
+            textureBytes = files.Sum(file => file.Length),
+            packs = entries.Count(entry => !string.IsNullOrEmpty(entry.pack)),
+            models = entries.OrderBy(entry => entry.kind).ThenBy(entry => entry.name, StringComparer.Ordinal).ToList(),
+        };
+        File.WriteAllText(Path.Combine(root, "index.json"), JsonUtility.ToJson(index, true));
+    }
+
+    /// <summary>Adds the bounds and bone counts a browser wants to know before loading anything.</summary>
+    private static void FillRigFactsInto(ModelDumpEntry record, UmaContainer container)
+    {
+        int bones = 0;
+        int handBones = 0;
+        foreach (var skin in container.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            foreach (var bone in skin.bones)
+            {
+                if (!bone) continue;
+                bones++;
+                string name = bone.name;
+                if (name.IndexOf("Wrist", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Hand_Attach", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Index_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Thumb_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Middle_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Ring_", StringComparison.Ordinal) >= 0
+                    || name.IndexOf("Pinky_", StringComparison.Ordinal) >= 0)
+                {
+                    handBones++;
+                }
+            }
+        }
+        record.bones = bones;
+        record.handBones = handBones;
+
+        bool any = false;
+        var bounds = new Bounds(container.transform.position, Vector3.zero);
+        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer) continue;
+            if (!any) { bounds = renderer.bounds; any = true; }
+            else bounds.Encapsulate(renderer.bounds);
+        }
+        record.size = any
+            ? FormattableString.Invariant($"{bounds.size.x:F3},{bounds.size.y:F3},{bounds.size.z:F3}")
+            : "";
+    }
+
     /// <summary>One model a batch run has to write: a character and one of its costumes.</summary>
     [Serializable]
     private class BatchJob
@@ -4817,6 +5359,7 @@ public static class UmaHeadlessExport
     /// <summary>What this run is doing, in one word, for the result line.</summary>
     private static string RunMode(Options options)
     {
+        if (!string.IsNullOrEmpty(options.DumpModels)) return "dump-models";
         if (!string.IsNullOrEmpty(options.DumpProps)) return "dump";
         if (!string.IsNullOrEmpty(options.ScanProps)) return options.ScanExport ? "scan-export" : "scan";
         if (!string.IsNullOrEmpty(options.ExportAudio)) return "audio";
