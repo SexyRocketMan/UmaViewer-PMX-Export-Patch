@@ -12,42 +12,6 @@ public class PageManager : MonoBehaviour
     public int ShowCount;
     public GameObject ContainerPrefab;
 
-    /// <summary>
-    /// Draw the entries as cards in a grid instead of text rows. One `PageManager` serves both views: the page
-    /// controls, the search box and the keyboard walk are the same code and the same scene objects, and only
-    /// what a page is made of changes - which is what lets the prop panel switch views without the two
-    /// disagreeing about what is on screen or which page it is on.
-    /// </summary>
-    public bool GridMode;
-
-    /// <summary>Size of one card in grid mode, in canvas units. How many fit is measured from the viewport.</summary>
-    public Vector2 GridCellSize = new Vector2(170f, 170f);
-
-    /// <summary>Space between cards.</summary>
-    public Vector2 GridSpacing = new Vector2(8f, 8f);
-
-    /// <summary>
-    /// What a card is stamped from in grid mode: an inactive template, because a card is a list row with a
-    /// picture and a mark box added, not a prefab of its own.
-    /// </summary>
-    public GameObject GridPrefab;
-
-    /// <summary>Called for every card drawn, with its index on the page, so the caller can fill the picture in.</summary>
-    public Action<UmaUIContainer, int> DecorateCard;
-
-    /// <summary>
-    /// Called before a page's cards are stamped. A card has to find the picture it will show before it exists,
-    /// so whatever draws the pictures gets its chance first - and so a page being replaced can drop the cards it
-    /// held before the old ones are destroyed under it.
-    /// </summary>
-    public Action PageStarting;
-
-    /// <summary>
-    /// Called once a page has been drawn, with the entries on it and the index of the first one in the whole
-    /// list. That is how the thumbnail stage knows which props to render, without duplicating the paging maths.
-    /// </summary>
-    public Action<List<Entry>, int> PageDrawn;
-
     /// <summary>Tint of the row the keyboard selection sits on, for containers with no highlight image.</summary>
     public Color SelectionColor = new Color(1f, 0.82f, 0.45f, 1f);
 
@@ -114,7 +78,7 @@ public class PageManager : MonoBehaviour
             SearchText.text = "";
             SearchText.interactable = false;
         }
-        ShowCount = PageSize();
+        ShowCount = Mathf.Max(1, Mathf.FloorToInt(ScrollRect.GetComponent<RectTransform>().rect.height / ContainerPrefab.GetComponent<RectTransform>().rect.height));
         totalPage = Mathf.CeilToInt(entries.Count / (float)ShowCount);
         if (totalPage > 0)
         {
@@ -184,94 +148,20 @@ public class PageManager : MonoBehaviour
         ((Text)PageText.placeholder).text = $"- / -";
     }
 
-    /// <summary>Columns and rows the last page was laid out in, so a card drawing can size its own grid.</summary>
-    public int GridColumns { get; private set; } = 1;
-
-    /// <summary>Rows of cards the last page was laid out in.</summary>
-    public int GridRows { get; private set; } = 1;
-
-    /// <summary>Redraws the page on screen. A page's cards can go stale - a prop load unloads the bundles their
-    /// pictures are drawn from - and this is how they are brought back without changing page or search.</summary>
-    public void Reload()
-    {
-        if (ScrollRect == null || totalPage == 0) return;
-        LoadPage(currentPage);
-    }
-
-    /// <summary>The page indicator's text, e.g. "3 / 18", for anything that reports where the list is.</summary>
-    public string PageLabel => PageText != null ? ((Text)PageText.placeholder).text : "";
-
-    /// <summary>Which page is on screen, counted from zero.</summary>
-    public int CurrentPage => currentPage;
-
-    /// <summary>How many entries fit on one page: rows for the text list, cards for the grid.</summary>
-    private int PageSize()
-    {
-        if (ScrollRect == null) return 1;
-        var view = ScrollRect.viewport != null ? ScrollRect.viewport.rect
-            : ScrollRect.GetComponent<RectTransform>().rect;
-
-        if (!GridMode || GridPrefab == null)
-        {
-            float rowHeight = ContainerPrefab != null
-                ? ContainerPrefab.GetComponent<RectTransform>().rect.height
-                : 55f;
-            return Mathf.Max(1, Mathf.FloorToInt(view.height / Mathf.Max(rowHeight, 1f)));
-        }
-
-        GridLayoutGroup layout = PrepareGrid();
-        int columns = Mathf.Max(1, Mathf.FloorToInt((view.width + GridSpacing.x) / (GridCellSize.x + GridSpacing.x)));
-        int rows = Mathf.Max(1, Mathf.FloorToInt((view.height + GridSpacing.y) / (GridCellSize.y + GridSpacing.y)));
-        GridColumns = columns;
-        GridRows = rows;
-        if (layout != null) layout.constraintCount = columns;
-        return columns * rows;
-    }
-
-    /// <summary>
-    /// Puts the content's layout into the shape the current view needs: a `GridLayoutGroup` for cards, and the
-    /// list's own vertical layout back for rows. The layout component is created on demand and disabled rather
-    /// than removed, so switching views does not churn the content's components every time.
-    /// </summary>
-    private GridLayoutGroup PrepareGrid()
-    {
-        if (ScrollRect == null || ScrollRect.content == null) return null;
-        var content = (RectTransform)ScrollRect.content;
-
-        var layout = content.GetComponent<GridLayoutGroup>();
-        if (layout == null) layout = content.gameObject.AddComponent<GridLayoutGroup>();
-        layout.enabled = GridMode;
-        layout.cellSize = GridCellSize;
-        layout.spacing = GridSpacing;
-        layout.startCorner = GridLayoutGroup.Corner.UpperLeft;
-        layout.childAlignment = TextAnchor.UpperLeft;
-        layout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-
-        var vertical = content.GetComponent<VerticalLayoutGroup>();
-        if (vertical != null) vertical.enabled = !GridMode;
-        return layout;
-    }
-
     private void LoadPage(int index)
     {
         if (totalPage == 0) return;
         var entries = Shown;
         Clear();
-        if (GridMode) PrepareGrid();
-        PageStarting?.Invoke();
         PageText.text = "";
         ((Text)PageText.placeholder).text = $"{currentPage + 1} / {totalPage}";
         var start = ShowCount * index;
-        var page = new List<Entry>();
         for (int i = 0;i< ShowCount; i++)
         {
             if (start + i >= entries.Count) break;
             var entry = entries[start + i];
-            page.Add(entry);
-            var row = AddRow(entry.Name, entry, container => entry.OnClick(container));
-            if (GridMode && DecorateCard != null) DecorateCard(row, i);
+            AddRow(entry.Name, entry, container => entry.OnClick(container));
         }
-        PageDrawn?.Invoke(page, start);
     }
 
     /// <summary>Moves the selection by <paramref name="step"/> and loads what it lands on.</summary>
@@ -449,11 +339,8 @@ public class PageManager : MonoBehaviour
 
     private UmaUIContainer AddRow(string text, Entry entry, Action<UmaUIContainer> onClick)
     {
-        var prefab = GridMode && GridPrefab != null ? GridPrefab : ContainerPrefab;
-        var container = Instantiate(prefab, ScrollRect.content).GetComponent<UmaUIContainer>();
-        container.gameObject.SetActive(true);
+        var container = Instantiate(ContainerPrefab, ScrollRect.content).GetComponent<UmaUIContainer>();
         container.Name = container.name = text;
-        if (entry != null) container.Id = entry.Id;
         if (entry != null)
         {
             if (entry.FontSize > 0)
@@ -511,7 +398,7 @@ public class PageManager : MonoBehaviour
         else
         {
             SubEntries = new List<Entry>(Entries.Where(a => a.Matches(val)));
-            ShowCount = PageSize();
+            ShowCount = Mathf.Max(1, Mathf.FloorToInt(ScrollRect.GetComponent<RectTransform>().rect.height / ContainerPrefab.GetComponent<RectTransform>().rect.height));
             totalPage = Mathf.CeilToInt(SubEntries.Count / (float)ShowCount);
             if (totalPage > 0)
             {
@@ -552,11 +439,6 @@ public class PageManager : MonoBehaviour
         public string Name;
         /// <summary>Extra text a search matches as well, for what the name does not show: id, other languages.</summary>
         public string Keywords;
-        /// <summary>
-        /// The stable key behind the entry - for a prop, its manifest path. Rows carry it into
-        /// <see cref="UmaUIContainer.Id"/> so what draws a card can find the asset again without matching names.
-        /// </summary>
-        public string Id;
         public int FontSize;
         public Sprite Sprite;
         public UnityEngine.Events.UnityAction<UmaUIContainer> OnClick;

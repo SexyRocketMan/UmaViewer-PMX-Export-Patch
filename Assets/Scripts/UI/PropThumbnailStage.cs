@@ -159,7 +159,7 @@ public class PropThumbnailStage : MonoBehaviour
 
     /// <summary>
     /// Fills the stage and frames every model, spread over frames: one prop per frame so the window stays
-    /// responsive, then one swept-fit pass per frame so each pass measures a picture that was actually drawn.
+    /// responsive, then one refit pass per frame so each pass measures a picture that was actually drawn.
     ///
     /// The caller keeps the stage alive until this finishes; <see cref="Built"/> is how it knows.
     /// </summary>
@@ -172,7 +172,7 @@ public class PropThumbnailStage : MonoBehaviour
         yield return null;                       // let the page reach the atlas before measuring it
         for (int pass = 0; pass < refitPasses; pass++)
         {
-            bool changed = SweepFix();
+            bool changed = RefitPass();
             yield return null;                   // the correction only reaches the atlas on the next frame
             if (!changed) break;
         }
@@ -250,7 +250,7 @@ public class PropThumbnailStage : MonoBehaviour
 
     /// <summary>
     /// Scales a model to roughly fill its cell and moves it so its middle sits on the pivot. This is only the
-    /// opening guess - <see cref="SweepFix"/> corrects it from what was actually drawn - so it aims small
+    /// opening guess - <see cref="Refit"/> corrects it from what was actually drawn - so it aims a little small
     /// and never clips a model at its cell edge.
     ///
     /// It cannot be exact, and the reason is worth writing down: a prop's `Renderer.bounds` is not the shape it
@@ -321,63 +321,67 @@ public class PropThumbnailStage : MonoBehaviour
         public static CellBox Empty => new CellBox { MinX = int.MaxValue, MinY = int.MaxValue, MaxX = -1, MaxY = -1 };
     }
 
-    /// <summary>The angles the turntable is sampled at when deciding how big a prop can be. Every 45 degrees is
-    /// enough for the widest projection of anything box-shaped, which is what a cell has to hold.</summary>
-    private static readonly float[] SweepAngles = { 0f, 45f, 90f, 135f };
+    /// <summary>
+    /// Corrects every model until the page has settled: up to <paramref name="maxPasses"/> measure-and-fix
+    /// passes, each one seeing the previous one's result. Two is not enough in practice - the first correction
+    /// only gets a model into the right order of magnitude, because how much of a cell a prop covers depends on
+    /// its shape seen from the camera, not on any number the prefab carries.
+    /// </summary>
+    public void Refit(int maxPasses = 4)
+    {
+        for (int pass = 0; pass < maxPasses; pass++)
+        {
+            if (!RefitPass()) break;
+            RenderAtlas();
+        }
+        RenderAtlas();
+    }
 
     /// <summary>
-    /// Sizes and centres every model so that it fits inside its cell *at every angle of the turntable*, not just
-    /// the one it happens to be showing.
+    /// One measure-and-fix pass: draws the stage, finds where each model actually landed in its cell, then
+    /// scales it towards the cell's fill and moves its middle onto the cell's centre. Returns true when it
+    /// changed anything, so a caller can stop as soon as the page has settled.
     ///
-    /// The footprint of a turning object is the union of its projections, so that is what gets measured: the page
-    /// is drawn four times, a quarter turn apart, and the four footprints of each cell are merged into one. Scale
-    /// so the merged footprint fits the cell and move the model so the merged footprint's middle sits on the
-    /// cell's middle, and nothing can leave its square however fast the table turns.
-    ///
-    /// Both halves of that matter. The first version measured a single angle, so a flat prop that fit from the
-    /// front was cut in half at 90 degrees; measuring two and combining them as `sqrt(w0^2 + w90^2)` fixed the
-    /// size but not the drift, because the centre of a projection is not the centre of rotation. Merged
-    /// footprints answer both.
-    ///
-    /// Returns true when it changed anything, so a caller can stop once the page has settled.
+    /// This is a pass on its own, rather than a loop with renders inside it, because a camera render only
+    /// reaches the atlas on a frame boundary: two passes in one editor tick measure the same picture twice and
+    /// the second "corrects" a change that was never drawn. Measured the hard way - a sixfold scale-up between
+    /// passes, with the renderer's own bounds agreeing it had grown sixfold, came back as the identical 8x27
+    /// pixel sliver.
     /// </summary>
-    public bool SweepFix()
+    public bool RefitPass()
     {
         if (_cells.Count == 0) return false;
 
+        // how much of its cell a model may cover, in pixels: leave a margin all round
         float target = CellPixels * Fill;
         float worldPerPixel = CellUnits / CellPixels;
 
-        CellBox[] swept = null;
-        foreach (float angle in SweepAngles)
-        {
-            var boxes = MeasureAt(angle);
-            if (boxes == null) return false;
-            if (swept == null) swept = boxes;
-            else Merge(swept, boxes);
-        }
+        RenderAtlas();
+        var pixels = ReadPixels();
+        if (pixels == null) return false;
 
         bool changed = false;
         for (int index = 0; index < _cells.Count; index++)
         {
             var cell = _cells[index];
             if (cell.Model == null) continue;
+            var box = Measure(pixels, index);
 
-            var box = swept[index];
-            // nothing drawn from any side: a prop whose material is fully transparent, or too small to see
+            // nothing visible: a prop whose material is fully transparent, or too small to see. Leave it;
+            // the card shows an empty square and the label still names it.
             if (!box.Any) continue;
 
-            float extent = Mathf.Max(box.Width, box.Height);
-            float factor = Mathf.Clamp(target / Mathf.Max(extent, 1f), 0.2f, 6f);
+            float span = Mathf.Max(box.Width, box.Height);
+            float factor = Mathf.Clamp(target / Mathf.Max(span, 1f), 0.2f, 6f);
 
             if (Verbose)
             {
-                Debug.Log($"[stage] cell {index}: swept {box.Width:F0}x{box.Height:F0}px "
-                          + $"({100f * box.Width / CellPixels:F0}% x {100f * box.Height / CellPixels:F0}% of the cell) "
-                          + $"-> factor {factor:F2}, scale {cell.Model.transform.lossyScale.x:F3}");
+                Debug.Log($"[stage] cell {index}: drawn {box.Width}x{box.Height}px at x {box.MinX}..{box.MaxX} "
+                          + $"y {box.MinY}..{box.MaxY}, span {span:F0} -> factor {factor:F2}, "
+                          + $"scale {cell.Model.transform.lossyScale.x:F3}");
             }
 
-            if (Mathf.Abs(factor - 1f) > 0.02f)
+            if (Mathf.Abs(factor - 1f) > 0.03f)
             {
                 cell.Model.transform.localScale *= factor;
                 changed = true;
@@ -386,86 +390,14 @@ public class PropThumbnailStage : MonoBehaviour
             var centre = box.Centre;
             var offset = new Vector3((centre.x - CellPixels * 0.5f) * worldPerPixel,
                                      (centre.y - CellPixels * 0.5f) * worldPerPixel, 0f);
-            // a pixel of slack: coarser than that leaves a model a few pixels off centre, which is enough for a
-            // prop that fills its cell to poke into the next one at some angle
-            if (offset.sqrMagnitude > worldPerPixel * worldPerPixel)
+            if (offset.sqrMagnitude > 0.0025f)
             {
                 cell.Holder.position -= offset;
                 changed = true;
             }
         }
-
-        // leave the page facing the camera again; the turntable takes it from there
-        foreach (var cell in _cells)
-        {
-            if (cell.Pivot) cell.Pivot.localRotation = Quaternion.identity;
-        }
-        RenderAtlas();
         return changed;
     }
-
-    /// <summary>
-    /// Draws the page with every model turned by <paramref name="degrees"/> and returns what each cell covered.
-    /// Null when the atlas could not be read.
-    /// </summary>
-    private CellBox[] MeasureAt(float degrees)
-    {
-        foreach (var cell in _cells)
-        {
-            if (cell.Pivot) cell.Pivot.localRotation = Quaternion.Euler(0f, degrees, 0f);
-        }
-        RenderAtlas();
-        var pixels = ReadPixels();
-        if (pixels == null) return null;
-
-        var boxes = new CellBox[_cells.Count];
-        for (int index = 0; index < _cells.Count; index++)
-        {
-            boxes[index] = _cells[index].Model != null ? Measure(pixels, index) : CellBox.Empty;
-        }
-        return boxes;
-    }
-
-    /// <summary>
-    /// How many cells a prop spills out of when the page is turned by <paramref name="degrees"/>. A cell that
-    /// fits at 0 degrees and not at 45 is exactly the clipping the swept fitting exists to stop, and a still
-    /// picture of one angle cannot show it - so it is a number a caller can assert on instead.
-    /// </summary>
-    public int OverflowAt(float degrees)
-    {
-        var boxes = MeasureAt(degrees);
-        if (boxes == null) return -1;
-        int overflowing = 0;
-        foreach (var box in boxes)
-        {
-            if (!box.Any) continue;
-            if (box.MinX <= 1 || box.MinY <= 1 || box.MaxX >= CellPixels - 2 || box.MaxY >= CellPixels - 2)
-                overflowing++;
-        }
-        return overflowing;
-    }
-
-    /// <summary>Grows <paramref name="into"/> to cover the footprints in <paramref name="with"/>.</summary>
-    private static void Merge(CellBox[] into, CellBox[] with)
-    {
-        for (int i = 0; i < into.Length && i < with.Length; i++)
-        {
-            var a = into[i];
-            var b = with[i];
-            if (!b.Any) continue;
-            if (!a.Any)
-            {
-                into[i] = b;
-                continue;
-            }
-            a.MinX = Mathf.Min(a.MinX, b.MinX);
-            a.MinY = Mathf.Min(a.MinY, b.MinY);
-            a.MaxX = Mathf.Max(a.MaxX, b.MaxX);
-            a.MaxY = Mathf.Max(a.MaxY, b.MaxY);
-            into[i] = a;
-        }
-    }
-
 
 
     /// <summary>Reads the atlas pixels, or null when there is nothing to read.</summary>
