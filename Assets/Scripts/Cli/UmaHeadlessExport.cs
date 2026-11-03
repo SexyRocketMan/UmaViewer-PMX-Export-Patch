@@ -142,6 +142,12 @@ public static class UmaHeadlessExport
     private const string KeyRunStarted = "UmaHeadlessExport.RunStarted";
     /// <summary>The scene a run was asked for, so `--doctor` can report it before anything is loaded.</summary>
     private const string KeyScene = "UmaHeadlessExport.Scene";
+    /// <summary>Where a `--all-costumes` / `--all-chars` batch has got to, and what it has written so far.</summary>
+    private const string KeyBatchIndex = "UmaHeadlessExport.BatchIndex";
+    private const string KeyBatchTotal = "UmaHeadlessExport.BatchTotal";
+    private const string KeyBatchWritten = "UmaHeadlessExport.BatchWritten";
+    private const string KeyBatchBytes = "UmaHeadlessExport.BatchBytes";
+    private const string KeyBatchPlanned = "UmaHeadlessExport.BatchPlanned";
 
     /// <summary>
     /// When the boot wait started. It lives in the session, not in a field, because a player never goes through
@@ -232,6 +238,10 @@ public static class UmaHeadlessExport
                    Help = "FBX only: true/false, embed the textures in the file" },
 
         // motion
+        new Flag { Long = "--all-costumes", Internal = "-umaAllCostumes", Kind = FlagKind.Switch, Group = "motion",
+                   Help = "with --char: export every costume that character has, into --out <folder>" },
+        new Flag { Long = "--all-chars", Internal = "-umaAllChars", Kind = FlagKind.Switch, Group = "motion",
+                   Help = "export every character (add --all-costumes for all of them), into --out <folder>" },
         new Flag { Long = "--motion", Internal = "-umaMotion", Kind = FlagKind.Value, Group = "motion",
                    Help = "motion asset to play, or part of one" },
         new Flag { Long = "--record-vmd", Internal = "-umaRecordVmd", Kind = FlagKind.Value, Group = "motion",
@@ -946,6 +956,12 @@ public static class UmaHeadlessExport
         /// <summary>`--doctor`: report the environment a run would use and exit.</summary>
         public bool Doctor;
 
+        /// <summary>`--all-costumes`: every costume of `--char`, into `--out` as a folder.</summary>
+        public bool AllCostumes;
+
+        /// <summary>`--all-chars`: every character, into `--out` as a folder.</summary>
+        public bool AllChars;
+
         /// <summary>
         /// The command this run was given ("export model"), or "" for the plain-flag form. Set by
         /// <see cref="ApplyVerb"/> and used for validation and for the summary line, not for behaviour.
@@ -1025,6 +1041,8 @@ public static class UmaHeadlessExport
                     case "-umaScene": options.ScenePath = Next(); break;
                     case "-umaProp": options.Prop = Next(); break;
                     case "-umaMotion": options.Motion = Next(); break;
+                case "-umaAllCostumes": options.AllCostumes = true; break;
+                case "-umaAllChars": options.AllChars = true; break;
                     case "-umaListChars": options.ListChars = true; break;
                     case "-umaListCostumes": options.ListCostumes = true; break;
                     case "-umaListProps":
@@ -1223,6 +1241,7 @@ public static class UmaHeadlessExport
             && string.IsNullOrEmpty(options.ScanProps) && string.IsNullOrEmpty(options.Transcript)
             && string.IsNullOrEmpty(options.ExportAudio) && string.IsNullOrEmpty(options.DumpProps)
             && !options.Doctor
+            && !options.AllCostumes && !options.AllChars
             && options.CharId < 0 && string.IsNullOrEmpty(options.Prop))
         {
             Debug.LogError($"{Tag} nothing to do: pass --char <id> or --prop <path> (optionally --out), "
@@ -1639,6 +1658,12 @@ public static class UmaHeadlessExport
                         break;
                     }
 
+                    if (options.AllCostumes || options.AllChars)
+                    {
+                        BatchStep(options);
+                        return;
+                    }
+
                     var chara = FindCharacter(options.CharId);
                     if (chara == null)
                     {
@@ -2024,6 +2049,7 @@ public static class UmaHeadlessExport
                     {
                         string missing = $"the export wrote no {exportPath}";
                         if (options.ScanExport) { ContinueSweep(missing); return; }
+                        if (options.AllCostumes || options.AllChars) { ContinueBatch(missing); return; }
                         if (!string.IsNullOrEmpty(options.DumpProps))
                         {
                             var dumpEntry = DumpCurrentEntry();
@@ -2051,6 +2077,11 @@ public static class UmaHeadlessExport
                             return;
                         }
                     }
+                    if (options.AllCostumes || options.AllChars)
+                    {
+                        ContinueBatch(null);
+                        return;
+                    }
                     Succeed();
                     return;
                 }
@@ -2063,6 +2094,10 @@ public static class UmaHeadlessExport
             if (CurrentOptions.ScanExport && CurrentStage == Stage.Export)
             {
                 ContinueSweep($"{ex.GetType().Name}: {ex.Message}");
+                return;
+            }            if ((CurrentOptions.AllCostumes || CurrentOptions.AllChars) && CurrentStage == Stage.Export)
+            {
+                ContinueBatch($"{ex.GetType().Name}: {ex.Message}");
                 return;
             }
             // a dump is a sweep over 1 300 models: one that throws is recorded and skipped, like a sweep's
@@ -4140,6 +4175,211 @@ public static class UmaHeadlessExport
         return name;
     }
 
+    /// <summary>One model a batch run has to write: a character and one of its costumes.</summary>
+    [Serializable]
+    private class BatchJob
+    {
+        public int id;
+        public string costume;
+    }
+
+    /// <summary>
+    /// The models a `--all-costumes` / `--all-chars` run will write, in the order it will write them.
+    ///
+    /// It is rebuilt from the manifest rather than carried in memory, because a batch is long enough that the
+    /// editor's play-mode domain reload will happen in the middle of it: what is left is the index in
+    /// <see cref="KeyBatchIndex"/>, and the plan has to be derivable again from the game data alone.
+    /// </summary>
+    private static List<BatchJob> BatchPlan(Options options, out string failure)
+    {
+        failure = null;
+        var plan = new List<BatchJob>();
+        var main = UmaViewerMain.Instance;
+
+        var characters = new List<CharaEntry>();
+        if (options.AllChars)
+        {
+            characters.AddRange(main.Characters.OrderBy(chara => chara.Id));
+        }
+        else
+        {
+            var one = FindCharacter(options.CharId);
+            if (one == null)
+            {
+                failure = $"--all-costumes needs a character: pass --char <id> (see `list chars`)";
+                return plan;
+            }
+            characters.Add(one);
+        }
+
+        foreach (var chara in characters)
+        {
+            if (options.AllCostumes)
+            {
+                foreach (string costume in CostumeIds(chara))
+                {
+                    plan.Add(new BatchJob { id = chara.Id, costume = costume });
+                }
+                continue;
+            }
+
+            // no --all-costumes: one job per character, at the costume that was asked for (or its default)
+            plan.Add(new BatchJob { id = chara.Id, costume = options.CostumeId ?? "" });
+        }
+
+        return plan;
+    }
+
+    /// <summary>The costume suffixes a character has, in manifest order: `00`, `01`, `0004_00`, ...</summary>
+    private static List<string> CostumeIds(CharaEntry chara)
+    {
+        return UmaViewerMain.Instance.AbChara
+            .Where(entry => entry.Name.StartsWith(UmaDatabaseController.BodyPath)
+                            && !entry.Name.Contains("clothes")
+                            && entry.Name.Contains($"pfb_bdy{chara.Id}"))
+            .Select(entry => entry.Name.Split('_').Last())
+            .Distinct()
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>Where a batch writes one model: `&lt;out folder&gt;/&lt;id&gt;_&lt;costume&gt;.pmx`.</summary>
+    private static string BatchPath(string folder, BatchJob job) =>
+        Path.Combine(folder, $"{job.id}_{job.costume}.pmx");
+
+    /// <summary>
+    /// Walks one model of a batch: plans the run if it has not been planned, skips what is already on disk, and
+    /// otherwise loads the model and lets the export stage write it. <see cref="ContinueBatch"/> picks it up again
+    /// afterwards, so a batch costs one boot rather than one per model.
+    /// </summary>
+    private static void BatchStep(Options options)
+    {
+        string folder = Path.GetFullPath(options.OutPath);
+        // a batch writes many models, so --out is a folder here: a file name is almost certainly a mistake, and
+        // creating a directory called "1001_00.pmx" would be a confusing way to find out
+        string extension = Path.GetExtension(folder).ToLowerInvariant();
+        if (extension == ".pmx" || extension == ".fbx")
+        {
+            Fail($"--all-costumes and --all-chars write a folder: --out is '{options.OutPath}', "
+                 + "which looks like one file. Give a directory instead, e.g. --out D:/out/costumes");
+            return;
+        }
+
+        var plan = BatchPlan(options, out string failure);
+        if (failure != null)
+        {
+            Fail(failure);
+            return;
+        }
+        if (plan.Count == 0)
+        {
+            Fail("nothing to export: no characters or costumes matched");
+            return;
+        }
+
+        Directory.CreateDirectory(folder);
+        if (CliState.GetInt(KeyBatchPlanned, 0) == 0)
+        {
+            CliState.SetInt(KeyBatchPlanned, 1);
+            CliState.SetInt(KeyBatchTotal, plan.Count);
+            CliState.SetInt(KeyBatchIndex, 0);
+            CliState.SetInt(KeyBatchWritten, 0);
+            CliState.SetInt(KeyBatchBytes, 0);
+            CliState.SetInt(KeyScanFailures, 0);
+            Debug.Log($"{Tag} batch: {plan.Count} model(s) into {folder}");
+        }
+
+        int index = CliState.GetInt(KeyBatchIndex, 0);
+        // skip what is already there without spending a frame on each: a resumed batch is mostly skips
+        int skipped = 0;
+        while (index < plan.Count)
+        {
+            string existing = BatchPath(folder, plan[index]);
+            if (!File.Exists(existing) || new FileInfo(existing).Length == 0) break;
+            index++;
+            skipped++;
+        }
+        if (skipped > 0)
+        {
+            CliState.SetInt(KeyBatchIndex, index);
+            Debug.Log($"{Tag} batch: {skipped} model(s) already on disk, skipping to {index}/{plan.Count}");
+        }
+
+        if (index >= plan.Count)
+        {
+            int written = CliState.GetInt(KeyBatchWritten, 0);
+            int failures = CliState.GetInt(KeyScanFailures, 0);
+            long bytes = CliState.GetInt(KeyBatchBytes, 0);
+            Debug.Log($"{Tag} batch: {written} model(s) written, {failures} failed, {bytes / (1024 * 1024)} MB"
+                      + (failures > 0 ? " - the failures are named above" : ""));
+            // the counters stay readable for the result line; the flag says the next run must plan again
+            CliState.SetInt(KeyBatchPlanned, 0);
+            CliState.SetString(KeyOutPath, folder);
+            if (failures > 0 && written == 0)
+            {
+                Fail($"batch: none of the {plan.Count} model(s) could be written");
+                return;
+            }
+            Succeed();
+            return;
+        }
+
+        var job = plan[index];
+        var chara = FindCharacter(job.id);
+        if (chara == null)
+        {
+            CliState.SetInt(KeyBatchIndex, index + 1);
+            CliState.SetInt(KeyScanFailures, CliState.GetInt(KeyScanFailures, 0) + 1);
+            Debug.LogWarning($"{Tag} [{index + 1}/{plan.Count}] character {job.id} is not in this install, skipping");
+            return;
+        }
+
+        if (!TryResolveCostume(chara, job.costume ?? "", out string costumeId, out string costumeFailure))
+        {
+            CliState.SetInt(KeyBatchIndex, index + 1);
+            CliState.SetInt(KeyScanFailures, CliState.GetInt(KeyScanFailures, 0) + 1);
+            Debug.LogWarning($"{Tag} [{index + 1}/{plan.Count}] {chara.Id}_{job.costume}: {costumeFailure}");
+            return;
+        }
+
+        string target = BatchPath(folder, new BatchJob { id = chara.Id, costume = costumeId });
+        CliState.SetString(KeyOutPath, target);
+        CliState.SetInt(KeyIsProp, 0);
+        CliState.SetString(KeyPropName, "");
+        Debug.Log($"{Tag} [{index + 1}/{plan.Count}] exporting {chara.Id}_{costumeId} ({chara.Name})");
+        StartLoad(chara, costumeId);
+        CurrentStage = Stage.WaitModel;
+    }
+
+    /// <summary>
+    /// Ends one model of a batch and moves to the next. The counters live in the session, so a batch that is
+    /// interrupted reports what it actually wrote rather than starting the count from zero next time.
+    /// </summary>
+    private static void ContinueBatch(string failure)
+    {
+        int index = CliState.GetInt(KeyBatchIndex, 0);
+        int total = CliState.GetInt(KeyBatchTotal, 0);
+        string written = CliState.GetString(KeyOutPath, "");
+
+        if (failure != null)
+        {
+            CliState.SetInt(KeyScanFailures, CliState.GetInt(KeyScanFailures, 0) + 1);
+            Debug.Log($"{Tag} [{index + 1}/{total}] {Path.GetFileName(written)}: FAILED: {failure}");
+        }
+        else
+        {
+            long bytes = File.Exists(written) ? new FileInfo(written).Length : 0;
+            CliState.SetInt(KeyBatchWritten, CliState.GetInt(KeyBatchWritten, 0) + 1);
+            CliState.SetInt(KeyBatchBytes, CliState.GetInt(KeyBatchBytes, 0) + (int)bytes);
+            Debug.Log($"{Tag} [{index + 1}/{total}] {Path.GetFileName(written)}: {bytes} bytes");
+        }
+
+        CliState.SetInt(KeyBatchIndex, index + 1);
+        CliState.SetString(KeyOutPath, "");
+        CliState.SetInt(KeyIsProp, 0);
+        CurrentStage = Stage.WaitStartup;
+    }
+
     private static void StartLoad(CharaEntry chara, string costumeId)
     {
         var main = UmaViewerMain.Instance;
@@ -4412,6 +4652,10 @@ public static class UmaHeadlessExport
         public double seconds;
         /// <summary>Models that failed inside a sweep or a dump, where the run itself still succeeded.</summary>
         public int failures;
+        /// <summary>Models a batch planned to write.</summary>
+        public int jobs;
+        /// <summary>How many of them it wrote.</summary>
+        public int written;
         public string error;
     }
 
@@ -4438,6 +4682,8 @@ public static class UmaHeadlessExport
                 ? 0
                 : Math.Round((DateTime.UtcNow - RunStartedUtc).TotalSeconds, 1),
             failures = CliState.GetInt(KeyScanFailures, 0),
+            jobs = CliState.GetInt(KeyBatchTotal, 0),
+            written = CliState.GetInt(KeyBatchWritten, 0),
             error = error ?? "",
         };
         Debug.Log($"{Tag} JSON {JsonUtility.ToJson(result)}");
@@ -4454,6 +4700,7 @@ public static class UmaHeadlessExport
             || options.ListFamilies) return "list";
         if (!string.IsNullOrEmpty(options.Screenshot)) return "screenshot";
         if (!string.IsNullOrEmpty(options.RecordVmd)) return "vmd";
+        if (options.AllCostumes || options.AllChars) return "batch";
         if (!string.IsNullOrEmpty(options.Prop)) return "export-prop";
         return "export";
     }

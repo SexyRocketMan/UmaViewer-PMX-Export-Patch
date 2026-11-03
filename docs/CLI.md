@@ -86,6 +86,7 @@ UmaViewer.exe export motion --char 1001 --motion anm_rac_type01_run02_stride --r
 UmaViewer.exe export screenshot --char 1001 --screenshot D:/out/shot.png
 UmaViewer.exe export audio --export-audio snd_voi_story_041047007 --export-clip 3 --out D:/out/line.mp3
 UmaViewer.exe list chars | list costumes --char 1001 | list props book | list textures prop | list families
+UmaViewer.exe export model --char 1001 --all-costumes --out D:/out/costumes
 UmaViewer.exe dump props D:/props --dump-props-filter toon_prop
 UmaViewer.exe scan props pfb_chr_prop --scan-count 60
 UmaViewer.exe doctor
@@ -109,6 +110,45 @@ of thing. `--help` lists every command with an example.
 
 Verbs and the flags work in both hosts; through the PowerShell wrapper only the flags do, because its
 parameters are `-Char`-style and PowerShell binds a bare word to nothing.
+
+### Batches: one boot, many models
+
+Every run pays for the viewer booting (about eight seconds). For more than one model that is the whole cost, so
+`--all-costumes` and `--all-chars` walk a list in a single run:
+
+```powershell
+# every costume of one character: 1001_00.pmx, 1001_02.pmx, ... into the folder
+UmaViewer.exe export model --char 1001 --all-costumes --out D:/out/costumes
+
+# every character, at the costume named (or 00 for the ones without it), or every model in the game
+UmaViewer.exe export model --all-chars --costume 00 --out D:/out/chars
+UmaViewer.exe export model --all-chars --all-costumes --out D:/out/all
+```
+
+`--out` is a **folder** here, and giving it a file name is an error rather than a directory called
+`1001_00.pmx`. Each model is written as `<id>_<costume>.pmx`, one `LoadUma` + `ModelExporter.ExportModel` at a
+time - the same path a single export takes - so nothing about the output differs from exporting that model on its
+own.
+
+It **resumes**: any `.pmx` already in the folder is skipped without loading its model, so an interrupted batch
+carries on where it stopped, and running it again after a costume is added only writes the new one. The run
+reports what it wrote, what it skipped and what failed:
+
+```
+batch: 4 model(s) into C:/tmp/batch
+[1/4] exporting 1001_00 (スペシャルウィーク)
+...
+batch: 4 model(s) written, 0 failed, 23 MB
+```
+
+Measured, both hosts: four costumes in **one** run took 18.8 s of work and 27 s including the boot, against
+4 × 11 s as separate runs; the built player did the same four in 22 s. A failure is per model - the batch
+records it and carries on - and the run only fails outright when nothing at all could be written.
+`--json` reports it as `"mode":"batch"` with `jobs` and `written`.
+
+How long a full sweep takes, from that rate: ~5 s a model, so 169 characters at one costume each is about
+fifteen minutes, and every costume in the game (about 1 700 models, ~10 GB) is a couple of hours and a resumable
+one at that.
 
 ### `--help`, `--about`, `--json`
 
@@ -718,6 +758,9 @@ and english names that survive a failed download - the tables are cached beside 
 few seconds for them instead of silently exporting the japanese name in the english name field. That last one
 was found the honest way: the same model exported from the editor and from the player came out 18 bytes apart,
 and the difference was the name.
+
+Batches (`--all-costumes`, `--all-chars`) are in as well: one boot for a whole character or the whole game,
+resumable by skipping what is already on disk.
 
 **What is still open**
 
