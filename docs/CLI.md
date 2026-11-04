@@ -211,6 +211,20 @@ model path, several such runs compose into one dump. It used to be forwarded by 
 of the whole install, and said OK; `Tools/check_wrapper_args.py` now drives the wrapper with `-DryRun` and asserts
 on the flags it would pass, which is the check that would have caught it.
 
+**The size is measured from the model's vertices, not from a renderer.** `Renderer.bounds` on a skinned mesh is
+the box of its *bones*, and one stray bone wrote character 1001 as 16.7 x 6.2 x 25.9 units while she stands 1.6 -
+which the browser then printed as a size. So the dump reads the vertex section of the PMX it just wrote and records
+that box, which is the model as it is built and the same answer the viewer shows. It is in **PMX units**, and one
+unit is 8 cm: the models are authored twelve and a half times the scale people think in, which is the convention the
+Blender tools here already assume (`--import-scale 0.08`, the reciprocal of the `--scale 12.5` in
+`Tools/chain_drive_from_vmd.py`). A 20.2-unit character is 1.62 m.
+
+**`--refresh` repairs an index without exporting anything.** Everything recorded that can be read back from a model
+is re-read: the size, the maps it names. A dump made before the size was measured properly is corrected by
+`dump models D:/web --refresh` in seconds, instead of re-exporting a thousand models to fix a number that is already
+in the files. A model the index lists but which is missing from disk is reported, not dropped - the index is the
+dump's own statement of what it holds.
+
 **index.json** (schema `umaviewer-models/1`) is the whole dump in one file: per model the kind, id, costume,
 name (japanese and english), the prop family, the model, texture and preview paths relative to the root, the list
 of map files it needs, its byte size, bounds, bone and hand-bone counts, its pack, and any failure. Plus the
@@ -664,6 +678,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-DumpPropsFilter <substring>` | - | Only dump props whose manifest path contains this: `rich_prop`, `toon_prop`, `chr_prop`, or a single prop's folder |
 | `-DumpPropsCount <n>` | 0 | How many props to dump; 0 means all of them |
 | `-ScanOut <dir>` | `<project>/HeadlessExports/scan` | Where `-ScanExport` writes its `.pmx` files and the shared `Texture2D/` folder |
+| `-Refresh` | off | With `-DumpModels`: rewrite the index's facts from the models already on disk and export nothing. Use it to correct a dump rather than rebuild it |
 | `-DryRun` | off | Print the argument vector the wrapper would hand to Unity and exit without launching it. `tools/check_wrapper_args.py` asserts on it, which is how a switch that is accepted but never forwarded gets caught - the run looks fine and does something else |
 | `-Transcript <sheet>` | - | Print the dialogue a story voice sheet carries, and what the viewer would label each clip of that asset, then exit |
 | `-ExportAudio <sheet>` | - | Write a sound asset to an mp3 (with `-Out`) carrying its transcript in the ID3 tag |

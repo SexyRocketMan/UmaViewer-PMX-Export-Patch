@@ -250,6 +250,8 @@ public static class UmaHeadlessExport
                    Help = "with --dump-models: also write one .zip per model, for a single-model download" },
         new Flag { Long = "--thumbs", Internal = "-umaThumbs", Kind = FlagKind.Switch, Group = "scanning",
                    Help = "with --dump-models: also render a preview png of each model" },
+        new Flag { Long = "--refresh", Internal = "-umaRefresh", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "with --dump-models: rewrite the index's facts from the models already on disk, exporting nothing" },
         new Flag { Long = "--thumb-size", Internal = "-umaThumbSize", Kind = FlagKind.Value, Group = "scanning",
                    Help = "with --thumbs: the preview is this many pixels square; default 256" },
         new Flag { Long = "--all-costumes", Internal = "-umaAllCostumes", Kind = FlagKind.Switch, Group = "motion",
@@ -1022,6 +1024,7 @@ public static class UmaHeadlessExport
         public bool Packs;
         public bool Thumbs;
         public int ThumbSize;
+        public bool Refresh;
 
         /// <summary>`--dump-models-count`: how many models to dump; 0 is all of them.</summary>
         public int DumpModelsCount;
@@ -1111,6 +1114,7 @@ public static class UmaHeadlessExport
                 case "-umaDumpModelsCount": options.DumpModelsCount = int.Parse(Next()); break;
                 case "-umaPacks": options.Packs = true; break;
                 case "-umaThumbs": options.Thumbs = true; break;
+                case "-umaRefresh": options.Refresh = true; break;
                 case "-umaThumbSize": options.ThumbSize = int.Parse(Next()); break;
                 case "-umaAllCostumes": options.AllCostumes = true; break;
                 case "-umaAllChars": options.AllChars = true; break;
@@ -2484,18 +2488,6 @@ public static class UmaHeadlessExport
         }
         record.bones = bones;
         record.handBones = handBones;
-
-        bool any = false;
-        var bounds = new Bounds(container.transform.position, Vector3.zero);
-        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
-        {
-            if (!renderer) continue;
-            if (!any) { bounds = renderer.bounds; any = true; }
-            else bounds.Encapsulate(renderer.bounds);
-        }
-        record.size = any
-            ? FormattableString.Invariant($"{bounds.size.x:F3},{bounds.size.y:F3},{bounds.size.z:F3}")
-            : "";
     }
 
     /// <summary>A path as the index should carry it: relative to the dump root, forward slashes.</summary>
@@ -4321,7 +4313,12 @@ public static class UmaHeadlessExport
         /// <summary>Every map file the model names, so one model can be downloaded on its own.</summary>
         public List<string> maps = new List<string>();
         public long bytes;
-        /// <summary>Renderer bounds "x,y,z" in world units.</summary>
+        /// <summary>
+        /// The box the model's vertices occupy, "x,y,z" in PMX units. One unit is 8 cm - the convention the Blender
+        /// tools here import at (`--import-scale 0.08`, the reciprocal of the `--scale 12.5` the VMD tools use) - so
+        /// a 20.2-unit character is 1.6 m tall. Recorded in the file's own units because that is what the file says;
+        /// the conversion belongs to whoever is displaying it, and it is a convention rather than a measurement.
+        /// </summary>
         public string size;
         public int bones;
         /// <summary>Hand and finger bones: a prop that says so is meant to be held.</summary>
@@ -4371,6 +4368,12 @@ public static class UmaHeadlessExport
         string root = Path.GetFullPath(options.DumpModels);
         Directory.CreateDirectory(root);
 
+        if (options.Refresh)
+        {
+            RefreshModelDump(root);
+            return;
+        }
+
         var plan = ModelDumpPlan(options, out string failure);
         if (failure != null)
         {
@@ -4400,10 +4403,17 @@ public static class UmaHeadlessExport
         // skip what is already on disk *and complete*: a model whose file is there but whose maps are not would
         // otherwise be skipped for ever, and the dump would stay quietly broken
         int skipped = 0;
+        int repaired = 0;
         while (index < plan.Count && IsModelAlreadyDumped(root, plan[index], options.Packs, options.Thumbs))
         {
+            if (RefreshSkippedFacts(root, plan[index], entries)) repaired++;
             index++;
             skipped++;
+        }
+        if (repaired > 0)
+        {
+            WriteModelDumpIndex(root, plan.Count, entries);
+            Debug.Log($"{Tag} model dump: {repaired} model(s) already there had their facts refreshed from the PMX");
         }
         if (skipped > 0)
         {
@@ -4483,6 +4493,92 @@ public static class UmaHeadlessExport
             return new ModelDumpJob { kind = "character", id = id, key = costume, model = relative };
         }
         return new ModelDumpJob { kind = "prop", key = CliState.GetString(KeyPropName, ""), model = relative };
+    }
+
+    /// <summary>
+    /// Rewrites every fact in a dump's index that can be read back from the models themselves, and exports nothing.
+    ///
+    /// This exists because the index records what the exporter believed at the time, and a belief can be wrong: the
+    /// size was measured from a skinned renderer's bounds - the box of the bones - and wrote character 1001 as 16.7 x
+    /// 6.2 x 25.9 units tall while she stands 1.6. Re-exporting a thousand models to correct a number is absurd when
+    /// the number is in the file, so this reads each PMX and rewrites the size and the map list from it. A model that
+    /// has gone missing is reported and skipped rather than silently dropped: the index is the dump's own statement of
+    /// what it holds.
+    /// </summary>
+    private static void RefreshModelDump(string root)
+    {
+        var entries = LoadModelDumpIndex(root);
+        if (entries.Count == 0)
+        {
+            Fail($"no index.json to refresh in {root}");
+            return;
+        }
+
+        int changed = 0;
+        int missing = 0;
+        var before = entries.ToDictionary(entry => entry.model, entry => entry.size);
+        foreach (var record in entries)
+        {
+            if (!string.IsNullOrEmpty(record.failure)) continue;
+            string path = Path.Combine(root, record.model);
+            if (!File.Exists(path))
+            {
+                missing++;
+                Debug.LogWarning($"{Tag} {record.model}: the index lists it, but there is no file");
+                continue;
+            }
+            try
+            {
+                var facts = PmxTextureList.Scan(path);
+                if (record.size != facts.Size || record.maps == null || record.maps.Count != facts.Maps.Count)
+                {
+                    Debug.Log($"{Tag} {record.model}: size {record.size} -> {facts.Size}, "
+                              + $"{record.maps?.Count ?? 0} map(s) -> {facts.Maps.Count}");
+                    record.size = facts.Size;
+                    record.maps = facts.Maps;
+                    changed++;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"{Tag} {record.model}: could not read it back: {e.Message}");
+            }
+        }
+
+        WriteModelDumpIndex(root, entries.Count, entries);
+        Debug.Log($"{Tag} model dump: refreshed {changed} of {entries.Count} model(s)"
+                  + (missing > 0 ? $", {missing} missing from disk" : ""));
+        CliState.SetString(KeyOutPath, root);
+        Succeed();
+    }
+
+    /// <summary>
+    /// Brings a skipped model's index entry up to date from its own PMX, without exporting anything.
+    ///
+    /// A dump records what the exporter believed while the model was loaded, and the exporter used to believe a
+    /// skinned model's bounding box - which is the box of its bones, not of its body: character 1001 was written as
+    /// 16.7 x 6.2 x 25.9 units tall while standing 1.6, and the browser showed that as "size". The PMX carries the
+    /// vertices, so the honest box can be read back at any time; doing it here means a dump made before this is
+    /// repaired by the next run over it rather than by exporting a thousand models again.
+    /// </summary>
+    private static bool RefreshSkippedFacts(string root, ModelDumpJob job, List<ModelDumpEntry> entries)
+    {
+        var record = entries.FirstOrDefault(entry => entry.model == job.model);
+        if (record == null) return false;
+        try
+        {
+            var facts = PmxTextureList.Scan(Path.Combine(root, job.model));
+            bool changed = record.size != facts.Size || record.maps == null || record.maps.Count != facts.Maps.Count;
+            if (!changed) return false;
+            record.size = facts.Size;
+            record.maps = facts.Maps;
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"{Tag} {job.model}: could not refresh its facts: {e.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -4611,7 +4707,9 @@ public static class UmaHeadlessExport
         {
             try
             {
-                record.maps = PmxTextureList.FileNames(target);
+                var facts = PmxTextureList.Scan(target);
+                record.maps = facts.Maps;
+                record.size = facts.Size;      // the model's own vertices: a renderer would report its bones
             }
             catch (Exception e)
             {
@@ -4964,7 +5062,13 @@ public static class UmaHeadlessExport
         return cut >= 0 ? trimmed.Substring(cut + 1) : trimmed;
     }
 
-    /// <summary>Adds the bounds and bone counts a browser wants to know before loading anything.</summary>
+    /// <summary>
+    /// Adds the bone counts a browser wants before loading anything.
+    ///
+    /// The *size* is not here on purpose: it is read from the PMX's vertices instead, because a skinned renderer's
+    /// bounds are the box of its bones and the numbers it produced were wrong by an order of magnitude. Bones are
+    /// counted from the loaded rig, which is the only thing that knows them.
+    /// </summary>
     private static void FillRigFactsInto(ModelDumpEntry record, UmaContainer container)
     {
         int bones = 0;
@@ -4990,18 +5094,6 @@ public static class UmaHeadlessExport
         }
         record.bones = bones;
         record.handBones = handBones;
-
-        bool any = false;
-        var bounds = new Bounds(container.transform.position, Vector3.zero);
-        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
-        {
-            if (!renderer) continue;
-            if (!any) { bounds = renderer.bounds; any = true; }
-            else bounds.Encapsulate(renderer.bounds);
-        }
-        record.size = any
-            ? FormattableString.Invariant($"{bounds.size.x:F3},{bounds.size.y:F3},{bounds.size.z:F3}")
-            : "";
     }
 
     /// <summary>One model a batch run has to write: a character and one of its costumes.</summary>

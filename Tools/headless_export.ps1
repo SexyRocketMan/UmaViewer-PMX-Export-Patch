@@ -82,6 +82,7 @@ param(
     [switch]$Packs,
     [switch]$Thumbs,
     [int]$ThumbSize = 0,
+    [switch]$Refresh,
     [switch]$AllCostumes,
     [switch]$AllChars,
     [double]$BootTimeout = 0,
@@ -179,7 +180,7 @@ if (-not $DryRun) {
     Clear-StaleUnityLock -Project $ProjectPath
 }
 
-$doingSomething = $Help -or $About -or $DumpModels -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $Help -or $About -or $DumpModels -or $Refresh -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
@@ -295,6 +296,7 @@ if ($DumpModels) {
     if ($DumpModelsProps) { $arguments += "-umaDumpModelsProps" }
     if ($Packs) { $arguments += "-umaPacks" }
 if ($Thumbs) { $arguments += "-umaThumbs" }
+if ($Refresh) { $arguments += "-umaRefresh" }
 if ($ThumbSize -gt 0) { $arguments += @("-umaThumbSize", $ThumbSize) }
 }
 if ($AllCostumes) { $arguments += "-umaAllCostumes" }
