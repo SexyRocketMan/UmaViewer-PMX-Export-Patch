@@ -6,7 +6,7 @@ missing, a PMX that names a texture nobody wrote, an index that disagrees with t
 dump itself is twenty minutes of exports, so this reads the result instead of trusting it.
 
     python Tools/check_dump.py C:/dump
-    python Tools/check_dump.py C:/dump --packs --quiet
+    python Tools/check_dump.py C:/dump --packs --thumbs --quiet
 
 Exit code 1 when anything is wrong, so it can gate a deploy.
 """
@@ -22,7 +22,7 @@ def fail(problems, message):
     problems.append(message)
 
 
-def check(root, want_packs, quiet):
+def check(root, want_packs, want_thumbs, quiet):
     index_path = os.path.join(root, "index.json")
     if not os.path.isfile(index_path):
         print(f"no index.json in {root}", file=sys.stderr)
@@ -41,11 +41,16 @@ def check(root, want_packs, quiet):
           f"{sum(1 for m in models if not m.get('failure'))} written, "
           f"{sum(1 for m in models if m.get('failure'))} failed")
 
-    if index.get("counted") and index.get("counted") != len(models):
-        fail(problems, f"index says {index['counted']} model(s), lists {len(models)}")
+    # `counted` is how many models the run that finished meant to write, so it says whether the dump is complete:
+    # 1377 planned and 900 listed is an interrupted dump, which is worth failing on. More listed than counted is not
+    # a problem at all - that is a later run over a subset (`--dump-models-count 1` on an older dump), and the index
+    # keeps every model it has.
+    if index.get("counted") and index["counted"] > len(models):
+        fail(problems, f"the run planned {index['counted']} model(s), the index lists {len(models)}: incomplete")
 
     kinds = {}
     maps_referenced = set()
+    previews = []
     total_bytes = 0
 
     for model in models:
@@ -80,6 +85,19 @@ def check(root, want_packs, quiet):
                 target = os.path.join(root, texture_folder.replace("/", os.sep), map_name)
                 if not os.path.isfile(target):
                     fail(problems, f"{name}: missing texture {texture_folder}/{map_name}")
+
+        if want_thumbs:
+            thumb = model.get("thumb") or ""
+            if not thumb:
+                fail(problems, f"{name}: no preview recorded")
+            else:
+                thumb_path = os.path.join(root, thumb.replace("/", os.sep))
+                if not os.path.isfile(thumb_path):
+                    fail(problems, f"{name}: no preview at {thumb}")
+                elif os.path.getsize(thumb_path) == 0:
+                    fail(problems, f"{name}: {thumb} is empty")
+                elif not quiet:
+                    previews.append(thumb_path)
 
         if want_packs:
             pack = model.get("pack") or ""
@@ -122,7 +140,42 @@ def check(root, want_packs, quiet):
                   f"(shared, or left from an earlier dump)")
 
     packs = index.get("packs") or 0
-    print(f"  {total_bytes / (1024 * 1024):.1f} MB of models, {packs} pack(s)")
+    thumbs = index.get("thumbs") or 0
+    print(f"  {total_bytes / (1024 * 1024):.1f} MB of models, {packs} pack(s), {thumbs} preview(s)")
+    if previews:
+        # a preview that exists but is blank is the failure a file check cannot see: a camera pointing at nothing,
+        # or a model that did not load, still writes a valid PNG. So a sample of them is opened and asked how much
+        # of the square was actually drawn. Pillow is used when it is there, because reading PNG by hand means
+        # undoing its row filters, and the check is optional rather than worth a wrong answer. Roughly a quarter to
+        # a half of a preview is model, so anything under a twentieth is not a picture of anything.
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
+
+        blank = []
+        for path in previews:
+            if Image is None:
+                if os.path.getsize(path) < 512:
+                    blank.append(f"{os.path.basename(path)} (only {os.path.getsize(path)} bytes)")
+                continue
+            try:
+                with Image.open(path) as image:
+                    alpha = image.convert("RGBA").getchannel("A")
+                    width, height = alpha.size
+                    bins = alpha.histogram()
+                    covered = sum(count for value, count in enumerate(bins) if value > 24)
+                    share = covered / float(width * height)
+                    if width != height:
+                        blank.append(f"{os.path.basename(path)} is {width}x{height}, not square")
+                    elif share < 0.05:
+                        blank.append(f"{os.path.basename(path)} ({share:.1%} of it drawn)")
+            except Exception as error:                     # a preview that will not open is a problem too
+                blank.append(f"{os.path.basename(path)} ({type(error).__name__}: {error})")
+        if blank:
+            fail(problems, f"{len(blank)} preview(s) are not pictures of anything, e.g. {blank[0]}")
+
+    print(f"  {sum(1 for m in models if m.get('thumb'))} of {len(models)} model(s) have a preview")
 
     if problems:
         print(f"\n{len(problems)} problem(s):")
@@ -140,9 +193,10 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("root", help="the folder --dump-models wrote")
     parser.add_argument("--packs", action="store_true", help="also check the per-model zips")
+    parser.add_argument("--thumbs", action="store_true", help="also check the per-model previews")
     parser.add_argument("--quiet", action="store_true", help="do not mention unreferenced textures")
     args = parser.parse_args(argv)
-    return check(args.root, args.packs, args.quiet)
+    return check(args.root, args.packs, args.thumbs, args.quiet)
 
 
 if __name__ == "__main__":

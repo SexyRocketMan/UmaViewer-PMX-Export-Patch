@@ -160,10 +160,10 @@ one at that.
 props under one root, one `index.json`, and a shared texture folder per kind.
 
 ```powershell
-UmaViewer.exe dump models D:/web --packs                  # everything, with a zip per model
+UmaViewer.exe dump models D:/web --packs --thumbs         # everything, with a zip and a preview per model
 UmaViewer.exe dump models D:/web --dump-models-count 8     # try it on a few first
 UmaViewer.exe dump models D:/web --dump-models-props       # props only
-python Tools/check_dump.py D:/web --packs                  # then check it
+python Tools/check_dump.py D:/web --packs --thumbs         # then check it
 ```
 
 ```
@@ -171,6 +171,7 @@ D:/web/index.json
 D:/web/characters/1001_00.pmx      D:/web/characters/Texture2D/*.png
 D:/web/props/pfb_chr_prop1003_10.pmx   D:/web/props/Texture2D/*.png
 D:/web/packs/character/1001_00.zip
+D:/web/thumbs/character/1001_00.png
 ```
 
 **Why the textures are shared per kind.** A PMX names its maps as relative paths - `Texture2D/tex_x_diff.png` -
@@ -183,19 +184,36 @@ their 180 maps. Everything that opens a PMX (MMD, Blender, a browser) then resol
 character and open it without fetching the rest of the dump. The pack is stored, not deflated: a PMX and PNGs
 are already compressed, and the extra pass would cost minutes across a thousand models for a few per cent.
 
+**A picture of each model.** `--thumbs` renders every model to a square PNG (256 px unless `--thumb-size`
+says otherwise) while it is still loaded, and records it as `thumb` in the index, so a browser can show what a
+model looks like without loading it. It is rendered by the same scene that has just exported the model, so it
+costs one camera render per model, not a second load; the picture is a third of the way round from the front and
+slightly above, with a transparent background so a page can put it on its own panel.
+
+Framing is measured rather than computed, and that is the whole trick: `Renderer.bounds` is not the shape that
+gets drawn. A skinned renderer reports the box of its bones, and character 1001 reports 16.7 x 6.2 x 25.9 units
+while drawing a person - framed from that box, she came out 85 px wide in a 256 px square. So each pass renders,
+reads back the alpha channel, and corrects from what appeared: the size sets the distance, the offset sets where
+to aim. Two passes reach 86% of the square and centre within 3 px; a third is only needed when the centring move
+was larger than a pixel or two, because a correction is applied by the *next* render, not the one it was measured
+on.
+
 **Resume that repairs.** A model already on disk is skipped - but only if it is *complete*: the file, every map
-its PMX names, and its pack when `--packs` was asked for. Reading the PMX back is what lets a resumed dump fix
-itself instead of skipping past a hole; deleting one texture from a finished dump and re-running re-exports
-exactly that model.
+its PMX names, its pack when `--packs` was asked for, and its preview when `--thumbs` was. Reading the PMX back
+is what lets a resumed dump fix itself instead of skipping past a hole; deleting one texture from a finished dump
+and re-running re-exports exactly that model, and so does re-running an older dump with `--thumbs` added.
 
 **index.json** (schema `umaviewer-models/1`) is the whole dump in one file: per model the kind, id, costume,
-name (japanese and english), the prop family, the model and texture paths relative to the root, the list of map
-files it needs, its byte size, bounds, bone and hand-bone counts, its pack, and any failure. Plus the totals a
-browser wants before loading anything: written, failed, bytes, texture files and their bytes, packs.
+name (japanese and english), the prop family, the model, texture and preview paths relative to the root, the list
+of map files it needs, its byte size, bounds, bone and hand-bone counts, its pack, and any failure. Plus the
+totals a browser wants before loading anything: written, failed, bytes, texture files and their bytes, packs,
+previews.
 
 `Tools/check_dump.py` is the other half: it reads a dump and its index and reports missing models, missing maps,
-size disagreements, truncated files and packs that do not contain what they should. It exits 1, so it can gate a
-deploy - and it is how the resume check above was found to be necessary in the first place.
+size disagreements, truncated files and packs that do not contain what they should. With `--thumbs` it also opens
+the previews and asks how much of each square was actually drawn, because a camera pointed at nothing still writes
+a valid PNG. It exits 1, so it can gate a deploy - and it is how the resume check above was found to be necessary
+in the first place.
 
 ### `--help`, `--about`, `--json`
 

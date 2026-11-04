@@ -248,6 +248,10 @@ public static class UmaHeadlessExport
                    Help = "how many models to dump; 0 is all of them" },
         new Flag { Long = "--packs", Internal = "-umaPacks", Kind = FlagKind.Switch, Group = "scanning",
                    Help = "with --dump-models: also write one .zip per model, for a single-model download" },
+        new Flag { Long = "--thumbs", Internal = "-umaThumbs", Kind = FlagKind.Switch, Group = "scanning",
+                   Help = "with --dump-models: also render a preview png of each model" },
+        new Flag { Long = "--thumb-size", Internal = "-umaThumbSize", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "with --thumbs: the preview is this many pixels square; default 256" },
         new Flag { Long = "--all-costumes", Internal = "-umaAllCostumes", Kind = FlagKind.Switch, Group = "motion",
                    Help = "with --char: export every costume that character has, into --out <folder>" },
         new Flag { Long = "--all-chars", Internal = "-umaAllChars", Kind = FlagKind.Switch, Group = "motion",
@@ -1016,6 +1020,8 @@ public static class UmaHeadlessExport
 
         /// <summary>`--packs`: also write one .zip per model, so a single model can be downloaded on its own.</summary>
         public bool Packs;
+        public bool Thumbs;
+        public int ThumbSize;
 
         /// <summary>`--dump-models-count`: how many models to dump; 0 is all of them.</summary>
         public int DumpModelsCount;
@@ -1104,6 +1110,8 @@ public static class UmaHeadlessExport
                 case "-umaDumpModelsProps": options.DumpModelsProps = true; break;
                 case "-umaDumpModelsCount": options.DumpModelsCount = int.Parse(Next()); break;
                 case "-umaPacks": options.Packs = true; break;
+                case "-umaThumbs": options.Thumbs = true; break;
+                case "-umaThumbSize": options.ThumbSize = int.Parse(Next()); break;
                 case "-umaAllCostumes": options.AllCostumes = true; break;
                 case "-umaAllChars": options.AllChars = true; break;
                     case "-umaListChars": options.ListChars = true; break;
@@ -4322,6 +4330,8 @@ public static class UmaHeadlessExport
         public string failure;
         /// <summary>The per-model download, relative to the dump root, when --packs was given.</summary>
         public string pack;
+        /// <summary>The preview, relative to the dump root, when --thumbs was given.</summary>
+        public string thumb;
     }
 
     /// <summary>A `--dump-models` index: the whole dump in one file.</summary>
@@ -4338,6 +4348,7 @@ public static class UmaHeadlessExport
         public int textureFiles;
         public long textureBytes;
         public int packs;
+        public int thumbs;
         public List<ModelDumpEntry> models = new List<ModelDumpEntry>();
     }
 
@@ -4382,13 +4393,14 @@ public static class UmaHeadlessExport
             CliState.SetInt(KeyModelDumpIndex, 0);
             index = 0;
             Debug.Log($"{Tag} model dump: {plan.Count} model(s) into {root}"
-                      + (options.Packs ? " with a pack each" : ""));
+                      + (options.Packs ? " with a pack each" : "")
+                      + (options.Thumbs ? ", each with a preview" : ""));
         }
 
         // skip what is already on disk *and complete*: a model whose file is there but whose maps are not would
         // otherwise be skipped for ever, and the dump would stay quietly broken
         int skipped = 0;
-        while (index < plan.Count && IsModelAlreadyDumped(root, plan[index], options.Packs))
+        while (index < plan.Count && IsModelAlreadyDumped(root, plan[index], options.Packs, options.Thumbs))
         {
             index++;
             skipped++;
@@ -4406,7 +4418,8 @@ public static class UmaHeadlessExport
             Debug.Log($"{Tag} model dump: {entries.Count} model(s) in the index, "
                       + $"{entries.Sum(e => e.bytes) / (1024 * 1024)} MB of models, "
                       + $"{entries.Sum(e => e.maps.Count)} map reference(s)"
-                      + (options.Packs ? $", {entries.Count(e => !string.IsNullOrEmpty(e.pack))} pack(s)" : ""));
+                      + (options.Packs ? $", {entries.Count(e => !string.IsNullOrEmpty(e.pack))} pack(s)" : "")
+                      + (options.Thumbs ? $", {entries.Count(e => !string.IsNullOrEmpty(e.thumb))} preview(s)" : ""));
             CliState.SetInt(KeyModelDumpPlanned, 0);
             CliState.SetString(KeyOutPath, root);
             Succeed();
@@ -4477,7 +4490,7 @@ public static class UmaHeadlessExport
     /// Reading the PMX back is what makes a resumed dump able to repair itself instead of skipping past a hole -
     /// deleting one texture is enough to make a model unloadable, and the skip used to be file existence alone.
     /// </summary>
-    private static bool IsModelAlreadyDumped(string root, ModelDumpJob job, bool wantPack)
+    private static bool IsModelAlreadyDumped(string root, ModelDumpJob job, bool wantPack, bool wantThumb)
     {
         string path = Path.Combine(root, job.model);
         if (!File.Exists(path) || new FileInfo(path).Length == 0) return false;
@@ -4488,6 +4501,8 @@ public static class UmaHeadlessExport
                                       Path.GetFileNameWithoutExtension(path) + ".zip");
             if (!File.Exists(pack) || new FileInfo(pack).Length == 0) return false;
         }
+
+        if (wantThumb && !File.Exists(ThumbnailPath(root, job))) return false;
 
         try
         {
@@ -4609,9 +4624,50 @@ public static class UmaHeadlessExport
                 record.pack = WriteModelPack(root, job, target, record.maps, out string packFailure);
                 if (packFailure != null) Debug.LogWarning($"{Tag} {job.model}: pack not written: {packFailure}");
             }
+
+            // the preview is rendered here, while the model is still loaded and standing where the loader put it:
+            // rendering it later would mean loading 1377 models twice, and rendering it from the PMX alone would
+            // mean a second renderer that could disagree with the scene
+            if (options.Thumbs)
+            {
+                string thumbFailure = WriteModelThumbnail(root, job, container,
+                    options.ThumbSize > 0 ? options.ThumbSize : 256, out string thumbPath);
+                if (thumbFailure != null)
+                {
+                    Debug.LogWarning($"{Tag} {job.model}: no preview: {thumbFailure}");
+                }
+                else
+                {
+                    record.thumb = thumbPath;
+                }
+            }
         }
 
         string key = record.model;
+
+        // what an earlier run wrote stays described, if it is still there: the flags of *this* run say what to make
+        // now, not what the dump is. Re-running with fewer of them used to erase a pack or a preview from the index
+        // while leaving the file on disk, and a dump that no longer describes its own contents is a dump that
+        // check_dump.py fails on a machine where nothing is actually wrong.
+        var previous = entries.FirstOrDefault(existing => existing.model == key);
+        bool keptPack = false;
+        bool keptThumb = false;
+        if (previous != null)
+        {
+            if (string.IsNullOrEmpty(record.pack) && !string.IsNullOrEmpty(previous.pack)
+                && File.Exists(Path.Combine(root, previous.pack)))
+            {
+                record.pack = previous.pack;
+                keptPack = true;
+            }
+            if (string.IsNullOrEmpty(record.thumb) && !string.IsNullOrEmpty(previous.thumb)
+                && File.Exists(Path.Combine(root, previous.thumb)))
+            {
+                record.thumb = previous.thumb;
+                keptThumb = true;
+            }
+        }
+
         entries.RemoveAll(existing => existing.model == key);
         entries.Add(record);
         WriteModelDumpIndex(root, CliState.GetInt(KeyScanFailures, 0) > -1 ? 0 : 0, entries);
@@ -4624,7 +4680,12 @@ public static class UmaHeadlessExport
         else
         {
             Debug.Log($"{Tag} {job.model}: {record.bytes} bytes, {record.maps.Count} map(s)"
-                      + (string.IsNullOrEmpty(record.pack) ? "" : $", pack {record.pack}"));
+                      + (string.IsNullOrEmpty(record.pack) ? ""
+                          : keptPack ? $", pack {record.pack} (kept from an earlier run)"
+                          : $", pack {record.pack}")
+                      + (string.IsNullOrEmpty(record.thumb) ? ""
+                          : keptThumb ? $", preview {record.thumb} (kept)"
+                          : $", preview {record.thumb}"));
         }
 
         CliState.SetInt(KeyModelDumpIndex, CliState.GetInt(KeyModelDumpIndex, 0) + 1);
@@ -4668,6 +4729,169 @@ public static class UmaHeadlessExport
             failure = $"{e.GetType().Name}: {e.Message}";
             return "";
         }
+    }
+
+    /// <summary>Where a model's preview goes: `thumbs/&lt;kind&gt;/&lt;name&gt;.png`, beside its model.</summary>
+    private static string ThumbnailPath(string root, ModelDumpJob job)
+    {
+        return Path.Combine(root, "thumbs", job.kind, Path.GetFileNameWithoutExtension(job.model) + ".png");
+    }
+
+    /// <summary>
+    /// Renders one model as a square preview, so a browser can show what a model looks like before loading it.
+    ///
+    /// The browser page can render a preview itself - it does, for a dump without these - and that is the better
+    /// picture. But it costs a second load of every model the page shows, at whatever speed the visitor's machine
+    /// manages, for a thumbnail a few hundred pixels wide; and the dump is being made by a run that already has the
+    /// model in memory. So the preview is rendered here, from the same scene, and the page uses it when it is there.
+    ///
+    /// Framing is measured, not computed, because a `Renderer.bounds` is not the shape that gets drawn: a skinned
+    /// renderer reports the box of its bones, and one stray bone is enough to claim the model is 26 units deep when
+    /// it draws 6 wide (1001_00 reports 16.7 x 6.2 x 25.9 and draws a person). A camera framed from that box puts a
+    /// third of a person in the middle of a mostly empty square. So each pass renders, reads back the alpha channel,
+    /// and corrects from what actually appeared: the size tells the distance, the offset tells where to point. Three
+    /// passes is more than enough because each is a direct camera render, not a frame that arrives later.
+    ///
+    /// The view is turned a third of the way off the front, and slightly from above, so the picture reads as a model
+    /// rather than as a flat elevation.
+    /// </summary>
+    private static string WriteModelThumbnail(string root, ModelDumpJob job, UmaContainer container, int size,
+                                              out string written)
+    {
+        written = "";
+        if (container == null) return "nothing was loaded to render";
+
+        var builder = UmaViewerBuilder.Instance;
+        var animationCamera = builder != null ? builder.AnimationCamera : null;
+        Camera camera = animationCamera != null && animationCamera.isActiveAndEnabled ? animationCamera : Camera.main;
+        if (camera == null) return "the viewer scene has no active camera";
+
+        Bounds bounds = new Bounds(container.transform.position, Vector3.zero);
+        bool any = false;
+        foreach (var renderer in container.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null || !renderer.enabled) continue;
+            if (!any) { bounds = renderer.bounds; any = true; }
+            else bounds.Encapsulate(renderer.bounds);
+        }
+        if (!any) return "the loaded model has no renderers";
+
+        var character = container as UmaContainerCharacter;
+        Transform head = character != null && character.HeadBone != null ? character.HeadBone.transform : null;
+        // the game's bone axes point where the character looks, so the head's forward is the front of the model -
+        // the same axis the exporter aims the eye bones with and the screenshot verb turns the camera by
+        Vector3 facing = head != null ? head.forward : container.transform.forward;
+        facing.y = 0f;
+        if (facing.sqrMagnitude < 1e-6f) facing = Vector3.forward;
+        facing.Normalize();
+
+        const float fov = 39.6f;                                                // a 50 mm lens on a 36 mm sensor
+        float halfFov = fov * 0.5f * Mathf.Deg2Rad;
+        float reach = Mathf.Max(bounds.size.y, Mathf.Max(bounds.size.x, bounds.size.z)) * 0.5f;
+        if (reach <= 0f) reach = 1.75f;                                         // a person, if the box says nothing
+        float distance = Mathf.Max(reach / Mathf.Tan(halfFov), 0.2f);
+
+        Vector3 direction = Quaternion.AngleAxis(-32f, Vector3.up) * facing;    // a third of the way round, from the left
+        direction = (direction + Vector3.up * 0.14f).normalized;                // and a little from above
+        Vector3 target = bounds.center;
+
+        // the camera looks along -direction, so its own right is cross(world up, forward) - not cross(up, direction),
+        // which is the opposite way and turns every centring step into a step twice as far the wrong way
+        Vector3 forward = -direction;
+        Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
+        Vector3 up = Vector3.Cross(forward, right).normalized;
+
+        Transform camTransform = camera.transform;
+        Vector3 oldPosition = camTransform.position;
+        Quaternion oldRotation = camTransform.rotation;
+        float oldFov = camera.fieldOfView;
+        Texture2D image = null;
+        Texture2D previous = null;
+        try
+        {
+            camera.fieldOfView = fov;
+            camera.ResetProjectionMatrix();
+
+            const float want = 0.84f;       // how much of the square the model should span
+            for (int pass = 0; pass < 4; pass++)
+            {
+                camTransform.position = target + direction * distance;
+                camTransform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+
+                if (previous != null) UnityEngine.Object.Destroy(previous);
+                previous = image;
+                image = Screenshot.GrabFrame(camera, size, size, true);
+
+                if (!AlphaFrame(image, out RectInt drawn) || drawn.width <= 1 || drawn.height <= 1)
+                {
+                    return "the render came out empty";
+                }
+
+                float fill = Mathf.Max(drawn.width, drawn.height) / (float)size;
+                Debug.Log($"{Tag}   preview pass {pass + 1}: {drawn.width}x{drawn.height} px of {size} "
+                          + $"(fill {fill:F2}), distance {distance:F2}");
+
+                // centre it: an off-centre model is the other half of why a preview looks wrong
+                float offsetX = (drawn.x + drawn.width * 0.5f) / size - 0.5f;
+                float offsetY = (drawn.y + drawn.height * 0.5f) / size - 0.5f;
+                float halfWidth = distance * Mathf.Tan(halfFov);
+                target += right * (offsetX * 2f * halfWidth) + up * (offsetY * 2f * halfWidth);
+
+                // only stop when the picture is right as rendered: the correction above is applied by the *next*
+                // pass, so breaking on size alone would keep a frame whose offset was never drawn
+                bool sized = Mathf.Abs(fill - want) <= 0.03f;
+                bool centred = Mathf.Max(Mathf.Abs(offsetX), Mathf.Abs(offsetY)) * size <= 3f;
+                if (sized && centred) break;
+                distance = Mathf.Clamp(distance * (fill / want), 0.05f * reach, 60f * reach);
+            }
+
+            string path = ThumbnailPath(root, job);
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllBytes(path, ImageConversion.EncodeToPNG(image));
+            written = Path.GetRelativePath(root, path).Replace('\\', '/');
+            return null;
+        }
+        catch (Exception e)
+        {
+            return $"{e.GetType().Name}: {e.Message}";
+        }
+        finally
+        {
+            if (image != null) UnityEngine.Object.Destroy(image);
+            if (previous != null) UnityEngine.Object.Destroy(previous);
+            camTransform.position = oldPosition;
+            camTransform.rotation = oldRotation;
+            camera.fieldOfView = oldFov;
+            camera.ResetProjectionMatrix();
+        }
+    }
+
+    /// <summary>
+    /// The part of a render that is not transparent, in pixels. This is the shape a thumbnail has to frame: alpha
+    /// above a small threshold, so the soft edge of an antialiased outline does not count as model.
+    /// </summary>
+    private static bool AlphaFrame(Texture2D image, out RectInt drawn)
+    {
+        drawn = new RectInt(0, 0, 0, 0);
+        int width = image.width;
+        int height = image.height;
+        var pixels = image.GetPixels32();
+        int minX = width, minY = height, maxX = -1, maxY = -1;
+        for (int y = 0; y < height; y++)
+        {
+            int row = y * width;
+            for (int x = 0; x < width; x++)
+            {
+                if (pixels[row + x].a <= 24) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+        if (maxX < minX || maxY < minY) return false;
+        drawn = new RectInt(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        return true;
     }
 
     /// <summary>
@@ -4722,6 +4946,7 @@ public static class UmaHeadlessExport
             textureFiles = files.Count,
             textureBytes = files.Sum(file => file.Length),
             packs = entries.Count(entry => !string.IsNullOrEmpty(entry.pack)),
+            thumbs = entries.Count(entry => !string.IsNullOrEmpty(entry.thumb)),
             models = entries.OrderBy(entry => entry.kind).ThenBy(entry => entry.name, StringComparer.Ordinal).ToList(),
         };
         File.WriteAllText(Path.Combine(root, "index.json"), JsonUtility.ToJson(index, true));

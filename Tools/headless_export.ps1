@@ -80,6 +80,8 @@ param(
     [switch]$DumpModelsChars,
     [switch]$DumpModelsProps,
     [switch]$Packs,
+    [switch]$Thumbs,
+    [int]$ThumbSize = 0,
     [switch]$AllCostumes,
     [switch]$AllChars,
     [double]$BootTimeout = 0,
@@ -286,6 +288,8 @@ if ($DumpModels) {
     if ($DumpModelsChars) { $arguments += "-umaDumpModelsChars" }
     if ($DumpModelsProps) { $arguments += "-umaDumpModelsProps" }
     if ($Packs) { $arguments += "-umaPacks" }
+if ($Thumbs) { $arguments += "-umaThumbs" }
+if ($ThumbSize -gt 0) { $arguments += @("-umaThumbSize", $ThumbSize) }
 }
 if ($AllCostumes) { $arguments += "-umaAllCostumes" }
 if ($AllChars) { $arguments += "-umaAllChars" }
