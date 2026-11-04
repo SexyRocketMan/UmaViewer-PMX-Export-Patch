@@ -4299,6 +4299,12 @@ public static class UmaHeadlessExport
         public string kind;
         public int id;
         public string costume;
+        /// <summary>
+        /// What that costume is called - "Default", "Race Shorts", or the story outfit's own name ("スペシャルドリーマー").
+        /// The id alone ("00") says nothing, and the exporter already knows the name: it is what its save dialog
+        /// suggests as a file name, and what the costume list shows.
+        /// </summary>
+        public string costumeName;
         /// <summary>Prefab name for a prop, `&lt;id&gt;_&lt;costume&gt;` for a character.</summary>
         public string name;
         /// <summary>Character name, japanese and english, and "" for a prop.</summary>
@@ -4496,6 +4502,29 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
+    /// The name of a costume: the story outfit's own name when the game gives one, and the viewer's label for the
+    /// generic costumes otherwise ("Default", "Upgraded", "Race Shorts").
+    ///
+    /// This is `UmaViewerUI.GetCostumeName`, which is what the costume list and the export's save dialog use - the
+    /// dump records the same string so a browser can say "Special Week · Special Dreamer" rather than "1001_02".
+    /// The id alone never gets to the human: "00" is the only costume most characters have and it is still called
+    /// "Default".
+    /// </summary>
+    private static string CostumeLabel(int charaId, string costumeId)
+    {
+        if (string.IsNullOrEmpty(costumeId)) return "";
+        string dressName = null;
+        var main = UmaViewerMain.Instance;
+        if (main != null && main.Costumes != null && int.TryParse(costumeId, out int sub) && sub >= 0)
+        {
+            var dress = main.Costumes.FirstOrDefault(entry => entry.CharaId == charaId && entry.BodyTypeSub == sub);
+            if (dress != null) dressName = dress.DressName;
+        }
+        if (!string.IsNullOrEmpty(dressName)) return dressName;
+        return UmaViewerUI.GetCostumeName(costumeId, costumeId);
+    }
+
+    /// <summary>
     /// Rewrites every fact in a dump's index that can be read back from the models themselves, and exports nothing.
     ///
     /// This exists because the index records what the exporter believed at the time, and a belief can be wrong: the
@@ -4568,10 +4597,18 @@ public static class UmaHeadlessExport
         try
         {
             var facts = PmxTextureList.Scan(Path.Combine(root, job.model));
-            bool changed = record.size != facts.Size || record.maps == null || record.maps.Count != facts.Maps.Count;
+            // the costume name comes from the game's own data rather than from the file, so a dump made before it was
+            // recorded can still get it - which is the difference between repairing a dump and rebuilding it
+            string costumeName = record.kind == "character" && string.IsNullOrEmpty(record.costumeName)
+                ? CostumeLabel(record.id, record.costume)
+                : record.costumeName;
+            bool changed = record.size != facts.Size
+                           || record.maps == null || record.maps.Count != facts.Maps.Count
+                           || costumeName != record.costumeName;
             if (!changed) return false;
             record.size = facts.Size;
             record.maps = facts.Maps;
+            record.costumeName = costumeName;
             return true;
         }
         catch (Exception e)
@@ -4700,6 +4737,7 @@ public static class UmaHeadlessExport
                 record.nameEn = chara.EnName;
                 record.bones = 0;
             }
+            record.costumeName = CostumeLabel(job.id, job.key);
         }
         if (container != null) FillRigFactsInto(record, container);
 
