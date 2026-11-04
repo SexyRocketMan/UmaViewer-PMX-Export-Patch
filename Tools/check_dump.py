@@ -8,6 +8,10 @@ dump itself is twenty minutes of exports, so this reads the result instead of tr
     python Tools/check_dump.py C:/dump
     python Tools/check_dump.py C:/dump --packs --thumbs --quiet
 
+This checks that a dump agrees with itself - presence, bytes, packs that contain what they should. It cannot judge
+whether the values are *plausible*: a model recorded as 0 x 0 x 0 cm passes here and is caught by Tools/dump_report.py,
+which knows what a character should measure.
+
 Exit code 1 when anything is wrong, so it can gate a deploy.
 """
 
@@ -85,6 +89,10 @@ def check(root, want_packs, want_thumbs, quiet):
                 target = os.path.join(root, texture_folder.replace("/", os.sep), map_name)
                 if not os.path.isfile(target):
                     fail(problems, f"{name}: missing texture {texture_folder}/{map_name}")
+                elif os.path.getsize(target) == 0:
+                    # an interrupted copy leaves a name with no bytes behind it, and the model then loads without
+                    # that map - which looks like a material bug, not like a broken dump
+                    fail(problems, f"{name}: texture {texture_folder}/{map_name} is empty")
 
         if want_thumbs:
             thumb = model.get("thumb") or ""
