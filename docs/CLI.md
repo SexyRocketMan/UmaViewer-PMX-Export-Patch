@@ -229,8 +229,13 @@ dump's own statement of what it holds.
 name (japanese and english), the prop family, the model, texture and preview paths relative to the root, the list
 of map files it needs, its byte size, bounds, bone and hand-bone counts, its pack, and any failure. Plus the
 totals a browser wants before loading anything: written, failed, bytes, texture files and their bytes, packs,
-previews. Its `root` is the dump's *name*, not its path: the index travels to other machines, and the folder layout
+previews. `Tools/dump_report.py` reads the finished article: models per kind and family, size ranges in
+centimetres with any implausible model named, costume-name coverage, and sampled preview framing.
+Its `root` is the dump's *name*, not its path: the index travels to other machines, and the folder layout
 of the machine that made it is not the browser's business.
+
+The format itself - what each file and number means, how the size is measured and in what units, how to check
+and repair a dump, and how labels attach to it without being written into it - is [DUMP](DUMP.md).
 
 `Tools/check_dump.py` is the other half: it reads a dump and its index and reports missing models, missing maps,
 size disagreements, truncated files and packs that do not contain what they should. With `--thumbs` it also opens
