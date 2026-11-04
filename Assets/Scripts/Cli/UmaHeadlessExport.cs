@@ -295,7 +295,7 @@ public static class UmaHeadlessExport
         new Flag { Long = "--dump-props", Internal = "-umaDumpProps", Kind = FlagKind.Value, Group = "scanning",
                    Help = "dump every prop into this folder with an index.json (docs/PROP_DUMP.md)" },
         new Flag { Long = "--dump-props-filter", Internal = "-umaDumpPropsFilter", Kind = FlagKind.Optional, Group = "scanning",
-                   Help = "only dump props whose path contains this" },
+                   Help = "with a dump: only props whose path contains this, e.g. rich_prop" },
         new Flag { Long = "--dump-props-count", Internal = "-umaDumpPropsCount", Kind = FlagKind.Value, Group = "scanning",
                    Help = "how many props to dump; 0 is all of them" },
         new Flag { Long = "--probe-morphs", Internal = "-umaProbeMorphs", Kind = FlagKind.Switch, Group = "scanning",
@@ -2511,7 +2511,7 @@ public static class UmaHeadlessExport
         var index = new DumpIndex
         {
             generated = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-            root = root.Replace('\\', '/'),
+            root = DumpName(root),
             count = expected > 0 ? expected : _dumpEntries.Count,
             models = _dumpEntries.Values
                 .OrderBy(model => model.model, StringComparer.Ordinal)
@@ -4547,7 +4547,7 @@ public static class UmaHeadlessExport
 
         if (props)
         {
-            foreach (var entry in DumpCandidates("", 0))
+            foreach (var entry in DumpCandidates(options.DumpPropsFilter, 0))
             {
                 plan.Add(new ModelDumpJob
                 {
@@ -4938,7 +4938,7 @@ public static class UmaHeadlessExport
         var index = new ModelDumpIndex
         {
             generated = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-            root = root.Replace('\\', '/'),
+            root = DumpName(root),
             counted = counted,
             written = entries.Count(entry => string.IsNullOrEmpty(entry.failure)),
             failed = entries.Count(entry => !string.IsNullOrEmpty(entry.failure)),
@@ -4950,6 +4950,18 @@ public static class UmaHeadlessExport
             models = entries.OrderBy(entry => entry.kind).ThenBy(entry => entry.name, StringComparer.Ordinal).ToList(),
         };
         File.WriteAllText(Path.Combine(root, "index.json"), JsonUtility.ToJson(index, true));
+    }
+
+    /// <summary>
+    /// A dump's name rather than its absolute path: `index.json` travels to other machines, and the folder layout of
+    /// the machine that made it (a user name, usually) is not the browser's business. A relative `"."` would be
+    /// ambiguous; the folder name identifies the dump and nothing else.
+    /// </summary>
+    private static string DumpName(string root)
+    {
+        string trimmed = root.TrimEnd('/', '\\');
+        int cut = trimmed.LastIndexOfAny(new[] { '/', '\\' });
+        return cut >= 0 ? trimmed.Substring(cut + 1) : trimmed;
     }
 
     /// <summary>Adds the bounds and bone counts a browser wants to know before loading anything.</summary>

@@ -8,6 +8,10 @@ maps to nothing fails at run time with "nothing to do".
 
 This reads both and reports the difference. Exit code 1 when they disagree, so it can gate a commit.
 
+It also checks the wrapper against itself: a parameter it declares but never forwards is worse than a missing
+one, because the run looks like it worked. `-DumpModels -DumpPropsFilter rich_prop` was accepted and silently
+dumped everything three times over, one family per run, and every run said OK.
+
     python Tools/check_cli_parity.py            # report
     python Tools/check_cli_parity.py --verbose  # also list the flags that do match
 """
@@ -46,6 +50,30 @@ def wrapper_passes(path):
     return passed, switches
 
 
+PARAM = re.compile(r"\[(?:switch|string|int|double|bool)\]\s*\$(\w+)", re.I)
+
+
+def wrapper_parameters(path):
+    """(declared names, body) for the wrapper's param block: what it accepts, and what it actually uses."""
+    source = open(path, encoding="utf-8").read()
+    start = source.lower().find("param(")
+    if start < 0:
+        return set(), source
+    depth = 0
+    end = start
+    for index in range(start, len(source)):
+        char = source[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                break
+    block = source[start:end]
+    return set(PARAM.findall(block)), source[end:]
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--verbose", action="store_true", help="list the flags that do match as well")
@@ -53,13 +81,15 @@ def main(argv):
 
     flags = runner_flags(RUNNER)
     passed, switches = wrapper_passes(WRAPPER)
+    declared, body = wrapper_parameters(WRAPPER)
 
     internal = {name for name in flags.values() if name}
     unreachable = sorted(name for name in internal if name not in passed)
     orphaned = sorted(name for name in passed if name not in internal)
 
     print(f"runner:  {len(flags)} flag(s) in the table, {len(internal)} with a -uma* spelling")
-    print(f"wrapper: {len(passed)} -uma* name(s) passed, {len(switches)} switch(es)")
+    print(f"wrapper: {len(passed)} -uma* name(s) passed, {len(switches)} switch(es), "
+          f"{len(declared)} parameter(s) declared")
 
     ok = True
     if unreachable:
@@ -73,6 +103,13 @@ def main(argv):
         print(f"\n{len(orphaned)} name(s) the wrapper passes that the runner no longer has:")
         for name in orphaned:
             print(f"  {name}")
+
+    ignored = sorted(name for name in declared if f"${name}" not in body)
+    if ignored:
+        ok = False
+        print(f"\n{len(ignored)} wrapper parameter(s) accepted and never forwarded:")
+        for name in ignored:
+            print(f"  -{name}")
 
     if args.verbose:
         print("\nmatching:")

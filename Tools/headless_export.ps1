@@ -118,7 +118,8 @@ param(
     [double]$PlaySeconds = 0,
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
     [string]$UnityExe = "",
-    [string]$LogPath = ""
+    [string]$LogPath = "",
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -172,15 +173,17 @@ function Wait-UnityExit {
     return $false
 }
 
-if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
-if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
-Clear-StaleUnityLock -Project $ProjectPath
+if (-not $DryRun) {
+    if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
+    if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
+    Clear-StaleUnityLock -Project $ProjectPath
+}
 
 $doingSomething = $Help -or $About -or $DumpModels -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
-if (-not $LogPath) {
+if (-not $LogPath -and -not $DryRun) {
     $logDir = Join-Path $ProjectPath "Logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $LogPath = Join-Path $logDir ("headless_export_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
@@ -230,8 +233,11 @@ if ($DumpProps) {
     $arguments += @("-umaDumpProps", $DumpProps)
     # both are optional: an empty string would be dropped by PowerShell and the next switch taken as
     # its value, which is how a full dump once turned into "no props matching -umaDumpPropsCount"
-    if ($DumpPropsFilter) { $arguments += @("-umaDumpPropsFilter", $DumpPropsFilter) }
     if ($DumpPropsCount -gt 0) { $arguments += @("-umaDumpPropsCount", $DumpPropsCount) }
+}
+# a model dump takes the same filter, and used to accept this switch without passing it on
+if ($DumpPropsFilter -and ($DumpProps -or $DumpModels)) {
+    $arguments += @("-umaDumpPropsFilter", $DumpPropsFilter)
 }
 if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
 if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }
@@ -296,6 +302,12 @@ if ($AllChars) { $arguments += "-umaAllChars" }
 if ($BootTimeout -gt 0) { $arguments += @("-umaBootTimeout", $BootTimeout) }
 if ($Help) { $arguments += "--help" }
 if ($About) { $arguments += "--about" }
+if ($DryRun) {
+    # one per line, so a value that happens to contain spaces is still one value to whoever reads it
+    $arguments | ForEach-Object { Write-Output $_ }
+    return
+}
+
 Write-Verbose ("arguments: " + ($arguments -join " "))
 
 Write-Host "Unity  : $UnityExe"

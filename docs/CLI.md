@@ -163,6 +163,7 @@ props under one root, one `index.json`, and a shared texture folder per kind.
 UmaViewer.exe dump models D:/web --packs --thumbs         # everything, with a zip and a preview per model
 UmaViewer.exe dump models D:/web --dump-models-count 8     # try it on a few first
 UmaViewer.exe dump models D:/web --dump-models-props       # props only
+UmaViewer.exe dump models D:/web --dump-props-filter rich_prop   # one prop family at a time
 python Tools/check_dump.py D:/web --packs --thumbs         # then check it
 ```
 
@@ -203,11 +204,19 @@ its PMX names, its pack when `--packs` was asked for, and its preview when `--th
 is what lets a resumed dump fix itself instead of skipping past a hole; deleting one texture from a finished dump
 and re-running re-exports exactly that model, and so does re-running an older dump with `--thumbs` added.
 
+**One family at a time.** `--dump-props-filter` narrows a model dump to props whose manifest path contains the
+text, so `toon_prop`, `rich_prop` and `chr_prop` can be looked at separately - and because the index is keyed by
+model path, several such runs compose into one dump. It used to be forwarded by the wrapper only for the older
+`dump props` verb, so `-DumpModels ... -DumpPropsFilter rich_prop` accepted the switch, dumped the first four props
+of the whole install, and said OK; `Tools/check_wrapper_args.py` now drives the wrapper with `-DryRun` and asserts
+on the flags it would pass, which is the check that would have caught it.
+
 **index.json** (schema `umaviewer-models/1`) is the whole dump in one file: per model the kind, id, costume,
 name (japanese and english), the prop family, the model, texture and preview paths relative to the root, the list
 of map files it needs, its byte size, bounds, bone and hand-bone counts, its pack, and any failure. Plus the
 totals a browser wants before loading anything: written, failed, bytes, texture files and their bytes, packs,
-previews.
+previews. Its `root` is the dump's *name*, not its path: the index travels to other machines, and the folder layout
+of the machine that made it is not the browser's business.
 
 `Tools/check_dump.py` is the other half: it reads a dump and its index and reports missing models, missing maps,
 size disagreements, truncated files and packs that do not contain what they should. With `--thumbs` it also opens
@@ -655,6 +664,7 @@ Run `Get-Help ./Tools/headless_export.ps1 -Detailed` for the same list from Powe
 | `-DumpPropsFilter <substring>` | - | Only dump props whose manifest path contains this: `rich_prop`, `toon_prop`, `chr_prop`, or a single prop's folder |
 | `-DumpPropsCount <n>` | 0 | How many props to dump; 0 means all of them |
 | `-ScanOut <dir>` | `<project>/HeadlessExports/scan` | Where `-ScanExport` writes its `.pmx` files and the shared `Texture2D/` folder |
+| `-DryRun` | off | Print the argument vector the wrapper would hand to Unity and exit without launching it. `tools/check_wrapper_args.py` asserts on it, which is how a switch that is accepted but never forwarded gets caught - the run looks fine and does something else |
 | `-Transcript <sheet>` | - | Print the dialogue a story voice sheet carries, and what the viewer would label each clip of that asset, then exit |
 | `-ExportAudio <sheet>` | - | Write a sound asset to an mp3 (with `-Out`) carrying its transcript in the ID3 tag |
 | `-ExportClip <n>` | 0 | Which clip of that asset; `-1` mixes the whole asset |
