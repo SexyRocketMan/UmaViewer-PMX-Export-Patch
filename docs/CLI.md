@@ -616,6 +616,7 @@ uv run Tools/pmx_inspect.py check     D:/out/m.pmx        # the eye-morph / eye-
 uv run Tools/pmx_inspect.py names     D:/out/m.pmx        # morph names unique and within a vmd's 15 bytes
 uv run Tools/pmx_inspect.py integrity D:/out/m.pmx        # declared index sizes vs the counts they hold
 uv run Tools/pmx_inspect.py tails     D:/out/m.pmx --pairs   # where the bones point, left/right mirroring
+uv run Tools/pmx_inspect.py orient    D:/out/m.pmx --against old.pmx   # the tail distribution, and what moved
 uv run Tools/pmx_inspect.py diff      a.pmx b.pmx         # what changed between two exports
 
 uv run Tools/vmd_inspect.py summary   D:/out/m.vmd        # bones, frames, morph tracks

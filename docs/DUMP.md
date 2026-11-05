@@ -55,6 +55,7 @@ drew nothing still writes a valid PNG.
 ```powershell
 python Tools/check_dump.py D:/web --packs --thumbs     # self-consistent?
 python Tools/dump_report.py D:/web --sample 24         # what is in it, and does it look right?
+python Tools/check_tails.py D:/web/characters          # does every joint point at the joint MMD points it at?
 ```
 
 `check_dump.py` is the gate: every model present, every map on disk, byte counts agreeing, packs containing what they
@@ -63,6 +64,12 @@ when the index says more models were planned than it lists - which is what an in
 
 `dump_report.py` is the reading: models per kind and family with their bytes, size ranges in centimetres with any
 implausible model named, costume-name coverage, preview framing, and the failures if there are any.
+
+`check_tails.py` is the orientation gate: a PMX stores no bone axis, so the tail *is* the frame a motion rotates
+around, and a wrong one never fails loudly - the file opens, the vertices are right, the bone just leans the wrong way
+once animated. It reads the tails and checks each joint against the joint MMD points it at (the thigh at the knee,
+the elbow at the wrist, the wrist at the middle finger, the hip up the body), exits 1 below a floor, and prints which
+costumes disagree.
 
 ## Repairing it instead of rebuilding it
 
