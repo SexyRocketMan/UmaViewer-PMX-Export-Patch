@@ -10,48 +10,16 @@ using static LibMMD.Model.Morph;
 using static LibMMD.Model.SkinningOperator;
 
 /// <summary>
-/// Binary FBX 7.4 writer for the model the rest of the exporter produces.
-///
-/// It is deliberately dumb: it takes the format-neutral <see cref="RawMMDModel"/> that
-/// <see cref="ModelExporter"/> already builds for the PMX path, a <see cref="Skeleton"/> of bone rest
-/// matrices, and the texture paths the texture exporter wrote, and turns them into an FBX file. It knows
-/// nothing about the game, the viewer's UI or the Blender add-on - anything that shapes the model (rest
-/// pose, bone orientation, morph surgery) happens before it is called.
-///
-/// What it writes:
-///
-///     Model "&lt;name&gt;" (Null)             the model root - the node a reader turns into the armature
-///       Model "Position" (LimbNode) ...    the bone tree, one node per bone
-///       Model "&lt;name&gt;_mesh" (Mesh)       the mesh, with its Geometry and Skin deformer
-///
-/// Spaces. Unity and PMX are left-handed and Y-up; FBX is right-handed and Y-up, and this writer uses the
-/// global settings Blender's own FBX exporter writes (Y up, +Z front, +X right, unit scale 1.0, i.e.
-/// centimetres). The mapping is therefore a mirror of one axis, X, and the unit change of
-/// <see cref="UnitScale"/>:
-///
-///     position   (x, y, z)  ->  (-x, y, z) * UnitScale
-///     direction  (x, y, z)  ->  (-x, y, z)
-///     matrix     M          ->  UnitScale * (X M X^-1), X = diag(-1, 1, 1)  - a similarity, so inverses
-///                               and products convert consistently with it
-///
-/// Mirroring flips handedness, so triangle winding is reversed on the way out. Which axis is mirrored is
-/// not arbitrary: mirroring Z and mirroring X differ by a half turn about the up axis, and only one of them
-/// lands the model the same way round as the PMX import does. Measured, not assumed - the Z mirror put the
-/// model in back to front, so this mirrors **X**.
-///
-/// Two things exist purely for the reader's sake and would otherwise look redundant:
-/// * every bone gets a <c>Deformer/Cluster</c>, even one carrying no weights, because that is where a
-///   reader takes a bone's rest pose from (Blender reads <c>TransformLink</c> as the bind matrix), so a
-///   bone without a cluster would arrive with no position or orientation at all;
-/// * a bind pose is written in addition to the clusters, for the applications that look for one.
+/// Binary FBX 7.4 writer for what the rest of the exporter produces: the format-neutral <see cref="RawMMDModel"/> the PMX
+/// path builds, a <see cref="Skeleton"/> of rest matrices and the texture paths written beside the file. Unity and PMX are
+/// left-handed, FBX right-handed with the global settings Blender writes, so x is mirrored, scaled by <see cref="UnitScale"/>
+/// and triangle winding reversed.
 /// </summary>
 public static class FbxExporter
 {
     public const string Extension = ".fbx";
 
-    // ------------------------------------------------------------------------------------------------
-    // The skeleton: what Write converts and writes
-    // ------------------------------------------------------------------------------------------------
+    // the skeleton: what Write converts and writes
 
     /// <summary>The bone tree, described in Unity space and emitted in FBX space.</summary>
     public sealed class Skeleton
@@ -71,9 +39,8 @@ public static class FbxExporter
             public float Length;
 
             /// <summary>
-            /// True for the stub bone the writer adds at the tip of a bone that has no children. FBX has no
-            /// bone length, and a reader derives one from the distance to the node's children, so a chain
-            /// end with nothing under it has no length at all. See <see cref="Options.LeafBones"/>.
+            /// True for the stub bone at the tip of a childless bone: FBX has no bone length, and a reader derives one from
+            /// the distance to children. See <see cref="Options.LeafBones"/>.
             /// </summary>
             public bool IsLeaf;
 
@@ -93,13 +60,10 @@ public static class FbxExporter
         }
 
         /// <summary>
-        /// Builds the skeleton from the PMX bone list, which already carries each bone's head position and
-        /// the direction its tail was derived to point in (see <c>ModelExporter.BoneTail</c>). A bone's Y
-        /// axis is that direction, and its Z axis is taken from one reference for the whole rig - "down",
-        /// or the character's forward for a bone that points straight up or down - so the roll is
-        /// predictable and rotating a bone about its own X bends it the same way everywhere. This is also
-        /// the convention the Blender add-on's eye controls are built around, which is why an exported eye
-        /// bone already points out of the face with Z down.
+        /// Builds the skeleton from the PMX bone list, which carries each head position and the direction its tail was derived to
+        /// point in (see <c>ModelExporter.BoneTail</c>). A bone's Y axis is that direction and its Z comes from one reference for
+        /// the whole rig ("down", or forward for a vertical bone), so roll is predictable and rotating a bone about X bends it the
+        /// same way everywhere - the convention the add-on's eye controls use.
         /// </summary>
         public static Skeleton FromModel(RawMMDModel model, bool leafBones = true)
         {
@@ -123,11 +87,9 @@ public static class FbxExporter
         }
 
         /// <summary>
-        /// Gives every chain end a child of its own, so that a reader which infers a bone's length from the
-        /// distance to its children has something to measure - the same trick, and the same name suffix,
-        /// Blender's own FBX exporter uses (<c>add_leaf_bones</c>, off there by default). Nothing is
-        /// skinned to these bones and they carry no weight; a reader that offers "ignore leaf bones" can
-        /// drop them and still gets the right lengths, because they are counted before they are ignored.
+        /// Gives every chain end a child of its own so a reader that infers bone length from the distance to children has something
+        /// to measure - the trick Blender's own FBX exporter uses (<c>add_leaf_bones</c>). Nothing is skinned to them, and they are
+        /// counted before a reader that ignores them drops them, so lengths stay right.
         /// </summary>
         public void AddLeafBones()
         {
@@ -220,13 +182,9 @@ public static class FbxExporter
         }
 
         /// <summary>
-        /// A rest matrix from a head position, the direction the bone points in and the "up" the roll is
-        /// taken from - all in Unity space, because that is the space a refinement reasons in.
-        ///
-        /// The basis is built in FBX space, not in Unity space and converted afterwards: mirroring an
-        /// axis to change handedness turns a proper rotation into an improper one, so a matrix composed in
-        /// Unity space comes out of the conversion with its Y axis or its roll sign flipped on some bones.
-        /// Converting the three vectors first and building the basis there keeps it a rotation.
+        /// A rest matrix from a head position, the direction the bone points in and the "up" the roll is taken from, all in Unity
+        /// space. The basis is built in FBX space rather than composed in Unity and converted, because a mirror turns a proper
+        /// rotation into an improper one, leaving Y or the roll sign flipped on some bones.
         /// </summary>
         public static Matrix4x4 RestMatrix(Vector3 head, Vector3 direction, Vector3 up)
         {
@@ -235,8 +193,7 @@ public static class FbxExporter
                 : Vector3.up;
             Vector3 upDirection = up.sqrMagnitude > 1e-10f ? ToFbxDirection(up).normalized : Vector3.up;
 
-            // "Down" is the opposite of whatever the rig calls up; a bone that points straight along it
-            // cannot use it, so those fall back to the character's forward and still get a stable roll.
+            // a bone pointing straight along "up" cannot use it, so those fall back to forward for a stable roll
             Vector3 reference = Mathf.Abs(Vector3.Dot(y, upDirection)) <= 0.99f
                 ? upDirection
                 : ToFbxDirection(Vector3.forward);
@@ -266,24 +223,20 @@ public static class FbxExporter
         public bool WriteBindPose = true;
 
         /// <summary>
-        /// Add a stub child at the tip of every chain end so a reader can measure the bone. Without it a
-        /// length only exists for a bone that has children, and every finger tip, hair end and helper bone
-        /// is drawn with whatever the reader falls back to.
+        /// Add a stub child at the tip of every chain end so a reader can measure the bone; without it a length exists only for a
+        /// bone with children, and every finger tip, hair end and helper bone is drawn with a fallback.
         /// </summary>
         public bool LeafBones = true;
 
         /// <summary>
-        /// Deflate the big arrays (zlib, the encoding every FBX writer uses). The same data uncompressed
-        /// makes a file several times larger than it needs to be - the UV and skin arrays are mostly
-        /// repeated floats - and every reader has to inflate them anyway.
+        /// Deflate the big arrays (zlib, the encoding every FBX writer uses): uncompressed they make a file several times
+        /// larger, and a reader has to inflate them anyway.
         /// </summary>
         public bool CompressArrays = true;
 
         /// <summary>
-        /// Carry the PNGs inside the file as well as referencing the folder next to it. A reader that
-        /// honours the embedded copy (Blender packs it into the .blend) then shows the model textured even
-        /// if the .fbx is copied somewhere on its own, which is what a moved model usually looks like when
-        /// it is only a set of relative paths. Costs the size of the textures - about 2 MB for a character.
+        /// Carry the PNGs inside the file as well as referencing the folder next to it, so a reader that honours the embedded copy
+        /// (Blender packs it into the .blend) shows the model textured even after the .fbx is moved away from its paths. About 2 MB.
         /// </summary>
         public bool EmbedTextures = true;
     }
@@ -299,19 +252,16 @@ public static class FbxExporter
         writer.Write(path);
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // Space conversion (public so the export step and its tests can state the mapping once)
-    // ------------------------------------------------------------------------------------------------
+    // space conversion (public so the export step and its tests can state the mapping once)
 
     /// <summary>
-    /// Centimetres per model unit. The model the exporter hands over is in the viewer's world units, which
-    /// are metres, and this file declares centimetres (the global settings below say unit scale 1.0), so the
-    /// factor is 100. The PMX writer gets to the MMD unit from the same data the other way round - it
-    /// divides by <c>WorldSizeAmplifier</c>, 0.08 - which is why the same rig's numbers in a .pmx are 12.5x
-    /// the ones here.
+    /// Centimetres per model unit: the exporter hands over the viewer's world units, which are metres, and this file declares
+    /// centimetres (unit scale 1.0 in the global settings), so the factor is 100 - 12.5x smaller than the same rig's .pmx
+    /// numbers, which the PMX writer reaches by dividing by <c>WorldSizeAmplifier</c>, 0.08.
     /// </summary>
     public const float UnitScale = 100f;
 
+    // x is the axis that mirrors: a z mirror differs by a half turn about up and lands the model back to front
     public static Vector3 ToFbxPosition(Vector3 p)
     {
         return new Vector3(-p.x, p.y, p.z) * UnitScale;
@@ -324,15 +274,11 @@ public static class FbxExporter
 
     public static Quaternion ToFbxRotation(Quaternion q)
     {
-        // Mirroring X conjugates a rotation: the axis is mirrored and the angle negated. Kept beside the
-        // other conversions because a caller extending the writer will want it; the writer itself builds
-        // bone orientations in FBX space instead (see Skeleton.RestMatrix).
+        // mirroring x conjugates a rotation (the axis is mirrored, the angle negated); the writer builds bone orientations in FBX space instead
         return new Quaternion(q.x, -q.y, -q.z, q.w);
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // The FBX node tree
-    // ------------------------------------------------------------------------------------------------
+    // the FBX node tree
 
     private sealed class Node
     {
@@ -384,9 +330,7 @@ public static class FbxExporter
         }
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // One export
-    // ------------------------------------------------------------------------------------------------
+    // one export
 
     private sealed class Writer
     {
@@ -545,8 +489,7 @@ public static class FbxExporter
                 properties.Property("InheritType", "enum", "", "", 1);
                 properties.Property("ScalingMax", "Vector3D", "Vector", "", 0.0, 0.0, 0.0);
                 properties.Property("DefaultAttributeIndex", "int", "Integer", "", 0);
-                // The rotations below are XYZ, which is what a reader assumes by default; stating it keeps
-                // the assumption explicit.
+                // stated XYZ explicitly: that is what a reader assumes by default, so the assumption is visible
                 properties.Property("RotationOrder", "enum", "", "", 0);
 
                 Vector3 translation = new Vector3(local.m03, local.m13, local.m23);
@@ -590,8 +533,7 @@ public static class FbxExporter
             node.Add("Culling", "CullingOff");
             Count("Model");
 
-            // The mesh belongs under the root: a reader collects the meshes a skin drives by walking down
-            // from the node it turned into the armature.
+            // the mesh belongs under the root: a reader collects a skin's meshes by walking down from the armature node
             Connect(id, rootId);
             Connect(attributeId, id);
             return id;
@@ -648,8 +590,7 @@ public static class FbxExporter
                 normals[i * 3 + 1] = normal.y;
                 normals[i * 3 + 2] = normal.z;
 
-                // PMX stores texture V flipped; FBX and Blender share the other convention, so the
-                // exported UV goes back to the mesh's own orientation.
+                // pmx stores texture v flipped; FBX and Blender share the other convention, so the uv goes back
                 uv[i * 2] = vertex.UvCoordinate.x;
                 uv[i * 2 + 1] = 1f - vertex.UvCoordinate.y;
 
@@ -660,15 +601,13 @@ public static class FbxExporter
                     extraUvs[layer][i * 4] = value.x;
                     extraUvs[layer][i * 4 + 1] = 1f - value.y;
                     extraUvs[layer][i * 4 + 2] = value.z;
-                    // Both halves of an extra UV are flipped, not just the first: mmd_tools lays the PMX
-                    // extra UVs out as UV1..UV3 from the xy half and _UV2/_UV3 from the zw half, and flips
-                    // the V axis in both. Flipping only the first half puts the uma shader's channels - the
-                    // head-local height in _UV2, the vertex colour in _UV3 - at the wrong place.
+                    // both halves are flipped, not just the first: mmd_tools reads UV1..UV3 from the xy half and
+                    // _UV2/_UV3 from zw, flipping v in both, so flipping only xy misplaces _UV2's height and _UV3
                     extraUvs[layer][i * 4 + 3] = 1f - value.w;
                 }
             }
 
-            // Mirroring Z reverses handedness, so the winding has to be reversed with it.
+            // the mirror flips handedness, so triangle winding is reversed with it
             int polygonCount = triangles.Length / 3;
             int[] polygonIndices = new int[polygonCount * 3];
             int[] polygonVertices = new int[polygonCount * 3];
@@ -696,17 +635,13 @@ public static class FbxExporter
             Node normalLayer = geometry.Add("LayerElementNormal", 0);
             normalLayer.Add("Version", 101);
             normalLayer.Add("Name", "");
-            // The model has one normal per vertex, so say so: a reader then reads 13968 normals instead of
-            // one per polygon vertex, and the mesh comes out the same.
+            // one normal per vertex: a reader then reads 13968 normals instead of one per polygon vertex
             normalLayer.Add("MappingInformationType", "ByVertice");
             normalLayer.Add("ReferenceInformationType", "Direct");
             normalLayer.Add("Normals", normals);
 
-            // Six UV layers, named the way mmd_tools lays the PMX extra UVs out, so the channels the uma
-            // shader reads (UV1, UV2, UV3, _UV2, _UV3) land where it expects them: extra[0] -> UV1,
-            // extra[1] -> UV2 with its z in _UV2, extra[2] (the vertex colour) -> UV3 with its z in _UV3.
-            // Each layer holds one value per vertex and an index per polygon vertex into it, which is how
-            // Blender writes them and a good deal smaller than repeating the value per polygon vertex.
+            // six UV layers, named the way mmd_tools lays pmx extra UVs out, so the channels the uma shader reads
+            // (UV1, UV2, UV3, _UV2, _UV3) land where it expects: extra[0] -> UV1, extra[1] -> UV2 with its z in _UV2
             AddUvLayer(geometry, "UVMap", uv, 2, 0, 0);
             AddUvLayer(geometry, "UV1", extraUvs[0], 4, 0, 1);
             AddUvLayer(geometry, "UV2", extraUvs[1], 4, 0, 2);
@@ -738,11 +673,8 @@ public static class FbxExporter
         }
 
         /// <summary>
-        /// One UV layer: one value per vertex, and one index per polygon vertex choosing which of them a
-        /// corner uses - the layout Blender writes, and much smaller than repeating the value for every
-        /// polygon vertex. <paramref name="components"/> is the source array's stride (2 for the base UV,
-        /// 4 for an extra UV) and <paramref name="offset"/> picks which two components become the layer,
-        /// which is how the zw halves of the PMX extra UVs become _UV2 and _UV3.
+        /// One UV layer: one value per vertex and one index per polygon vertex choosing the corner's. The stride is
+        /// <paramref name="components"/> and <paramref name="offset"/> picks the two components that become the layer.
         /// </summary>
         private void AddUvLayer(Node geometry, string name, double[] perVertex, int components, int offset,
             int typedIndex)
@@ -813,9 +745,7 @@ public static class FbxExporter
                     indices.Add(vertex.VertexIndex);
                     offsets.Add(ToFbxPosition(vertex.Offset));
                 }
-                // A morph whose offsets are all zero still gets its channel: it moves nothing, but its name
-                // is part of the model, and dropping it would make the FBX's morph list differ from the
-                // PMX's for no reason.
+                // a morph whose offsets are all zero still gets its channel: its name is part of the model, and dropping it would make the FBX's morph list differ from the pmx's
 
                 double[] positions = new double[indices.Count * 3];
                 for (int i = 0; i < offsets.Count; i++)
@@ -839,10 +769,7 @@ public static class FbxExporter
                 shape.Add("Version", 100);
                 shape.Add("Indexes", indices.ToArray());
                 shape.Add("Vertices", positions);
-                // No Normals array: the exporter does not compute morph normals, and a reader ignores them
-                // anyway (Blender's importer says so in as many words). Writing a zeroed array of the same
-                // length as Vertices - which is what a strict reader of the FBX SDK's output would do -
-                // costs a megabyte on this model for nothing.
+                // no Normals array: the exporter computes no morph normals and readers ignore them, while a zeroed array the length of Vertices costs a megabyte
                 Count("Geometry");
                 Connect(shapeId, channelId);
             }
@@ -885,8 +812,7 @@ public static class FbxExporter
                 properties.Property("Opacity", "double", "Number", "", (double)diffuse.a);
                 if (!string.IsNullOrEmpty(material.MetaInfo))
                 {
-                    // The uma shader settings have no FBX field. They travel as a user property so a
-                    // script - or the reworked Blender add-on - can read them back out.
+                    // the uma shader settings have no FBX field, so they travel as a user property for a script to read
                     properties.Property("UmaMaterial", "KString", "", "", material.MetaInfo);
                 }
                 Count("Material");
@@ -918,8 +844,7 @@ public static class FbxExporter
                 video.Add("UseMipMap", 0);
                 video.Add("Filename", relative);
                 video.Add("RelativeFilename", relative);
-                // The embedded copy goes on the Video node: that is the node a reader looks in for it, and
-                // it is what makes the model survive being moved without its texture folder.
+                // the embedded copy goes on the Video node, where a reader looks for it: it is what lets the model survive being moved
                 byte[] embedded = EmbeddedTexture(relative);
                 if (embedded != null) video.Add("Content", new RawBytes(embedded));
                 Count("Video");
@@ -967,9 +892,7 @@ public static class FbxExporter
         {
             if (texture == null || string.IsNullOrEmpty(texture.TexturePath) || texture.IsGlobalToon) return null;
             string path = texture.TexturePath.Replace('\\', '/');
-            // The exporter writes "Texture2D/<name>.png" relative to the model, which is exactly what FBX
-            // wants. Anything else - an absolute path, a toon that lives in the game's data - is left out
-            // rather than written as a path that would not resolve.
+            // the exporter writes "Texture2D/<name>.png" relative to the model, which is what FBX wants; anything else is left out rather than left unresolvable
             if (path.Contains(":/") || path.StartsWith("/")) return null;
             if (path.StartsWith(options.TextureFolder + "/")) return path;
             return options.TextureFolder + "/" + Path.GetFileName(path);
@@ -986,8 +909,7 @@ public static class FbxExporter
             }
             catch (IOException)
             {
-                // a texture that cannot be read back is not worth failing the export over: the relative
-                // path is in the file, so a reader next to the folder still finds it
+                // a texture that cannot be read back is no reason to fail: the relative path is in the file, so a reader still finds it
                 return null;
             }
         }
@@ -1001,8 +923,8 @@ public static class FbxExporter
             skin.Add("Version", 101);
             skin.Add("Link_DeformAcuracy", 50.0);
             Count("Deformer");
-            // The skin hangs off the *geometry*, not off the mesh's Model node: a reader looks for the skin
-            // by walking bone -> cluster -> skin -> geometry, and stops if the last step is not a geometry.
+            // the skin hangs off the *geometry*, not the mesh's Model node: a reader looks for it by walking
+            // bone -> cluster -> skin -> geometry and stops if the last step is not a geometry
             Connect(skinId, geometryId);
 
             Vertex[] vertices = model.Vertices ?? new Vertex[0];
@@ -1039,8 +961,7 @@ public static class FbxExporter
                         break;
 
                     case SkinningType.SkinningSdef:
-                        // SDEF's extra terms are an MMD feature with no FBX equivalent; the two bones and
-                        // their weight carry the deformation as closely as the format allows.
+                        // SDEF's extra terms have no FBX equivalent; the two bones and their weight carry the deformation as closely as possible
                         Sdef sdef = (Sdef)skinning.Param;
                         AddWeight(indexes, weights, sdef.BoneId[0], sdef.BoneWeight, v);
                         AddWeight(indexes, weights, sdef.BoneId[1], 1f - sdef.BoneWeight, v);
@@ -1050,12 +971,10 @@ public static class FbxExporter
 
             for (int bone = 0; bone < skeleton.Bones.Count; bone++)
             {
-                // A stub leaf bone carries no weight and needs no cluster: a reader takes a bone's rest pose
-                // from its cluster when it has one and from the node's own transform when it does not.
+                // a stub leaf bone needs no cluster (a reader falls back to the node's own transform), but every real
+                // bone gets one even weightless: the cluster is where its rest pose is read from
                 if (skeleton.Bones[bone].IsLeaf) continue;
 
-                // A cluster per bone even when it carries no weight: this is where a reader takes the
-                // bone's rest pose from, so a bone without one would arrive undefined.
                 long clusterId = NewId();
                 Node cluster = objects.Add("Deformer", clusterId,
                     ObjectName(skeleton.Bones[bone].Name, "SubDeformer"), "Cluster");
@@ -1080,6 +999,7 @@ public static class FbxExporter
             weights[bone].Add(weight);
         }
 
+        // a bind pose in addition to the clusters, for the applications that look for one
         private void AddBindPose(long[] boneIds)
         {
             long poseId = NewId();
@@ -1190,9 +1110,8 @@ public static class FbxExporter
         // ---- binary encoding -----------------------------------------------------------------------
 
         /// <summary>
-        /// Writes the file the way the FBX binary format expects it: the header, the top-level node list
-        /// closed by a null record, then the footer. A node's own offsets are patched once its children
-        /// have been written, because the end offset is only known by then.
+        /// The file as the FBX binary format expects it: header, the top-level node list closed by a null record, then
+        /// the footer. A node's offsets are patched once its children are written, the end offset being known by then.
         /// </summary>
         private void WriteFile(BinaryWriter writer, List<Node> roots)
         {
@@ -1249,9 +1168,7 @@ public static class FbxExporter
             }
             else if (node.Properties.Count == 0 && !isLast)
             {
-                // A childless node with nothing in it still needs a list terminator unless it closes its
-                // parent - the rule the reference encoder uses, and readers rely on it to find the end of
-                // a sibling list.
+                // a childless node with nothing in it still needs a list terminator unless it closes its parent, the rule readers rely on to find the end of a sibling list
                 WriteNullRecord(writer);
             }
 
@@ -1327,10 +1244,8 @@ public static class FbxExporter
         }
 
         /// <summary>
-        /// Writes an array property: the element count, the encoding, the byte length, then the bytes - the
-        /// count and the length being the uncompressed ones, as the format requires. Short arrays go as
-        /// they are; everything longer is deflated, which is what every FBX writer does and is most of the
-        /// difference between a file this size and one several times larger.
+        /// An array property: element count, encoding, byte length, then the bytes - count and length being the
+        /// uncompressed ones, as the format requires. Arrays over 128 bytes are deflated, as every FBX writer does.
         /// </summary>
         private void WriteArray(BinaryWriter writer, byte[] bytes, int count)
         {
@@ -1379,9 +1294,8 @@ public static class FbxExporter
         }
 
         /// <summary>
-        /// zlib, which is what an FBX array's encoding 1 means: a raw deflate stream with the two byte
-        /// zlib header in front of it and an Adler-32 of the uncompressed data behind it. .NET's
-        /// DeflateStream does the middle part and nothing else, so the wrapper is written here.
+        /// zlib, which is what an FBX array's encoding 1 means: a raw deflate stream with a two byte zlib header in
+        /// front and an Adler-32 of the uncompressed data behind. .NET's DeflateStream does the middle part only.
         /// </summary>
         private static byte[] Zlib(byte[] data)
         {

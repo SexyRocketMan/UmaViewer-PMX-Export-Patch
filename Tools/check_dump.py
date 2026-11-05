@@ -2,17 +2,15 @@
 """Check that a `dump models` dump is complete and self-consistent.
 
 A dump is what a web service or a pack ships, and every way it can be wrong is quiet: a model whose file is
-missing, a PMX that names a texture nobody wrote, an index that disagrees with the folder, a truncated file. The
-dump itself is twenty minutes of exports, so this reads the result instead of trusting it.
+missing, a PMX that names a texture nobody wrote, an index that disagrees with the folder, a truncated file. This
+reads the result instead of trusting the run.
 
     python Tools/check_dump.py C:/dump
     python Tools/check_dump.py C:/dump --packs --thumbs --quiet
 
-This checks that a dump agrees with itself - presence, bytes, packs that contain what they should. It cannot judge
-whether the values are *plausible*: a model recorded as 0 x 0 x 0 cm passes here and is caught by Tools/dump_report.py,
-which knows what a character should measure.
-
-Exit code 1 when anything is wrong, so it can gate a deploy.
+It checks that a dump agrees with itself - presence, bytes, packs and previews that contain what they should - but
+cannot judge whether the values are plausible: a model recorded as 0 x 0 x 0 cm passes here and is caught by
+Tools/dump_report.py. Exit code 1 when anything is wrong, so it can gate a deploy.
 """
 
 import argparse
@@ -45,10 +43,9 @@ def check(root, want_packs, want_thumbs, quiet):
           f"{sum(1 for m in models if not m.get('failure'))} written, "
           f"{sum(1 for m in models if m.get('failure'))} failed")
 
-    # `counted` is how many models the run that finished meant to write, so it says whether the dump is complete:
-    # 1377 planned and 900 listed is an interrupted dump, which is worth failing on. More listed than counted is not
-    # a problem at all - that is a later run over a subset (`--dump-models-count 1` on an older dump), and the index
-    # keeps every model it has.
+    # `counted` is how many models the run that finished meant to write, so it says whether the dump is complete -
+    # 900 listed of 1377 planned is an interrupted dump. More listed than counted is not a problem: that is a later
+    # run over a subset (`--dump-models-count 1` on an older dump), and the index keeps every model it has.
     if index.get("counted") and index["counted"] > len(models):
         fail(problems, f"the run planned {index['counted']} model(s), the index lists {len(models)}: incomplete")
 
@@ -90,8 +87,8 @@ def check(root, want_packs, want_thumbs, quiet):
                 if not os.path.isfile(target):
                     fail(problems, f"{name}: missing texture {texture_folder}/{map_name}")
                 elif os.path.getsize(target) == 0:
-                    # an interrupted copy leaves a name with no bytes behind it, and the model then loads without
-                    # that map - which looks like a material bug, not like a broken dump
+                    # an interrupted copy leaves a name with no bytes, and the model then loads without that map -
+                    # which looks like a material bug rather than a broken dump
                     fail(problems, f"{name}: texture {texture_folder}/{map_name} is empty")
 
         if want_thumbs:
@@ -151,11 +148,10 @@ def check(root, want_packs, want_thumbs, quiet):
     thumbs = index.get("thumbs") or 0
     print(f"  {total_bytes / (1024 * 1024):.1f} MB of models, {packs} pack(s), {thumbs} preview(s)")
     if previews:
-        # a preview that exists but is blank is the failure a file check cannot see: a camera pointing at nothing,
-        # or a model that did not load, still writes a valid PNG. So a sample of them is opened and asked how much
-        # of the square was actually drawn. Pillow is used when it is there, because reading PNG by hand means
-        # undoing its row filters, and the check is optional rather than worth a wrong answer. Roughly a quarter to
-        # a half of a preview is model, so anything under a twentieth is not a picture of anything.
+        # a preview can exist and still be blank - a camera pointing at nothing, or a model that did not load,
+        # writes a valid PNG - so a sample is opened and asked how much of the square was drawn. A quarter to a
+        # half of one is model, so anything under a twentieth is not a picture of anything. Pillow reads it when
+        # it is there; reading PNG by hand means undoing its row filters and is not worth a wrong answer.
         try:
             from PIL import Image
         except ImportError:

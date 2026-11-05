@@ -1,10 +1,10 @@
 # Tools
 
-The viewer's command line interface: export models, motions and screenshots without clicking, and check
-what came out.
+The viewer's command line interface: export models, motions and screenshots without clicking, and check what came
+out.
 
-**A human's guide is [`../docs/CLI.md`](../docs/CLI.md)** - prerequisites, task-by-task recipes, every
-argument, and what the errors mean. This file is only the map.
+**A human's guide is [`../docs/CLI.md`](../docs/CLI.md)** - prerequisites, task-by-task recipes, every argument,
+and what the errors mean. This file is only the map.
 
 | File | What it does |
 |---|---|
@@ -18,7 +18,7 @@ argument, and what the errors mean. This file is only the map.
 | `UmaPlayerBuild.BuildWindows` (`Assets/Editor/`) | Builds the viewer as a Windows player, and the player is itself the CLI: `UmaViewer.exe --char 1001 --out x.pmx` runs the same jobs with no Unity installed. See [`../docs/CLI.md`](../docs/CLI.md#running-from-the-built-viewer). |
 | `mp3_transcript.py` | Reads the transcript an exported mp3 carries in its ID3 tag - title, speaker, story, full text - and exits non-zero when a file has none. Standard library only, so it doubles as the check that an export was tagged. |
 
-Both Python tools are PEP-723 scripts with no dependencies, so `uv run` needs nothing installed:
+The two inspectors are PEP-723 scripts with no dependencies, so `uv run` needs nothing installed:
 
 ```powershell
 uv run Tools/pmx_inspect.py summary D:/out/1001_00.pmx
@@ -34,8 +34,8 @@ python Tools/mp3_transcript.py "D:/rips/*.mp3" --quiet     # "12/12 file(s) carr
 
 ### Game data probes
 
-These read the installed game's files directly, and they are how [`../docs/TRANSCRIPTS.md`](../docs/TRANSCRIPTS.md)
-was measured. They are research tools, not part of any export; all of them are read-only.
+These read the installed game's files directly; [`../docs/TRANSCRIPTS.md`](../docs/TRANSCRIPTS.md) records what
+they measured. Research tools rather than part of any export, and all of them are read-only.
 
 | File | What it does |
 |---|---|
@@ -53,13 +53,13 @@ python Tools/uma_story_dump.py "story/data/04/1047/storytimeline_041047007"
 
 ### Spring (CySpring) probes
 
-**Shelved.** The port is exact and the bakes are faithful, but without a numeric reference for the game's
-tail there is no way to tell whether a chain looks right — see [`../docs/CYSPRING.md`](../docs/CYSPRING.md)
-for what was found, what was ruled out and what would unblock it.
+**Shelved.** The port is exact and the bakes are faithful, but without a numeric reference for the game's tail
+there is no way to tell whether a chain looks right - see [`../docs/CYSPRING.md`](../docs/CYSPRING.md) for what was
+found, what was ruled out and what would unblock it.
 
 How the game's wiggle-bone solver works, and how to watch it move. The solver is ported to Python and held
 bit-exact against the game's own C# by `spring_probe/` (a small .NET project that compiles the repo's
-`CySpringNative.cs`); the chain spec and the Blender bake are what turned that into something visible.
+`CySpringNative.cs`); the chain spec and the Blender bake make it visible.
 
 | File | What it does |
 |---|---|
@@ -77,12 +77,11 @@ python Tools/uma_spring_dump.py 1001 00 --chain Sp_Hi_Tail0 --segments child > t
     tail.json tail.blend --model model.pmx --mp4 tail.mp4
 ```
 
-Two traps worth knowing. `scene.render.filepath` is not respected while rendering if the user's startup
-add-ons rewrite it (a dataset add-on that hooks `render_init` will send the frames into its own folder);
-the demo renders without `write_still` and calls `Image.save_render()` instead, which writes where it is
-told. And the solver's rotations live in the prefab's frame, not the armature's: a bake that applies them
-directly turns the tail about axes about 87 degrees from the solver's. The demo carries them over per bone
-(`M @ R @ M^-1`) and verifies every frame against the solver afterwards, so a bad bake shows as a number.
+Two traps. `scene.render.filepath` is not respected while rendering if a startup add-on rewrites it
+(a dataset add-on that hooks `render_init` sends the frames into its own folder); the demo renders without
+`write_still` and calls `Image.save_render()`, which writes where it is told. And the solver's rotations live in the
+prefab's frame, not the armature's - applied directly they turn the tail about axes about 87 degrees from the
+solver's, so the demo carries them over per bone (`M @ R @ M^-1`) and verifies every frame against the solver.
 
 ## Quick start
 
@@ -107,17 +106,14 @@ directly turns the tail about axes about 87 degrees from the solver's. The demo 
 
 ## What this needs
 
-A **Unity editor** (2022.3.62f1 or another 2022.3.x) and **the project source**: the CLI is an editor
-entry point (`Assets/Editor/UmaHeadlessExport.cs`) that Unity runs with `-batchmode -executeMethod`, so
-the released `UmaViewer.exe` cannot do it yet. Close the editor before a run - batch mode refuses to
-start while the project is open anywhere else. [`../docs/CLI.md`](../docs/CLI.md) has the details and
-what a user-facing version of this would need.
+A **Unity editor** (2022.3.62f1 or another 2022.3.x) and **the project source**: the CLI is an editor entry point
+(`Assets/Editor/UmaHeadlessExport.cs`) that Unity runs with `-batchmode -executeMethod`, so the released
+`UmaViewer.exe` cannot do it yet. Close the editor first - batch mode refuses to start while the project is open
+elsewhere. [`../docs/CLI.md`](../docs/CLI.md) has the details.
 
 ## Not in here any more
 
-The verification, rendering and game-data-research scripts that were used to build this fork - the
-Blender checks, the shading A/B renders, the end-to-end workflow script, the game's-own-shader
-reverse-engineering workbench - live outside the project, in the companion `UmaViewer-DevTools`
-directory next to it, so a shipped checkout does not carry them. Its `README.md` is where the
-measurements behind the claims in [`../README.md`](../README.md) and [`../docs`](../docs) are written
-down; the viewer repository's git history has the earlier layout.
+The verification, rendering and game-data-research scripts this fork was built with - the Blender checks, the
+shading A/B renders, the end-to-end workflow script, the game's-own-shader workbench - live outside the project, in
+the companion `UmaViewer-DevTools` directory, so a shipped checkout does not carry them. Its `README.md` holds the
+measurements behind the claims in [`../README.md`](../README.md) and [`../docs`](../docs).

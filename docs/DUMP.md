@@ -18,37 +18,50 @@ D:/web/
   labels.json                      optional, hand-written: names for props
 ```
 
-**Textures are shared per kind, not per model.** A PMX names its maps as relative paths - `Texture2D/tex_x_diff.png`,
-resolved next to the model - so models and maps must sit side by side, and one folder per kind lets models share them
-(four costumes of character 1001 share 48 of their 180 maps). Everything that opens a PMX resolves it with no help.
+**Textures are shared per kind, not per model**, because a PMX names its maps as relative paths
+(`Texture2D/tex_x_diff.png`) resolved next to the model: one folder per kind lets four costumes of character 1001 share
+48 of their 180 maps, and every PMX reader resolves them with no help.
 
-**`index.json`** (schema `umaviewer-models/1`) is per model: kind, id, costume, its name (japanese and english), the
-`costumeName` the game gives that outfit, the prop `family`, the model/texture/preview paths relative to the root, the
-maps it needs, its byte size, its **size**, its bone and hand-bone counts, its pack, and any failure. Plus the totals:
-how many were planned, written, failed, and how many bytes, texture files, packs and previews there are.
+**`index.json`** (schema `umaviewer-models/1`) holds the whole dump. Per model: kind, id, costume, its name (japanese
+and english), the `costumeName` of that outfit, the prop `family`, the model/texture/preview paths relative to the root,
+the maps it needs, its bytes, its **size**, bone and hand-bone counts, its pack and any failure. Plus the totals a page
+wants before loading anything: `counted` (how many models the run meant to write), `written`, `failed`, `bytes`,
+`textureFiles`, `textureBytes`, `packs`, `thumbs`. Paths are relative and `root` is the dump's *name*, not its path, so
+the folder can move and the index can travel.
 
-## The number that used to lie: size
+## What it costs
 
-`size` is the box of the model's **vertices**, in PMX units, read out of the PMX after it is written. It used to be
-`Renderer.bounds`, which for a skinned mesh is the box of its *bones*: one stray bone wrote character 1001 as
-16.7 x 6.2 x 25.9 units while she stands 1.6, and a browser printed that as "size".
+Every dumped model logs one timing line beside its own result, so a slow dump can be read without a profiler:
 
-**One PMX unit is 8 cm.** A PMX stores vertices twelve and a half times the scale people think in, and nothing in the
-file says so - it is the convention the rest of this project works in (`--import-scale 0.08` for the Blender tools, the
-reciprocal of `--scale 12.5` in `Tools/chain_drive_from_vmd.py`). So a 20.2-unit character is 1.62 m, and the browser
-converts at the point of display. Measured on a full dump, character heights land between 159 and 172 cm, which is the
-check that the units are right: 20 m or 16 cm would both have looked plausible as bare numbers.
+```
+characters/1001_00.pmx: idle 0.0, plan 0.0, index 0.0, load 1.1, settle 0.0, export 2.1, scan 0.1, pack 0.1, preview 0.0 = 3.4 s
+```
+
+`export` is the PMX and its maps, `load` is fetching the costume or prop, `preview` is the camera pass, and `plan` is
+rebuilding the list of models to dump - it is cached and reads 0.0 after the first model, which is worth knowing because
+rebuilding it per model cost three seconds a model, about half a character dump's wall clock. A character is ~3.4 s and
+a small character prop ~0.1 s; the total is dominated by `export`.
+
+## Size, and its unit
+
+`size` is the box of the model's **vertices**, in PMX units, read out of the PMX after it is written. It is not
+`Renderer.bounds`: for a skinned mesh that is the box of its *bones*, and one stray bone wrote character 1001 as
+16.7 x 6.2 x 25.9 units while she stands 1.6.
+
+**One PMX unit is 8 cm**: a PMX stores vertices twelve and a half times the scale people think in, the convention the
+rest of this project works in (`--import-scale 0.08` for the Blender tools, the reciprocal of `--scale 12.5` in
+`Tools/chain_drive_from_vmd.py`). A 20.2-unit character is 1.62 m, and the browser converts at the point of display.
+Measured over a full dump, character heights land between 159 and 172 cm.
 
 ## Previews, and why the framing is measured
 
-`--thumbs` renders each model to a square PNG (256 px unless `--thumb-size` says otherwise) while it is loaded, and
-records it as `thumb`. One camera render per model, on a run that already has the model in memory.
+`--thumbs` renders each model to a square PNG (256 px unless `--thumb-size` says otherwise) while it is loaded and
+records it as `thumb` - one camera render per model, on a run that already has it in memory.
 
-The camera is framed by **rendering and reading the alpha channel back**, not by computing a distance from the bounds:
-one pass would otherwise be off by the same factor that made the sizes wrong. Each pass measures what was drawn, sets
-the distance from the drawn size and the aim from the drawn offset, and stops once the model covers about 84% of the
-square and is centred within a few pixels. `Tools/dump_report.py` reports the sampled fill, because a preview that
-drew nothing still writes a valid PNG.
+The framing is measured, not computed, because a bounding box is not the shape that gets drawn. Each pass renders, reads
+the alpha channel back, sets the distance from the drawn size and the aim from the drawn offset, and stops once the
+model covers 0.84 of the square (within 0.03) and is centred within 3 px; at most four passes are made.
+`Tools/dump_report.py` samples the fill, because a preview that drew nothing still writes a valid PNG.
 
 ## Checking it
 
@@ -59,21 +72,19 @@ python Tools/check_tails.py D:/web/characters          # does every joint point 
 ```
 
 `check_dump.py` is the gate: every model present, every map on disk, byte counts agreeing, packs containing what they
-should, previews that are actually pictures. It exits 1, so it can gate a deploy. It reports a dump as **incomplete**
-when the index says more models were planned than it lists - which is what an interrupted run looks like.
+should, previews that are actually pictures (a sampled preview under 5% drawn is a camera pointed at nothing). It exits
+1, so it can gate a deploy, and it reports a dump as **incomplete** when `counted` exceeds the models the index lists -
+what an interrupted run looks like. `dump_report.py` is the reading: models per kind and family with bytes, size ranges
+in centimetres with any implausible model named, costume-name coverage, preview framing, failures.
 
-`dump_report.py` is the reading: models per kind and family with their bytes, size ranges in centimetres with any
-implausible model named, costume-name coverage, preview framing, and the failures if there are any.
-
-`check_tails.py` is the orientation gate: a PMX stores no bone axis, so the tail *is* the frame a motion rotates
-around, and a wrong one never fails loudly - the file opens, the vertices are right, the bone just leans the wrong way
-once animated. It reads the tails and checks each joint against the joint MMD points it at (the thigh at the knee,
-the elbow at the wrist, the wrist at the middle finger, the hip up the body), exits 1 below a floor, and prints which
-costumes disagree.
+`check_tails.py` is the orientation gate. A PMX stores no bone axis, so the tail *is* the frame a motion rotates around,
+and a wrong one never fails loudly: the file opens, the vertices are right, the bone leans the wrong way once animated.
+It checks each joint against the joint MMD points it at (the thigh at the knee, the elbow at the wrist, the wrist at the
+middle finger, the hip up the body) and prints which costumes disagree, exiting 1 below a floor.
 
 ## Repairing it instead of rebuilding it
 
-A dump is hours of work, so nothing about it should require re-exporting to fix a number:
+A dump is hours of work, so repair it rather than rebuild it:
 
 |problem|answer|
 |---|---|
@@ -83,21 +94,19 @@ A dump is hours of work, so nothing about it should require re-exporting to fix 
 |the index is fine but the folder moved|nothing: paths in the index are relative, and `root` is the dump's name, not its path|
 |a prop needs a human name|edit `labels.json` beside the index - see below|
 
-`--refresh` also runs for the models a resumed dump skips, so a dump made before a fix repairs itself on the next run
-over it.
+`--refresh` also runs for the models a resumed dump skips, so one run over an older dump repairs it in place.
 
 ## Labels
 
 Props have no name in the game, only a prefab id (`pfb_chr_prop1003_10`), and the index is generated - so a name
-written into it is lost the next time the dump runs. Labels are a separate file instead, merged by the page at load:
+written into it is lost on the next run. Labels live in a separate file that the page merges at load:
 
 ```json
 { "schema": "umaviewer-labels/1",
   "labels": { "pfb_chr_prop1003_10": { "name": "Book, small", "tags": ["book"] } } }
 ```
 
-Correcting one is an edit and a reload; labelling can happen at any pace, in any order; an unlabelled model keeps
-showing its prefab id, which is what the list has always done. The page searches labels and tags.
+An unlabelled model keeps showing its prefab id, and the page searches labels and tags.
 
 ## Sizes, measured
 
@@ -120,5 +129,5 @@ revalidates with a 304. `--packs` doubles the disk and not the traffic.
 
 It is static files. Anything that serves a folder with gzip and an `ETag` will do; the companion project's
 `tools/serve.py` is the one written for it (`--compress` is worth it: a PMX is 19% of its size and `index.json` about
-10%). Keep the origin on loopback and put a proxy in front of it for TLS and access control - `deploy/README.md` in
-that project walks through a Cloudflare Tunnel with Access, which needs nothing installed by the visitor.
+10%). Keep the origin on loopback and put a proxy in front for TLS and access control - `deploy/README.md` in that
+project walks through a Cloudflare Tunnel with Access, which needs nothing installed by the visitor.

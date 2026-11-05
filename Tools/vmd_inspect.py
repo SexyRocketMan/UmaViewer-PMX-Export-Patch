@@ -8,24 +8,16 @@
   uv run vmd_inspect.py loop    <file.vmd> [--tolerance 1e-4]     # does frame 0 == last frame?
   uv run vmd_inspect.py diff    <a.vmd> <b.vmd>                   # how two recordings of one action differ
 
-`diff` exists for a regression report: recordings made by one build look fine and the same action recorded by
-a later build comes out with "rotations shifted for several bones". It separates the two causes that look alike
-on screen, because they need different fixes:
+`diff` splits the two causes of "rotations shifted for several bones", which need different fixes. A constant offset
+- the same rotation on every frame - is the basis the recorded local rotations are relative to: a rest pose, an
+A-pose/T-pose change, or a bind-pose conversion, and its axis says which (~38.5 degrees about the arms' X is this
+project's A-pose delta). A varying offset means the poses are sampled or timed differently, so the fix is in the
+sampling. It also reports bones present in only one file, and tracks that moved to another bone name.
 
-  * a **constant offset** on a bone - the difference between the two files is the same rotation on every frame.
-    Nothing about the sampling is wrong; the *basis* is, i.e. the pose the recorded local rotations are
-    relative to (a rest pose, an A-pose/T-pose change, or a bind-pose conversion). One bone in this state is a
-    rest-pose bug, and the offset's axis says which one: ~38.5 degrees about the arms' X is this project's
-    A-pose delta.
-  * a **varying** difference - the offset changes frame to frame. The poses themselves are being sampled or
-    timed differently (frame alignment, a duplicated first frame, the take being rewound to a different start),
-    so the fix is in the sampling, not the basis.
+`loop` is the check for "one button, no trimming in Blender": every bone has to be keyed on the last frame and that
+key has to repeat the first frame's pose, or the motion jumps when it loops. `motion` checks the clip actually moves.
 
-It also reports bones that exist in only one file, and pairs up tracks that *moved to another bone* (a naming
-change: the rotations are identical, the names are not), which is the third way this shows up.
-
-`loop` is the check for "one button, no trimming in Blender": every bone has to be keyed on the last
-frame and that key has to repeat the first frame's pose, otherwise the motion jumps when it loops.
+exit code: `motion` and `loop` exit 1 when their checks fail; `summary` and `diff` always exit 0.
 """
 
 from __future__ import annotations
@@ -169,8 +161,8 @@ def cmd_motion(paths: list[str], args) -> int:
         print(f"   bones: {moving_pos}/{len(per_bone)} move positionally (worst {worst_pos:.5f}), "
               f"{moving_rot}/{len(per_bone)} rotate (worst {worst_rot:.5f})")
         print(f"   morphs: {len(moving_morphs)}/{len(morph_spans)} change")
-        # A frozen recording is not necessarily one where *nothing* moves: a physics driven bone or two
-        # drift even when the sampled pose is the same every frame, so count how much of the rig moves.
+        # a frozen recording is not one where nothing moves: a physics driven bone or two drift even when the
+        # sampled pose is the same every frame, so count how much of the rig moves.
         moving = max(moving_pos, moving_rot)
         if moving < args.min_moving_bones:
             print(f"   !! only {moving}/{len(per_bone)} bones move: the recording sampled a frozen pose. A one "
@@ -181,8 +173,8 @@ def cmd_motion(paths: list[str], args) -> int:
         elif moving_pos == 0:
             print(f"   note: no bone translates, only {moving_rot} rotate")
 
-        # A recording whose first frame is an outlier pose (a T-pose or a rest pose captured before the
-        # animation started) shows up as one huge step out of frame 0 and a matching one at the loop seam.
+        # a first frame that is an outlier pose (a T-pose or rest pose captured before the animation started)
+        # shows up as one huge step out of frame 0 and a matching one at the loop seam.
         frames = sorted({k.frame for k in motion.bone_keys})
         if len(frames) >= 4:
             steps = []
@@ -202,9 +194,8 @@ def cmd_motion(paths: list[str], args) -> int:
                 print(f"   !! the first frame is {steps[0] / typical:.1f}x the typical step: it looks like a "
                       f"pose the animation never had (a T-pose or rest pose captured before playback)")
                 ok = False
-            # The global step hides which bones are responsible, and a lead-in pop is usually one chain (the
-            # recorder's own lead-in drop is judged on a sum over every bone, so a pop that is large on a few
-            # bones and small overall never reaches its threshold).
+            # the global step hides which bones are responsible: a lead-in pop is usually one chain, and the
+            # recorder's own lead-in drop sums over every bone, so a pop large on a few bones never reaches it.
             openings = []
             for name, keys in per_bone.items():
                 by_frame = {k.frame: k.rotation for k in keys}
@@ -257,7 +248,7 @@ def _pose_map(keys: list) -> dict[str, list]:
 
 # --- quaternion helpers, for `diff` -----------------------------------------------------------------------
 # VMD rotations are (x, y, z, w) floats. A quaternion and its negation are the same rotation, so every
-# comparison takes the absolute dot product; anything else reports a bone that has not moved as 180 degrees off.
+# comparison takes the absolute dot product; otherwise a bone that has not moved reads as 180 degrees off.
 
 IDENTITY = (0.0, 0.0, 0.0, 1.0)
 
@@ -303,12 +294,9 @@ def _pair_poses(a_motion: Motion, b_motion: Motion):
 def _classify(poses_a, poses_b, name, offset_tolerance, spread_tolerance):
     """One bone's rows: how far apart the two recordings are, and which of the two ways.
 
-    The test is the *angle* of the per-frame difference, not the quaternion: a basis error multiplies the
-    stored rotation on one side or the other, and both spellings leave that angle constant while the axis
-    moves (a world-side basis) or stays put (a local/bind-side one). A sampling difference changes the
-    angle itself, frame to frame. Judging by the first frame alone is what let an earlier version of this
-    report call a take "identical" when the difference only started on frame 2 - so it looks at every frame:
-    the biggest difference reached, and how much that difference wanders.
+    The test is the angle of the per-frame difference, not the quaternion: a basis error leaves that angle constant
+    while a sampling difference changes it frame to frame. Every frame is looked at, not just the first, so a
+    difference that starts on frame 2 still shows.
     """
     by_a = {k.frame: k for k in poses_a[name]}
     by_b = {k.frame: k for k in poses_b[name]}
@@ -320,7 +308,7 @@ def _classify(poses_a, poses_b, name, offset_tolerance, spread_tolerance):
     angles = [q_angle_degrees(o, IDENTITY) for o in offsets]
     worst = max(angles)
     wander = worst - min(angles)                     # how much the difference's size changes
-    # the frame that differs most speaks for the bone; its axis is the one worth naming
+    # the frame that differs most speaks for the bone, so its axis is the one worth naming
     index = angles.index(worst)
     axes = [q_axis(o) for o in offsets if q_axis(o) is not None]
     axis_wander = 0.0

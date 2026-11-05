@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """Check that the PowerShell wrapper can pass every flag the CLI knows.
 
-The CLI lives in `Assets/Scripts/Cli/UmaHeadlessExport.cs` as a table of flags, and
-`Tools/headless_export.ps1` maps its own `-Style` switches onto those `-uma*` names. The two drift: a flag
-added to the runner and not to the wrapper is invisible to anyone using the wrapper, and a wrapper switch that
-maps to nothing fails at run time with "nothing to do".
-
-This reads both and reports the difference. Exit code 1 when they disagree, so it can gate a commit.
-
-It also checks the wrapper against itself: a parameter it declares but never forwards is worse than a missing
-one, because the run looks like it worked. `-DumpModels -DumpPropsFilter rich_prop` was accepted and silently
-dumped everything three times over, one family per run, and every run said OK.
+The CLI lives in `Assets/Scripts/Cli/UmaHeadlessExport.cs` as a table of flags, and `Tools/headless_export.ps1`
+maps its own `-Style` switches onto those `-uma*` names. The two drift: a flag added to the runner and not to the
+wrapper is invisible to anyone using the wrapper, and a wrapper switch that maps to nothing fails at run time with
+"nothing to do". A parameter the wrapper declares but never forwards is worse than a missing one, because the run
+looks like it worked. This reads both and reports the difference; exit code 1 when they disagree.
 
     python Tools/check_cli_parity.py            # report
     python Tools/check_cli_parity.py --verbose  # also list the flags that do match

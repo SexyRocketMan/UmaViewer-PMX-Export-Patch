@@ -15,10 +15,9 @@
   uv run pmx_inspect.py check     <file.pmx>        # the uma_addon eye contract + eye skinning
   uv run pmx_inspect.py diff      <a.pmx> <b.pmx>
 
-`check` verifies what the Blender uma_addon relies on once "Refine Structure" runs:
-  * the four eye-range morphs exist in one of the spellings the exporter can write - tagged
-    (BlenderCompatible, which is what the stock addon matches), short, or unified (the default),
-  * the eyeball geometry is skinned to the Eye_L / Eye_R bones.
+`check` verifies what the Blender uma_addon relies on once "Refine Structure" runs: the four eye-range morphs are
+present in a spelling the exporter can write, and the eyeball is skinned to Eye_L / Eye_R. `check`, `integrity`,
+`names` and `tails` exit 1 when a check fails; the other subcommands exit 0.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ import math
 import re
 import sys
 
-# these tools print japanese asset names, and a windows console is not utf-8 by default
+# asset names are japanese, and a windows console is not utf-8 by default
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError):
@@ -37,7 +36,7 @@ except (AttributeError, ValueError):
 from collections import Counter
 from dataclasses import dataclass, field
 
-# The morph names the Blender uma_addon's "Refine Structure" operator looks up by exact name.
+# The morph names the addon's "Refine Structure" operator resolves by exact name.
 # See uma_addon/.../operators/AddonOperators.py -> RefineBoneStructure.fix_eye_shapekeys.
 ADDON_EYE_RANGE_MORPHS = [
     "Eye_20_R(XRange)[M_Face]",
@@ -46,9 +45,8 @@ ADDON_EYE_RANGE_MORPHS = [
     "Eye_21_L(YRange)[M_Face]",
 ]
 
-# The same four morphs in every spelling the exporter can write (Config.PmxMorphNameMode): the stock
-# addon only resolves "tagged", the fork's naming resolver matches the other two by meaning. A check
-# that only accepted the tagged spelling reported a perfectly good default export as broken.
+# The same four morphs in every spelling Config.PmxMorphNameMode can write. The stock addon resolves only
+# "tagged"; the fork's naming resolver matches the other two by meaning, so all three are valid exports.
 EYE_RANGE_SPELLINGS = {
     "tagged": ("Eye_20_R(XRange)[M_Face]", "Eye_20_L(XRange)[M_Face]",
                "Eye_21_R(YRange)[M_Face]", "Eye_21_L(YRange)[M_Face]"),
@@ -162,12 +160,12 @@ class Model:
     morph_data: list[dict] = field(default_factory=list)
     end_offset: int = 0
     file_size: int = 0
-    #: (section, byte offset) as the reader enters each section - when a file fails to parse, the last entry says
-    #: which section was misread, which is quicker than guessing from the exception
+    #: (section, byte offset) as the reader enters each section - after a failed parse, the last entry names
+    #: the section that was misread
     trace: list = field(default_factory=list)
 
 
-#: section trace of the most recent read - useful when the parse raised, since then no Model comes back
+#: section trace of the most recent read - when the parse raised, there is no Model and this is all there is
 LAST_TRACE: list = []
 
 
@@ -193,7 +191,7 @@ def read_model(path: str) -> Model:
     def note(label: str) -> None:
         global LAST_TRACE
         model.trace.append((label, r.p))
-        LAST_TRACE = model.trace          # kept after a failed parse, when there is no model to return
+        LAST_TRACE = model.trace          # survives a failed parse, when there is no model to return
 
     note("name")
     text(); text()  # comments
@@ -203,8 +201,7 @@ def read_model(path: str) -> Model:
     for _ in range(r.i32()):
         pos = r.vec(3)
         r.vec(3); r.vec(2)
-        # each extra uv is one Vector4, so a config with three of them costs twelve floats. Reading
-        # 4 * g[1] floats is right by luck; reading one float per component is what the writer does.
+        # each extra uv is one Vector4, so g[1] extra sets cost 4 * g[1] floats
         extra_uvs = [r.vec(4) for _ in range(g[1])]
         wt = r.u8()
         bones: list[int] = []
@@ -267,10 +264,8 @@ def read_model(path: str) -> Model:
             b.tail_bone = r.index(sizes["bone"])
         else:
             b.tail_pos = r.vec(3)
-        # the inherit pair is present for local inherit as well as for the rotation and translation kinds:
-        # 0x0080 is local attribution, 0x0100 rotates with the parent, 0x0200 translates with it. Missing
-        # 0x0080 here desyncs the reader by eight bytes on every such bone, which is how the MMD reference
-        # models that use 捩り bones failed to parse.
+        # 0x0080 is local attribution, 0x0100 rotates with the parent, 0x0200 translates with it; all three
+        # carry the inherit pair, so reading only the latter two desyncs by eight bytes per such bone
         if b.flags & (0x0080 | 0x0100 | 0x0200):
             b.inherit_parent = r.index(sizes["bone"]); b.inherit_weight = r.f32()
         if b.flags & 0x0400:
@@ -314,8 +309,7 @@ def read_model(path: str) -> Model:
                 items.append((r.index(sizes["vertex"]), tuple(r.vec(4))))
         elif mtype == 8:
             # material morph: index, an offset flag, then 28 floats - diffuse (4), specular (3) and its
-            # coefficient, ambient (3), edge colour (4), edge size, and the texture, sphere and toon tints (4
-            # each). Reading one Vector4 here instead desynced every file that has a material morph.
+            # coefficient, ambient (3), edge colour (4), edge size, and the texture, sphere and toon tints (4 each)
             for _ in range(off):
                 index = r.index(sizes["material"])
                 multiply = r.u8()
@@ -332,9 +326,8 @@ def read_model(path: str) -> Model:
             raise ValueError(f"unknown morph type {mtype}")
         model.morph_data.append({"name": morph_name, "cat": morph_cat, "type": mtype, "items": items})
 
-    # Display frames, then rigid bodies and joints. The exporter always writes at least one frame (a
-    # "Root" frame holding morph index 0), so a reader that stops after the morphs leaves those bytes
-    # unread - which is why the integrity check compares the cursor to the file length.
+    # display frames, then rigid bodies and joints. The exporter always writes at least one frame, so a reader
+    # that stops after the morphs leaves those bytes unread - which is what the integrity cursor check catches.
     note("frames")
     for _ in range(r.i32()):
         text(); text()
@@ -498,9 +491,8 @@ def cmd_check(paths: list[str], args) -> int:
         print(f"== {path}")
         names = set(m.morph_names)
 
-        # The four eye-range morphs have to be resolvable by some spelling the exporter can write; which
-        # spelling decides which addon can use them. Failing on a spelling the model is not written in
-        # said nothing about the model - the default is Unified.
+        # the four eye-range morphs have to be resolvable in a spelling the exporter writes; which spelling
+        # decides which addon can use them, so a missing one of the three is not a failure of the model
         complete = [scheme for scheme, wanted in EYE_RANGE_SPELLINGS.items()
                     if all(n in names for n in wanted)]
         if complete:
@@ -537,20 +529,11 @@ def cmd_check(paths: list[str], args) -> int:
 
 
 def cmd_integrity(paths: list[str], args) -> int:
-    """Audit the file's sizes and every index in it against what it declares.
+    """Audit the declared index sizes against the counts and every index against the file.
 
-    This is the check for the defect class that broke exported geometry before: the pmx header declares how
-    many bytes each kind of index occupies, and if a size is chosen without regard to the count it has to
-    hold, then either the index cannot address the last entry or every record after the first is misaligned.
-    Both are silent in a viewer that clamps - the file simply renders wrong.
-
-    Three things are checked, in order, because the first failure makes the rest meaningless:
-
-    1. the reader consumes exactly the file, byte for byte, when it walks the header's declared sizes;
-    2. each declared size can actually address the count that follows it (vertex indices must reach
-       vertex_count - 1, and so on for texture, material, bone and morph);
-    3. every index that is read lies inside the range it addresses, including the -1 sentinels pmx uses for
-       "none" where the format allows one.
+    Checked in order, because the first failure makes the rest meaningless: the parse consumes the file byte for
+    byte, each declared size can address its count (vertex indices are unsigned, the rest signed), and every index
+    lies inside its range, -1 counting as pmx's "none" where the format allows it.
     """
     ok = True
     for path in paths:
@@ -635,8 +618,8 @@ def cmd_integrity(paths: list[str], args) -> int:
                           f"is outside 0..{count - 1}")
                     problems += 1
         for bone in m.bones:
-            # a pmx signposts "no bone" with -1, and the root bone of an exported uma model is exactly
-            # that, so -1 is in range for the fields that allow it; an ik target may not be -1.
+            # -1 is pmx's "no bone" and an exported uma model's root bone uses it, so -1 is in range for the
+            # fields that allow it; an ik target may not be -1.
             if not -1 <= bone.parent < len(m.bones):
                 print(f"   [FAIL] bone {bone.index} ({bone.name}) parent {bone.parent} "
                       f"is outside -1..{len(m.bones) - 1}")
@@ -712,13 +695,11 @@ def cmd_names(paths: list[str], args) -> int:
 
 
 def cmd_tails(paths: list[str], args) -> int:
-    """Where every bone points, for the bones whose direction a user notices.
+    """Where every bone points, and whether that follows the segment leading into it.
 
-    A PMX bone's tail is either a child index or an offset, and the direction from head to tail is what
-    Blender draws. The uma rig has no tails, so the exporter derives them: a bone points at the child that
-    continues its chain, and a bone without one (finger tips, hair ends, the roll helpers) continues the
-    segment leading into it. This reports the result, the left/right mirroring, and the bones that do not
-    follow the segment leading into them - a hair strand that turns is expected there, the head bone is not.
+    A pmx tail is a child index or an offset, and head -> tail is the direction Blender draws; the uma rig has no
+    tails, so the exporter derives them. Exits 1 when a --pairs left/right pair is not mirrored - a hair strand may
+    leave the incoming segment, the head bone may not.
     """
     exit_code = 0
     for path in paths:
@@ -811,17 +792,13 @@ def cmd_tails(paths: list[str], args) -> int:
 
 
 def cmd_orient(paths: list[str], args) -> int:
-    """How the bone tails are oriented, in one line per question that matters, and what changed between two files.
+    """How the file's bone tails are oriented, and what changed against another export.
 
-    A PMX stores no bone axis: MMD, Blender and everything else derive it from head -> tail, so the tail is the
-    bone's orientation. `tails` answers "where does this named bone point"; this answers "what does the whole file
-    do" (the distribution of tails against the segment arriving at each bone, child index against offset) and,
-    with `--against`, "what did the exporter change" - matched by bone name, so it survives reindexing.
-
-    The reference point for the distribution is MMD's own rigs, measured over 98 models: 41% of their bones sit
-    within 5 degrees of the incoming segment, 11% more than 90 degrees off it, and 54% of their tails are child
-    indices. A file far above that is not automatically better - a hair strand is supposed to leave its root at a
-    wide angle - so compare the named joints as well.
+    A pmx stores no bone axis, so head -> tail is the orientation. Reports the distribution of tails against the
+    incoming segment, child index against offset, and the named bones; --against compares an older export matched by
+    bone name, so it survives reindexing. MMD's own rigs are the reference (98 models: 41% within 5 deg of the
+    incoming segment, 11% past 90, 54% child index) - a hair strand is meant to leave its root wide, so compare the
+    named joints as well as the total.
     """
 
     def load(path):
@@ -965,9 +942,8 @@ def cmd_orient(paths: list[str], args) -> int:
 def cmd_bounds(paths: list[str], args) -> int:
     """Where each material's geometry ended up, as a world-space box.
 
-    This is the check for a merged or retargeted part: a collar that was supposed to land on a hand and did not
-    still exports without an error, and the only way to see it headlessly is the box the vertices occupy. Print a
-    bone from the same file (`bones`) to compare against.
+    A merged or retargeted part still exports without an error, so the box its vertices occupy is the only thing
+    that shows it headlessly. Print a bone from the same file (`bones`) to compare against.
     """
     for path in paths:
         m = read_model(path)

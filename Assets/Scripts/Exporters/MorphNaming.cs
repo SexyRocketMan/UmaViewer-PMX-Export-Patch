@@ -2,27 +2,10 @@ using System.Collections.Generic;
 using System.Text;
 
 /// <summary>
-/// The one place that decides what a morph is called, shared by the PMX exporter
-/// (<see cref="ModelExporter"/>) and the VMD recorder (<see cref="UnityHumanoidVMDRecorder"/>).
-///
-/// Those two used to derive names independently, which is how exported models and exported motions
-/// ended up disagreeing: Blender's mmd_tools imports vmd morph keyframes by matching the morph name
-/// against the shape keys of the imported model, so a name that exists in only one of the two files
-/// is silently dropped on import.
-///
-/// Naming modes (see <see cref="PmxMorphNameMode"/>):
-///   BlenderCompatible  "(Tag)[Mesh]" suffix kept, matches the stock uma_addon but is far too long
-///                      for a vmd morph name (the limit is 15 shift-jis bytes), so motions cannot
-///                      drive those morphs. Model-only by definition.
-///   ShortEnglish       "Eye_2_L" - fits a vmd but says nothing about what the morph does.
-///   Unified            "Brow_WaraiA_R" - descriptive, unique and within the vmd byte limit, so one
-///                      name serves the model and the motion. Default.
-///
-/// A Japanese mode was considered for the space `Both` used to occupy and dropped: the game ships no
-/// japanese morph names at all (the viewer builds "EyeBrow_1_L" from an index into an english enum,
-/// see Gallop.FaceDrivenKeyTarget), and the only japanese table in the repo,
-/// <see cref="Config.VmdMorphConvertSetting"/>, names 94 of the 192 morphs and merges several of them
-/// into one - so it is not a spelling of these morphs but a different, incomplete morph set.
+/// Decides what a morph is called, shared by the PMX exporter (<see cref="ModelExporter"/>) and the VMD recorder
+/// (<see cref="UnityHumanoidVMDRecorder"/>): mmd_tools matches vmd morph keys to shape keys by name, so a name carried by
+/// only one of the two files is silently dropped on import. BlenderCompatible "(Tag)[Mesh]" is model-only and too long for a
+/// vmd, ShortEnglish is "Eye_2_L", Unified "Brow_WaraiA_R" (default, fits both).
 /// </summary>
 public static class MorphNaming
 {
@@ -41,8 +24,7 @@ public static class MorphNaming
     };
 
     /// <summary>
-    /// Tags that do not fit the byte limit with their group ("Eye_EyelidHideA_L" is 17 bytes).
-    /// Everything else in the game's morph set fits as-is.
+    /// Tags that overflow the vmd byte limit with their group ("Eye_EyelidHideA_L" is 17 bytes); everything else fits as-is.
     /// </summary>
     private static readonly Dictionary<string, string> TagAbbreviations = new Dictionary<string, string>
     {
@@ -69,8 +51,7 @@ public static class MorphNaming
 
     /// <summary>
     /// Parses "EyeBrow_1_R(WaraiA)[M_Face]", "Mouth_2_0(CheekA_L)[M_Face]" and the short forms
-    /// "EyeBrow_1_R" / "Mouth_2_0". <paramref name="tagHint"/> (FacialMorph.tag) supplies the tag for
-    /// names that do not carry one.
+    /// "EyeBrow_1_R" / "Mouth_2_0". <paramref name="tagHint"/> (FacialMorph.tag) supplies a missing tag.
     /// </summary>
     public static bool TryParse(string rawName, string tagHint, out Parts parts)
     {
@@ -159,9 +140,8 @@ public static class MorphNaming
     }
 
     /// <summary>
-    /// The unified spelling: english group + romaji tag + side, e.g. "Brow_WaraiA_R", "Eye_XRange_L",
-    /// "Mouth_TalkA_O_S". Falls back to the short name for morphs without a usable tag or family, and
-    /// for anything that would not fit a vmd name field.
+    /// The unified spelling: english group + romaji tag + side, e.g. "Brow_WaraiA_R". Falls back to the short name without a
+    /// usable tag or family, or when the result would not fit a vmd name field.
     /// </summary>
     public static string UnifiedName(string rawName, string tagHint)
     {
@@ -175,14 +155,12 @@ public static class MorphNaming
         string name = string.IsNullOrEmpty(parts.Side) ? $"{group}_{tag}" : $"{group}_{tag}_{parts.Side}";
         if (ByteLength(name) <= VmdNameByteLimit) return name;
 
-        // a tag that is not in the abbreviation table and does not fit: keep the name valid and
-        // unique instead of truncating it into something ambiguous
+        // keep the name valid and unique rather than truncating it into something ambiguous
         return ShortName(rawName);
     }
 
     /// <summary>
-    /// Every morph name a single morph is exported under, for the active mode. Only the exporter uses
-    /// this, and its input is already the tagged spelling written by
+    /// Every morph name one morph is exported under, for the active mode. Its input is already the tagged spelling written by
     /// <c>ModelExporter.AddBlendShape</c> ("Eye_2_L(CloseA)[M_Face]").
     /// </summary>
     public static IEnumerable<string> NamesFor(string rawName, string tagHint, PmxMorphNameMode mode)
@@ -197,9 +175,7 @@ public static class MorphNaming
                 yield return ShortName(rawName);
                 yield break;
 
-            // Unified is also the fallback for a value this build does not know, because it is the only
-            // spelling that works for a model and a motion alike. The tagged one is model-only, and
-            // failing safe means failing towards the mode that cannot strand a motion.
+            // unified is also the fallback for a mode value this build does not know: the only spelling that works for both files
             default:
                 yield return UnifiedName(rawName, tagHint);
                 yield break;
@@ -207,28 +183,26 @@ public static class MorphNaming
     }
 
     /// <summary>
-    /// The name a vmd uses for this morph. It has to be a name the exported model actually carries
-    /// and it has to fit the 15 byte field, otherwise Blender silently drops the morph keyframes.
+    /// The name a vmd uses for this morph: a name the exported model carries, within the 15 byte field, or Blender silently
+    /// drops the morph keyframes.
     /// </summary>
     public static string VmdName(string rawName, string tagHint, PmxMorphNameMode mode)
     {
-        // Unified is the only spelling a model and a motion can both carry, so it is also the one an
-        // unknown mode value falls back to - the same fail-safe <see cref="NamesFor"/> uses.
+        // unified is the only spelling both files can carry, hence also the fail-safe for an unknown mode
         if (mode != PmxMorphNameMode.ShortEnglish)
         {
             string unified = UnifiedName(rawName, tagHint);
             if (FitsVmd(unified)) return unified;
         }
 
-        // the short spelling is what "ShortEnglish" exports, and the last resort for a morph whose
-        // unified name would overflow the field
+        // what ShortEnglish exports, and the last resort for a morph whose unified name would overflow
         string shortName = ShortName(rawName);
         return FitsVmd(shortName) ? shortName : UnifiedName(rawName, tagHint);
     }
 
     /// <summary>
-    /// False when the exported model and the exported motion cannot agree on this morph's name, i.e.
-    /// in "BlenderCompatible" mode where the model carries a spelling no vmd field can hold.
+    /// False when model and motion cannot agree on this morph's name: in BlenderCompatible mode the model carries a spelling no
+    /// vmd field can hold.
     /// </summary>
     public static bool ModelAndMotionNamesAgree(PmxMorphNameMode mode) => mode != PmxMorphNameMode.BlenderCompatible;
 

@@ -2,15 +2,9 @@ using System;
 using UnityEngine;
 
 /// <summary>
-/// The A-pose that recorded motions are authored against.
-///
-/// <see cref="UnityHumanoidVMDRecorder"/> builds its reference ("ghost") pose by rotating both upper arms
-/// <see cref="Degrees"/> degrees down from the T-pose, so every arm rotation in a recorded vmd is relative
-/// to that A-pose. A model exported with a T-pose rest therefore only lines up after the user has posed the
-/// model into the A-pose in Blender and re-imported the motion with "Use current pose as rest pose".
-/// <see cref="Enter"/> removes that step by exporting the model in the very same A-pose. It does nothing
-/// unless <see cref="Config.PmxAPoseRestPose"/> is enabled, because a T-pose rest is what rigging and
-/// retargeting tools usually expect.
+/// The A-pose recorded motions are authored against: <see cref="UnityHumanoidVMDRecorder"/> builds its ghost pose by
+/// rotating both upper arms <see cref="Degrees"/> degrees down from the T-pose, so every arm rotation in a vmd is relative
+/// to it. <see cref="Enter"/> exports the model in that same pose, unless <see cref="Config.PmxAPoseRestPose"/> is off.
 /// </summary>
 public static class UmaAPose
 {
@@ -19,7 +13,7 @@ public static class UmaAPose
     /// <summary>How far the upper arms rotate down from the T-pose. Shared with the recorder.</summary>
     public const float Degrees = 38.5f;
 
-    // The same candidates the recorder resolves its arm bones from, in the same order.
+    // Same candidates, same order as the recorder's arm-bone lookup; the two must stay in step.
     static readonly string[] LeftArmNames = { "Arm_L", "ArmL", "UpperArm_L", "UpperArmL", "Arm_01_L" };
     static readonly string[] RightArmNames = { "Arm_R", "ArmR", "UpperArm_R", "UpperArmR", "Arm_01_R" };
 
@@ -38,9 +32,8 @@ public static class UmaAPose
     }
 
     /// <summary>
-    /// Exports inside the A-pose rest pose for the lifetime of the returned scope, then puts the rig back
-    /// where it was. Disposing it restores the arm rotations and the animator state, so an export does not
-    /// disturb what the viewer is showing.
+    /// Exports inside the A-pose rest pose for the lifetime of the returned scope, then restores the arm rotations and animator
+    /// state, leaving the viewer as it was.
     /// </summary>
     public static Scope Enter(UmaContainerCharacter container)
     {
@@ -77,8 +70,7 @@ public static class UmaAPose
             _leftRotation = _leftArm.localRotation;
             _rightRotation = _rightArm.localRotation;
 
-            // Freeze the animator first: the pose is set by hand here, and the next animator update would
-            // otherwise overwrite it with the clip that is currently playing.
+            // Freeze the animator first, or its next update overwrites the hand-set pose with the playing clip.
             _animator = container.UmaAnimator;
             if (_animator != null)
             {
@@ -88,9 +80,7 @@ public static class UmaAPose
                 _animator.enabled = false;
             }
 
-            // ExportModel has already called Animator.Rebind(), so the rig is sitting in the rest pose the
-            // exporter would use anyway (that is why exports come out T-posed). Only the arms are touched
-            // here, which keeps an A-pose export identical to a T-pose one apart from the arms.
+            // ExportModel has already called Animator.Rebind(), so the rig sits in the T-pose rest anyway; only the arms are touched
             IntoAPose(_leftArm, _rightArm);
 
             Debug.Log($"{Tag} exporting in the A-pose rest pose: both upper arms rotated {Degrees} degrees down, "

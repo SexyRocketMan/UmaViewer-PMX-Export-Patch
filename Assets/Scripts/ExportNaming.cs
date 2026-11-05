@@ -4,16 +4,14 @@ using System.Text;
 using UnityEngine;
 
 /// <summary>
-/// Default file names for the save dialogs. The container is named after its database id
-/// ("Chara_1001_00"), which says nothing to a human, so files are named after the uma plus the tail of the
-/// animation: "anm_rac_type01_run02_stride" for Special Week becomes "special_week_stride.vmd".
+/// Default file names for the save dialogs. A container is named after its database id ("Chara_1001_00"), which says
+/// nothing to a human, so files are named after the uma plus the tail of the animation: "special_week_stride.vmd".
 /// </summary>
 public static class ExportNaming
 {
     /// <summary>
-    /// Everything a file name cannot hold becomes an underscore, runs of them collapse and the result is
-    /// lower case, so "Special Week" is "special_week". Letters that are not ASCII survive (uma names in
-    /// japanese are still usable as a file name).
+    /// Everything a file name cannot hold becomes one underscore, and the result is lower case, so "Special Week" is
+    /// "special_week". Letters outside ASCII survive, so japanese uma names are still usable as a file name.
     /// </summary>
     public static string Sanitize(string value, string fallback)
     {
@@ -48,10 +46,8 @@ public static class ExportNaming
         return Sanitize(name, "uma");
     }
 
-    /// <summary>
-    /// The costume the container was loaded with: the long form when there is one ("0001_00_00" for the
-    /// generic costumes), otherwise the id the container is named after ("Chara_1001_00" is "00").
-    /// </summary>
+    /// <summary>The costume the container was loaded with: the long form ("0001_00_00" for generic costumes) or else
+    /// the id the container is named after ("Chara_1001_00" is "00").</summary>
     public static string CostumeId(UmaContainerCharacter container)
     {
         if (container == null) return "";
@@ -60,10 +56,8 @@ public static class ExportNaming
         return parts.Length >= 3 ? parts[parts.Length - 1] : "";
     }
 
-    /// <summary>
-    /// The costume's name, the way the costume list shows it ("Race Shorts", "Default"), so two exports of
-    /// the same uma in different outfits do not suggest the same file name.
-    /// </summary>
+    /// <summary>The costume's name as the costume list shows it ("Race Shorts", "Default"), so two exports of the same
+    /// uma in different outfits do not suggest the same file name.</summary>
     public static string CostumeName(UmaContainerCharacter container)
     {
         string costumeId = CostumeId(container);
@@ -90,10 +84,8 @@ public static class ExportNaming
         return string.IsNullOrEmpty(costume) ? name : $"{name}_{costume}";
     }
 
-    /// <summary>
-    /// A part of an asset name that says nothing about the motion: the "anm" prefix, the character the clip
-    /// belongs to ("chr1001") and empty parts.
-    /// </summary>
+    /// <summary>A part of an asset name that says nothing about the motion: the "anm" prefix, the character the clip
+    /// belongs to ("chr1001") and empty parts.</summary>
     static bool IsNoiseToken(string token, string characterIdToken)
     {
         if (string.IsNullOrEmpty(token)) return true;
@@ -103,9 +95,9 @@ public static class ExportNaming
     }
 
     /// <summary>
-    /// The tail of an animation asset name: "anm_rac_type01_run02_stride" is "stride". Asset names are
-    /// "<prefix>_<group>_<character id>_<variation>_<what it is>", so the last part that is not a number
-    /// and not the character id is what identifies the motion for a human.
+    /// The tail of an animation asset name: "anm_rac_type01_run02_stride" is "stride". Names are
+    /// "&lt;prefix&gt;_&lt;group&gt;_&lt;character id&gt;_&lt;variation&gt;_&lt;what it is&gt;", so the last part that is neither a number nor the
+    /// character id is what identifies the motion to a human.
     /// </summary>
     public static string MotionTag(AnimationClip clip, string characterIdToken = null)
     {

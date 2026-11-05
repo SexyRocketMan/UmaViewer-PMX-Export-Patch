@@ -1,7 +1,7 @@
 # Keyboard shortcuts, and the modes they have to stay out of
 
-The viewer's keys, where they live, and the audit behind the rules. Read the audit before adding a
-binding: the same key is a different thing in each mode, and that is not obvious from the binding table.
+Keys live in `Config.json`; the action list and the context rules live in `UIShortcuts`. The same key is a
+different thing in each mode, so check the audit before choosing one.
 
 ## Where they live
 
@@ -15,12 +15,15 @@ binding: the same key is a different thing in each mode, and that is not obvious
 ]
 ```
 
-* `Name` is the action (below), `Key` a `UnityEngine.KeyCode` name, `Alt` requires Alt to be held.
-* One line per key, so an action can have several, and deleting a line removes that key.
-* Nothing is guessed at: an unknown `Name` or `Key` is named in the log and that line is skipped. On
-  startup the viewer logs what it bound, e.g. `[Shortcuts] 9 binding(s): LeftArrow -> PanelPrev, ...`.
-* `UIShortcuts` owns the action list and the context rules; `ShortcutConfig` in `Config.cs` is only the
-  shape. A dispatch on an action name that is not in `UIShortcuts.Definitions` cannot happen silently.
+* `Name` is the action (below), `Key` a `UnityEngine.KeyCode` name, `Alt` requires Alt held.
+* One line per key: an action can have several, and deleting a line removes that key.
+* An unknown `Name` or `Key` is logged and skipped. Startup logs the bound set, e.g.
+  `[Shortcuts] 9 binding(s): LeftArrow -> PanelPrev, ...`.
+* `UIShortcuts` owns the actions and the context rules; `ShortcutConfig` in `Config.cs` is only the shape.
+
+Defaults (`Config.DefaultViewerShortcuts`): `PanelPrev`/`PanelNext` on `LeftArrow`/`RightArrow`,
+`ListUp`/`ListDown` on `UpArrow`/`DownArrow` plus `W`/`S`, `ExportModel` on `E`, `AutoRecord` on `A`,
+`RainLook` on `R`.
 
 ## The actions
 
@@ -32,71 +35,60 @@ binding: the same key is a different thing in each mode, and that is not obvious
 | `AutoRecord` | `UmaViewerUI.AutoRecordVMD`, the same call the button makes | no |
 | `RainLook` | `UISettingsModel.ToggleWetLook`, the wet texture set a rained-on race uses | no |
 
-## The modes, and what they suspend
+`ListUp`/`ListDown` skip the character panel: characters load too slowly to compare by keypress.
 
-A shortcut is only useful when it does not fight the mode the viewer is in. Three contexts suspend
-bindings, and each suspension has a reason that was measured rather than assumed:
+## The modes, and what they suspend
 
 | Context | Suspends | Why |
 |---|---|---|
-| a text box has focus | everything | the search field owns the arrows and every letter (`TypingInField`) |
-| **free camera** (`CameraOrbit` mode 1) | any binding whose key is `W A S D` or an arrow | that mode moves the camera through the `Horizontal`/`Vertical` axes, which are exactly those keys. Matched against the key a shortcut was actually given, so rebinding `PanelNext` to `J` makes it work while flying. `E` and `R` do not collide and keep working. |
-| **pose mode** | `ListUp`/`ListDown`, `PanelPrev`/`PanelNext`, `AutoRecord` | the list walk *loads* what it lands on, which would replace the model mid-pose; `PoseManager.EnablePoseMode` disables the `UmaAnimator` the recorder samples, so a take would be frozen. `ExportModel` and `RainLook` stay. |
+| a text box has focus | everything | the field owns the arrows and every letter (`TypingInField`) |
+| **free camera** (`CameraOrbit` mode 1) | any binding on `W A S D` or an arrow | that mode flies on the `Horizontal`/`Vertical` axes, which are those keys. Matched against the key a shortcut was actually given, so `PanelNext` rebound to `J` works while flying; `E` and `R` keep working. |
+| **pose mode** | `ListUp`/`ListDown`, `PanelPrev`/`PanelNext`, `AutoRecord` | the list walk *loads* what it lands on and would replace the model mid-pose; `PoseManager.EnablePoseMode` disables the `UmaAnimator` the recorder samples, so a take would be frozen. `ExportModel` and `RainLook` stay. |
 
-The pose gizmo (`TransformGizmo`) needs **LeftAlt** for every one of its own keys (`Alt+W`, `Alt+E`,
-`Alt+R`, `Alt+Y`, `Alt+Z`, `Alt+C`, `Alt+X`, `Alt+S`), and `UIShortcuts` fires a plain binding only when
-Alt is *not* held. So plain `W`/`E`/`R` never fight the gizmo - that half of the conflict did not exist,
-which is worth knowing before moving any of these keys around.
+The pose gizmo (`TransformGizmo`) uses **LeftAlt** for all of its own keys (`Alt+W`, `Alt+E`, `Alt+R`, `Alt+Y`,
+`Alt+Z`, `Alt+C`, `Alt+X`, `Alt+S`), and `UIShortcuts` fires a plain binding only without Alt, so plain
+`W`/`E`/`R` cannot fight it.
 
 ## The audit: every key the project reads
 
-Taken from a grep of `Input.GetKey*` / `GetAxis` over `Assets/Scripts`. A new binding has to be checked
-against this, not against the mode names.
+Check a new binding against this, not against the mode names.
 
 | Key | Reader | Mode |
 |---|---|---|
 | `W A S D`, arrows | `CameraOrbit` free mode, `Input.GetAxis("Horizontal"/"Vertical")` | free camera only |
 | `LeftControl` | `CameraOrbit` orbit mode: moves the orbit target up/down | orbit only |
-| `H` | `PoseManager` help panel | pose mode only (gated this session; it used to fire in every mode) |
-| `Space` | `HandleManager` IK toggle | pose mode only (gated this session; same leak) |
+| `H` | `PoseManager` help panel | pose mode only |
+| `Space` | `HandleManager` IK toggle | pose mode only |
 | `Alt` + `W E R Y Z C X S` | `TransformGizmo` gizmo type/pivot/space | pose mode only |
 | `Shift`/`Ctrl` + `Z Y` | `TransformGizmo` undo/redo | pose mode only |
 | `LeftShift`/`LeftControl` | `TransformGizmo` multi-select, snapping | pose mode only |
 | `Escape` | `Director`, while a live is playing | live playback |
-| `A S D ...` | `FreeCam.cs` | **nothing** - see below |
+| `A S D ...` | `FreeCam.cs` | **live playback** - see below |
 
-`FreeCam.cs` (`Assets/Scripts/LiveToolBox/`) is dead code: no scene references its script GUID and
-nothing calls `AddComponent<FreeCam>`. The free camera the viewer actually has is `CameraOrbit` mode 1.
-It reads `W/A/S/D/E/R/Q/F` on top of the arrows, so if it were ever wired up it would collide with
-almost every shortcut here - worth deleting rather than chasing.
+`FreeCam.cs` (`Assets/Scripts/LiveToolBox/`) sits on a camera in `Assets/Scenes/LiveScene.unity`, which
+`UmaViewerBuilder` loads additively for live playback: while a live plays it moves that camera on
+`W/A/S/D/E/R/Q/F`, `LeftShift` and the mouse wheel in every context, so bindings on those keys are contested
+there. Outside live playback the viewer flies with `CameraOrbit` mode 1, on the same axes plus the mouse.
 
-Unity's own UI navigation also owns the arrow keys. `UIShortcuts.Fire` drops the selected object
-(`EventSystem.current.SetSelectedGameObject(null)`) before running a binding, so the selection does not
-move at the same time - keep that if the dispatch is ever restructured.
+Unity's UI navigation also owns the arrow keys, so `UIShortcuts.Fire` clears the selection
+(`EventSystem.current.SetSelectedGameObject(null)`) before running a binding.
 
 ## The dirt set, and why there is no key for it
 
-There is a dirt variant set, and it is **not** a wet-style swap: `tex_<body>_dirt` exists as an asset
-(`tex_bdy1001_00_dirt` beside `_diff`/`_base`/`_shad_c`), but the uma shader draws it from a dedicated slot
-— `_DirtTex` (`Texture`, unbound on every material this project exports), `_DirtScale` (`Range`), and a
-per-material `_DirtRate` (`Vector`, `(0,0,0,0)`). On top of that there is a global `_DirtRate`
-(**float array of 3**, `_DirtRate_0..2` on `UmaViewerGlobalShader`) plus `_GlobalDirtColor`,
-`_GlobalDirtToonColor` and `_GlobalDirtRimSpecularColor`.
+The dirt variant is not a wet-style swap. `tex_<body>_dirt` exists as an asset (`tex_bdy1001_00_dirt` beside
+`_diff`/`_base`/`_shad_c`), but the uma shader draws it from its own slot: `_DirtTex` (`Texture`, unbound on
+every material this project exports), `_DirtScale` (`Range`), a per-material `_DirtRate` (`Vector`,
+`(0,0,0,0)`), and the globals `_DirtRate` (**float array of 3**, `_DirtRate_0..2` on
+`UmaViewerGlobalShader`), `_GlobalDirtColor`, `_GlobalDirtToonColor` and `_GlobalDirtRimSpecularColor`.
 
-A `DirtRates` key used to step those three globals, as an instrument for finding values by eye. It is gone,
-and the measurement it produced is the reason: **stepping the global rate through its whole range changes
-nothing visible**, which is exactly what an unbound `_DirtTex` predicts - the shader has nothing to modulate.
-So a key on the global was never going to show a dirt look, and shipping a knob that provably does nothing is
-the pattern this repository keeps removing.
-
-What a dirt look actually needs is the *material* side: the exported `tex_*_dirt` map bound to `_DirtTex`, a
-`_DirtScale`, and the per-material `_DirtRate`. That is shading work, so it belongs with the wet/dirt wiring in
-the addon (the exporter already writes the maps when `Config.PmxTextureVariants` is on, and names them per
-material with `dirt=` tokens). Until then the maps are exported and unused - which is what the model comment's
-`texture variants:` line says.
+No binding steps those globals: stepping the global rate through its whole range changes nothing visible, which
+an unbound `_DirtTex` predicts. A dirt look needs the material side (the `tex_*_dirt` map on `_DirtTex`, a
+`_DirtScale`, the per-material `_DirtRate`), so it belongs with the addon's wet/dirt wiring, not a viewer key.
+The exporter writes those maps under `Config.PmxTextureVariants` and names them per material with `dirt=`
+tokens; until that wiring exists they are exported and unused, as the model comment's `texture variants:` line
+says.
 
 ## Related
 
-`docs/UI_HOOKUP.md` is the panel side of the same options (which control calls which method). The rain
-look itself is `UmaContainerCharacter.SetWetLook`, whose doc comment explains why a wet character owns
-private copies of its materials.
+`docs/UI_HOOKUP.md` covers the panel side (which control calls which method); the rain look is
+`UmaContainerCharacter.SetWetLook`.

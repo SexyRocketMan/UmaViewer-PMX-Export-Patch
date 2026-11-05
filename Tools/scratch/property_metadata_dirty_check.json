@@ -1,0 +1,64 @@
+{
+  "steps": [
+    {
+      "step": "nothing at all (the baseline)",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "a fresh ID property",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "a fresh ID property and its first metadata write",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "the same metadata written again",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "metadata that actually differs",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "reading the metadata",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "writing a value",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "writing the same value again",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "control: moving an object",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "control: renaming an object",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "control: adding an object",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    },
+    {
+      "step": "control: deleting the bare object",
+      "dirty_before_save_state": false,
+      "dirty_after": false
+    }
+  ]
+}

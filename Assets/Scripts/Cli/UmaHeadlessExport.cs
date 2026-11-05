@@ -4,101 +4,25 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using UmaMusumeAudio;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+// Headless export and inspection from the command line, in a batchmode editor or in a built player:
+//   Unity.exe -batchmode -projectPath <project> -executeMethod UmaHeadlessExport.Run --char 1001 --out D:/out/1001.pmx
+//
+// It opens the viewer scene, lets it boot, then drives the same path the UI's "Export Model" button uses
+// (UmaViewerBuilder.LoadUma + ModelExporter.ExportModel). Exit code is 0 on success and non zero on failure,
+// explained by the [UmaHeadlessExport] log line; every flag and verb is printed by `--help` and in docs/CLI.md.
+//
+// Entering play mode reloads the script domain, which clears static fields and drops EditorApplication.update
+// subscriptions: all progress state lives in CliState and the update loop is re-armed from InitializeOnLoadMethod.
+
 /// <summary>
-/// Headless (batch mode) model export, so exports can be produced and regression tested without
-/// clicking through the UI.
-///
-/// It opens the normal viewer scene, lets it boot in play mode, then drives the same code path the
-/// UI's "Export Model" button uses (<see cref="UmaViewerBuilder.LoadUma"/> +
-/// <see cref="ModelExporter.ExportModel"/>).
-///
-/// Usage (all arguments are optional except the ones producing an export):
-///
-///   Unity.exe -batchmode -projectPath &lt;project&gt; -executeMethod UmaHeadlessExport.Run ^
-///       -umaChar 1001 -umaCostume 00 -umaOut "D:/out/1001.pmx"
-///
-///   -umaChar &lt;id&gt;        character id to load (see -umaListChars)
-///   -umaCostume &lt;id&gt;     costume id, e.g. "00". Defaults to the first costume of the character
-///   -umaProp &lt;path&gt;      instead of a character, load and export a prop / scene asset path or name
-///                        (see -umaListProps)
-///   -umaMotion &lt;path&gt;    load a specific motion onto the character before exporting/recording
-///                        (e.g. 3d/motion/racemain/body/type01/anm_rac_type01_run02_stride)
-///   -umaOut &lt;path&gt;       .pmx or .fbx file to write (the extension picks the writer). Defaults to
-///                          &lt;project&gt;/HeadlessExports/&lt;char&gt;_&lt;costume&gt;.pmx
-///   -umaRefine &lt;bool&gt;    FBX only: the optional uma refinement step (eye bones aimed as the Blender
-///                          addon aims them). Defaults to Config.json's FbxApplyUmaRefinement
-///   -umaEmbedTextures &lt;bool&gt;  FBX only: carry the PNGs inside the file as well as next to it.
-///                          Defaults to Config.json's FbxEmbedTextures
-///   -umaScene &lt;path&gt;     scene to boot, default Assets/Scenes/Version2.unity
-///   -umaListChars        print every character id together with its costume ids, then exit
-///   -umaListCostumes     print the costume ids of -umaChar, then exit
-///   -umaListProps &lt;f&gt;    print prop/scene assets whose name contains &lt;f&gt; (empty = all), then exit
-///   -umaListTextures &lt;f&gt; print character texture assets whose name contains &lt;f&gt; (empty = all, use a
-///                        character id), then exit. This is how a variant set is found rather than guessed
-///                        at: the wet maps are the "..._wet" twins of the dry ones, so any other set the
-///                        game ships would show up here as its own suffix.
-///   -umaListFamilies &lt;f&gt; print the family under 3d/chara/ (body, head, tail, mini, common, prop, attach,
-///                        richprop, sweat, toonprop) whose name contains &lt;f&gt; (empty = all), with how many
-///                        entries it holds, what its prefabs are called, and how many of them the prop
-///                        panel's "pfb_chr_prop" filter would show, then exit. Metadata only: this reads
-///                        manifest names and opens no bundle, so it cannot download anything. When &lt;f&gt;
-///                        selects a single family it also lists that family's folders (attach1048_00,
-///                        bdy1001_00: the id and costume each asset belongs to) with entry counts.
-///   -umaScanProps &lt;f&gt;    load every prop/scene matching &lt;f&gt; in turn and report its material health
-///                        (textureless slots, missing shaders, resolved texture set), then exit
-///   -umaScanCount &lt;n&gt;    how many props to scan, default 10
-///   -umaScanExport       with -umaScanProps: export each matched prop instead of only reporting it, and
-///                        continue past the ones that throw, then report how many of each. This is how a
-///                        batch of scenes is checked for the ones that fail to export at all - one editor
-///                        launch for the whole batch (see -umaScanOut)
-///   -umaScanOut &lt;dir&gt;    where -umaScanExport writes; default &lt;project&gt;/HeadlessExports/scan
-///   -umaExportAudio &lt;sheet&gt;  write a sound asset to an mp3 (with -umaOut) carrying its transcript in
-///                          the tag: -umaExportAudio snd_voi_story_041047007 -umaExportClip 3 -umaOut x.mp3
-///   -umaExportClip &lt;n&gt;     which clip of that asset, default 0; -1 mixes the whole asset
-///   -umaTranscript &lt;sheet&gt;  print the lines a story voice sheet is used for (e.g. 041047007, or
-///                          snd_voi_story_041047007), together with what the viewer would put on each
-///                          clip of that sound asset, then exit
-///   -umaDumpMaterials    log material diagnostics for the loaded model before exporting
-///   -umaVariant &lt;code&gt;   pick an environment texture set variant (e.g. 212 or 214) before exporting
-///   -umaMorphNameMode &lt;n&gt; override Config.PmxMorphNameMode (0 tagged, 1 short english, 2 unified)
-///   -umaAttach &lt;f&gt;      wear/hold the 3d/chara/attach or 3d/chara/toonprop prefab(s) whose path contains
-///                        &lt;f&gt; on the loaded character (repeatable: one -umaAttach per pattern). Applied after
-///                        the settle frames and before any screenshot or export, so the run measures the
-///                        character as worn. An attach prefab carries a copy of the character rig and is
-///                        retargeted onto the character's bones by name; a toon prop whose own rig sits in its
-///                        own space (measured per prefab) is hung off Hand_Attach_R/L instead.
-///   -umaAPose            export models with the arms in the A-pose that recorded motions are relative to
-///   -umaTextureVariants  also export the game's wet and dirt maps beside the dry ones and name them per
-///                        material with wet=/dirt= tokens (off by default: about +80% texture payload)
-///   -umaRecordVmd &lt;path&gt; record one loop of the playing animation to a .vmd, then exit (character only)
-///   -umaRecordFps &lt;n&gt;    frame rate of that recording, default 30
-///   -umaRecordMode &lt;m&gt;   deterministic (default, one pinned frame per sample) or realtime (the legacy
-///                        FixedUpdate sampler, useful to compare behaviour)
-///   -umaTimeout &lt;sec&gt;    abort after this many seconds, default 600
-///   -umaExtraFrames &lt;n&gt;  frames to let the model settle before exporting, default 30
-///   -umaPlaySeconds &lt;s&gt; let the loaded motion play for this much wall clock time before exporting or
-///                        recording (default 0). Batch mode burns through editor frames in milliseconds,
-///                        so without this a one shot animation never reaches its end - which is the state
-///                        the viewer is in when a user records after the animation finished.
-///
-/// Exit code is 0 on success, non zero on failure (the log line prefixed with [UmaHeadlessExport]
-/// explains why).
-///
-/// NOTE: entering play mode triggers a script domain reload, which clears static fields and drops
-/// EditorApplication.update subscriptions. All progress state therefore lives in
-/// <see cref="CliState"/> and the update loop is re-armed from an [InitializeOnLoadMethod].
-/// </summary>
-/// <summary>
-/// The command line's editor-only probes, as hooks.
-///
-/// Reading an animation's curves and serialized properties is `UnityEditor` work, and a runtime assembly -
-/// which is where the runner lives so a built player can use it - cannot see those types. The editor side
-/// installs these when it loads (<see cref="CliEditorProbes"/>); in a player they stay null and the flag that
-/// wanted one says so instead of failing.
+/// The command line's editor-only probes, as hooks: reading animation curves and serialized properties is
+/// `UnityEditor` work a runtime assembly cannot see. Installed by <see cref="CliEditorProbes"/>; a player leaves
+/// them null and the flag that wanted one reports it.
 /// </summary>
 public static class CliEditorProbeHooks
 {
@@ -107,6 +31,10 @@ public static class CliEditorProbeHooks
     public static Action<string, Animator, GameObject> DumpTearAnimator;
     public static Action<UmaContainer> DumpShaderFacts;
     public static Action<string, CharaShaderEffectData> DumpShaderEffectData;
+    /// <summary>Everything after the meta database: the material the game's shader actually receives, the textures
+    /// bound to it, and the mesh facts the shader depends on. The stored bundle material is not the runtime one - the
+    /// viewer overwrites textures and properties as it loads a character - and the face shader's _NormalizeNormal is
+    /// 0, so the length of its vertex normals matters.</summary>
     public static Action<GameObject, string> DumpFacePipeline;
 }
 
@@ -128,10 +56,50 @@ public static class UmaHeadlessExport
     private const string KeyVmdFrames = "UmaHeadlessExport.VmdFrames";
     private const string KeyMotionLoaded = "UmaHeadlessExport.MotionLoaded";
 
-    /// <summary>
-    /// The clip `-umaMotion` applied. Kept because the animator reports the state it is still transitioning *from*
-    /// right after a loop motion is started, so reading "the current clip" records the wrong animation.
-    /// </summary>
+    /// <summary>Where a model dump spends its seconds, one line per model: a dump of all costumes is hours long.</summary>
+    private static readonly System.Diagnostics.Stopwatch LapClock = new System.Diagnostics.Stopwatch();
+    private static readonly List<KeyValuePair<string, double>> Laps = new List<KeyValuePair<string, double>>();
+    private static string LapName;
+
+    /// <summary>Ends the running lap and starts one called <paramref name="name"/>; a repeat of the current name is ignored.</summary>
+    private static void Lap(string name)
+    {
+        if (name == LapName) return;
+        if (LapName != null) Laps.Add(new KeyValuePair<string, double>(LapName, LapClock.Elapsed.TotalSeconds));
+        LapName = name;
+        LapClock.Restart();
+    }
+
+    private static void ResetLaps()
+    {
+        Laps.Clear();
+        LapName = null;
+        LapClock.Reset();
+    }
+
+    /// <summary>The laps so far as `load 2.1, export 2.9, pack 0.4`, then cleared.</summary>
+    private static string TakeLaps()
+    {
+        if (LapName != null)
+        {
+            Laps.Add(new KeyValuePair<string, double>(LapName, LapClock.Elapsed.TotalSeconds));
+            LapName = null;
+            LapClock.Reset();
+        }
+        var text = new StringBuilder();
+        double total = 0;
+        foreach (var lap in Laps)
+        {
+            total += lap.Value;
+            if (text.Length > 0) text.Append(", ");
+            text.Append(lap.Key).Append(' ').Append(lap.Value.ToString("0.0", CultureInfo.InvariantCulture));
+        }
+        Laps.Clear();
+        return text.Append(" = ").Append(total.ToString("0.0", CultureInfo.InvariantCulture)).Append(" s").ToString();
+    }
+
+    /// <summary>The clip `-umaMotion` applied: right after a loop motion starts the animator still reports the clip it
+    /// is leaving, so reading "the current clip" records the wrong one.</summary>
     private static AnimationClip _requestedClip;
 
     /// <summary>How many times the motion has been re-applied because the idle took the layer back.</summary>
@@ -149,18 +117,12 @@ public static class UmaHeadlessExport
     private const string KeyBatchBytes = "UmaHeadlessExport.BatchBytes";
     private const string KeyBatchPlanned = "UmaHeadlessExport.BatchPlanned";
 
-    /// <summary>
-    /// When the boot wait started. It lives in the session, not in a field, because a player never goes through
-    /// the editor's play-mode stage that used to set the clock - so in a player the age of the boot was measured
-    /// from year one, every wait it guards was skipped, and a run could export before the english names had
-    /// arrived.
-    /// </summary>
+    /// <summary>When the boot wait started. In the session, not a field: a play-mode reload - or a player, which skips that stage - reads back as year one.</summary>
     private const string KeyBootStarted = "UmaHeadlessExport.BootStarted";
     private const string KeyDumpIndex = "UmaHeadlessExport.DumpIndex";
     private const string KeyDumpTotal = "UmaHeadlessExport.DumpTotal";
 
-    /// <summary>What a `-umaDumpProps` run knows about the models it has written. Seeded from an existing
-    /// index.json when the run resumes, so a second run keeps what the first one recorded.</summary>
+    /// <summary>What a `-umaDumpProps` run knows about the models it has written; seeded from an existing index.json on resume.</summary>
     private static readonly Dictionary<string, DumpEntry> _dumpEntries = new Dictionary<string, DumpEntry>(StringComparer.Ordinal);
 
     private static bool _dumpIndexLoaded;
@@ -208,12 +170,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Every flag this build understands, grouped the way `--help` prints it.
-    ///
-    /// The single-dash names are the original interface and stay supported - `docs/CLI.md`, the PowerShell
-    /// wrapper and every existing script are written in them - but they exist only to stay clear of Unity's own
-    /// arguments, which is a problem the double-dash form does not have. So `--out` is the name to type now and
-    /// `-umaOut` is the name that still works.
+    /// Every flag this build understands, grouped the way `--help` prints it. The single-dash names are the
+    /// original interface and stay supported (`docs/CLI.md`, the PowerShell wrapper and existing scripts use
+    /// them); they exist only to stay clear of Unity's own arguments, which the double-dash form does not.
     /// </summary>
     private static readonly Flag[] Flags =
     {
@@ -237,7 +196,6 @@ public static class UmaHeadlessExport
         new Flag { Long = "--embed-textures", Internal = "-umaEmbedTextures", Kind = FlagKind.Value, Group = "model",
                    Help = "FBX only: true/false, embed the textures in the file" },
 
-        // motion
         new Flag { Long = "--dump-models", Internal = "-umaDumpModels", Kind = FlagKind.Value, Group = "scanning",
                    Help = "dump characters and props for a browser: one folder per kind, shared textures, index.json" },
         new Flag { Long = "--dump-models-chars", Internal = "-umaDumpModelsChars", Kind = FlagKind.Switch, Group = "scanning",
@@ -370,8 +328,7 @@ public static class UmaHeadlessExport
                    Help = "how long to wait for the viewer to boot; default 120" },
         new Flag { Long = "--json", Internal = "", Kind = FlagKind.Switch, Group = "run",
                    Help = "finish with one JSON line describing the result" },
-        // not --version: Unity answers that one itself and exits before this code runs, with no log file and no
-        // explanation. Anything the editor has its own flag for has to be spelled differently here.
+        // not --version: Unity answers that itself and exits before this code runs. Anything the editor owns has to be spelled differently.
         new Flag { Long = "--doctor", Internal = "", Kind = FlagKind.Switch, Group = "run",
                    Help = "report the paths, the game data and the manifest a run would use, then exit" },
         new Flag { Long = "--about", Internal = "", Kind = FlagKind.Switch, Group = "run",
@@ -426,11 +383,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// The commands. A verb is sugar with a purpose: it says what a run *is* in the words a person would use, it
-    /// fills in the flag that choice implies, and it refuses to start when the run could not produce what was
-    /// asked for - `export model` without an `--out`, `list costumes` without a `--char`. The flags underneath are
-    /// unchanged, so nothing that worked before stops working; `--char 1001 --out x.pmx` is still a valid
-    /// command, it just has no verb in front of it.
+    /// The commands: sugar that says what a run *is*, fills in the flag that choice implies, and refuses to start
+    /// when the run could not produce what was asked for (`export model` with no `--out`). The flags underneath are
+    /// unchanged, so `--char 1001 --out x.pmx` is still a valid command with no verb in front of it.
     /// </summary>
     private static readonly Verb[] Verbs =
     {
@@ -481,25 +436,21 @@ public static class UmaHeadlessExport
                    Example = "doctor" },
     };
 
-    /// <summary>
-    /// Rewrites a leading verb into the flags it implies, and checks that the run can do what was asked.
-    ///
-    /// `dump props D:/props` is also accepted: a command that needs a folder takes the next word as `--dump-props`
-    /// when it is not a flag, because typing the flag twice is the sort of thing a person forgets.
-    /// </summary>
     /// <summary>True for the program's own path, which is argument zero of every command line.</summary>
     private static bool LooksLikeExecutable(string argument) =>
         argument.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
         || argument.IndexOf('/') >= 0
         || argument.IndexOf('\\') >= 0;
 
+    /// <summary>Rewrites a leading verb into the flags it implies and checks the run can do what was asked. A command
+    /// that needs a folder takes the next word as its flag when the next word is not one.</summary>
     private static string[] ApplyVerb(string[] argv, out string error)
     {
         error = null;
         var expanded = new List<string>(argv);
         if (expanded.Count == 0) return argv;
-        // the program's own path is not an argument to anything, and a path sitting next to an optional-value flag
-        // gets taken for its value: drop it here rather than let it become a family filter
+        // the program's own path is not an argument, and a path sitting next to an optional-value flag gets taken
+        // for its value: drop it here rather than let it become a family filter
         for (int drop = 0; drop < expanded.Count && LooksLikeExecutable(expanded[drop]); drop++)
         {
             expanded.RemoveAt(drop);
@@ -507,10 +458,9 @@ public static class UmaHeadlessExport
         }
         argv = expanded.ToArray();
 
-        // The command can be anywhere on the line, not just first: an editor run is `Unity.exe -batchmode
-        // -projectPath . -executeMethod UmaHeadlessExport.Run <command> ...`, so looking at argument zero (or one)
-        // finds Unity's own flags and nothing else. Measured - the first version of this did exactly that and
-        // every verb was silently ignored.
+        // The command can be anywhere on the line: an editor run is `Unity.exe -batchmode -projectPath .
+        // -executeMethod UmaHeadlessExport.Run <command> ...`, so argument zero and one are Unity's own flags.
+        // Looking only there silently ignores every verb.
         int verbAt = -1;
         int consumed = 0;
         Verb verb = null;
@@ -543,8 +493,8 @@ public static class UmaHeadlessExport
 
         expanded.RemoveRange(verbAt, consumed);
 
-        // The flag this command is really about: the one it requires, or - for the commands whose flag takes an
-        // optional value - the one it implies. A bare word after the command becomes that flag's value, because
+        // The flag this command is really about: the one it requires, or - for a flag that takes an optional
+        // value - the one it implies. A bare word after the command becomes that flag's value, because
         // `dump props D:/props` is what a person types and `--dump-props D:/props` is what the parser wants.
         string subject = null;
         if (verb.Requires.Contains("-umaDumpModels")) subject = "-umaDumpModels";
@@ -578,10 +528,7 @@ public static class UmaHeadlessExport
         return expanded.ToArray();
     }
 
-    /// <summary>
-    /// Checks a run against the command it was given: `export model` has to have somewhere to write, `list
-    /// costumes` has to know which character. Returns null when the run can go ahead.
-    /// </summary>
+    /// <summary>Checks a run against its command: `export model` needs somewhere to write, `list costumes` a character. Null when the run can go ahead.</summary>
     private static string VerbProblem(Options options, Verb verb)
     {
         if (verb == null) return null;
@@ -624,13 +571,10 @@ public static class UmaHeadlessExport
         Flags.Where(flag => flag.Long.StartsWith("--", StringComparison.Ordinal))
              .ToDictionary(flag => flag.Long, flag => flag, StringComparer.Ordinal);
 
-    /// <summary>
-    /// Rewrites the double-dash form into the single-dash one the parser has always taken, and expands
+    /// <summary>Rewrites the double-dash form into the single-dash one the parser has always taken, and expands
     /// `--flag=value`. Anything else - Unity's own arguments, a path, a filter - is passed through untouched.
-    ///
-    /// Arguments after a bare `--` are passed through even if they look like flags, so a value that starts with
-    /// a dash can still be given.
-    /// </summary>
+    /// Arguments after a bare `--` are passed through even if they look like flags, so a value can start with a
+    /// dash.</summary>
     private static string[] Normalise(string[] argv)
     {
         var expanded = new List<string>(argv.Length);
@@ -691,10 +635,7 @@ public static class UmaHeadlessExport
         return expanded.ToArray();
     }
 
-    /// <summary>
-    /// The flag a mistyped one was probably meant to be: the closest name by edit distance, when it is close
-    /// enough to be a typo rather than a different word. A "did you mean" is worth ten lines of help text.
-    /// </summary>
+    /// <summary>The flag a mistyped one was probably meant to be: the closest name by edit distance, when it is close enough to be a typo.</summary>
     private static string SuggestFlag(string typed)
     {
         string best = null;
@@ -774,14 +715,7 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// Prints the environment a run would use: where the game data is, what the manifest holds, whether the scene
-    /// and the shaders are there, and which of the usual traps are set.
-    ///
-    /// It exists because every way this tool fails for a person is an environment question - the wrong data
-    /// folder, a missing `master.mdb`, a manifest that never loaded, a shader list that came back empty because
-    /// the editor is offline - and the alternative is a one line exception that says none of it.
-    /// </summary>
+    /// <summary>Prints the environment a run would use: game data, manifest, scene, shaders, and which of the usual traps are set.</summary>
     /// <param name="stage">What to call this report, or null for the full one taken after the viewer booted.</param>
     private static void PrintDoctor(string stage)
     {
@@ -841,8 +775,7 @@ public static class UmaHeadlessExport
 
         if (CurrentOptions != null && CurrentOptions.Json)
         {
-            // the same numbers the report printed, in a shape a script can read: "is this machine set up" is a
-            // question about booleans and counts, not about a paragraph
+            // the report's numbers again, as booleans and counts: a script asks whether a machine is set up, not for a paragraph
             bool standalone = config.WorkMode == WorkMode.Standalone;
             _jsonPayload = "{"
                 + J("ok", true) + "," + J("mode", "doctor")
@@ -900,10 +833,7 @@ public static class UmaHeadlessExport
         return $"{state} {label,-11} {path}{extra}";
     }
 
-    /// <summary>
-    /// The doctor's scene line reads the option that was asked for, so a run pointed at another scene reports
-    /// that one rather than the default.
-    /// </summary>
+    /// <summary>The doctor's scene line reads the option that was asked for, not the default.</summary>
     private static void RememberScene(Options options) => CliState.SetString(KeyScene, options.ScenePath);
 
     /// <summary>What this build is: the one line a bug report needs.</summary>
@@ -919,11 +849,7 @@ public static class UmaHeadlessExport
         public int CharId = -1;
         public string CostumeId = "";
         public string OutPath = "";
-        /// <summary>
-        /// FBX only: -1 keeps Config.json's FbxApplyUmaRefinement, 0 turns the optional uma refinement off
-        /// and 1 turns it on. An int rather than a bool?, because Options travels through SessionState as
-        /// JsonUtility JSON and JsonUtility drops nullable fields.
-        /// </summary>
+        /// <summary>FBX only: -1 keeps Config.json's FbxApplyUmaRefinement, 0 off, 1 on. An int, not a bool?: JsonUtility drops nullable fields.</summary>
         public int Refine = -1;
         /// <summary>FBX only: -1 keeps Config.json's FbxEmbedTextures, 0 off, 1 on.</summary>
         public int EmbedTextures = -1;
@@ -937,27 +863,18 @@ public static class UmaHeadlessExport
         public string ListTexturesFilter = "";
         public bool ListFamilies;
         public string ListFamiliesFilter = "";
-        /// <summary>
-        /// Attach prefabs to wear on the loaded character before measuring (-umaAttach, repeatable). Each value is
-        /// a substring of an asset path under 3d/chara/attach/; every match is worn, after the settle frames and
-        /// before any screenshot or export, so what a run reports includes them.
-        /// </summary>
+        /// <summary>Attach prefabs to wear on the loaded character (-umaAttach, repeatable): each value is a
+        /// substring of an asset path under 3d/chara/attach, worn after the settle frames and before anything is
+        /// measured.</summary>
         public List<string> Attach = new List<string>();
         public string ScanProps = "";
         public int ScanCount = 10;
-        /// <summary>
-        /// With -umaScanProps: *export* every matched prop instead of only reporting its material health, and
-        /// keep going after one that throws. This is the difference between finding a broken scene by
-        /// launching the editor once per scene and finding it in one run: three quarters of the export time is
-        /// the viewer booting, and a sweep boots it once for the whole batch.
-        /// </summary>
+        /// <summary>With -umaScanProps: *export* every matched prop instead of only reporting it, and keep going
+        /// after one that throws. Boot is three quarters of a sweep's cost, so this checks a batch of scenes for the
+        /// ones that fail to export in one run instead of one launch each.</summary>
         public bool ScanExport;
 
-        /// <summary>
-        /// `-umaDumpProps <dir>`: export *every* prop into its own folder, plus an index.json describing the
-        /// lot. This is the dump a web viewer or a picker reads: one model per folder with its own textures, so
-        /// each one can be fetched on its own, and an index so a page never has to walk a folder tree.
-        /// </summary>
+        /// <summary>`-umaDumpProps <dir>`: export *every* prop into its own folder plus an index.json, so a picker fetches one model at a time.</summary>
         public string DumpProps = "";
 
         /// <summary>Only dump props whose asset path contains this (e.g. `rich_prop`). Empty dumps all of them.</summary>
@@ -974,11 +891,11 @@ public static class UmaHeadlessExport
         // a story voice sheet to print the transcript of, without loading or exporting anything
         public string Transcript = "";
         public bool DumpFace;
-        // what the facial morph system actually holds at runtime: the extra morphs, their locators and
-        // their binds, and whether the cheek/texture plumbing behind them got filled in
+        // what the facial morph system actually holds at runtime: the extra morphs, their locators and their binds,
+        // and whether the cheek/texture plumbing behind them got filled in. The extra morphs are built in code from
+        // the character's own parts (FaceDrivenKeyTarget.InitializeExtra), so an absent one means a part was missing.
         public bool ProbeMorphs;
-        // how the animated tears are built: they are skinned meshes posed by an Animator, so the mesh the exporter
-        // reads is a bind pose and not necessarily the shape the game draws
+        // how the animated tears are built: skinned meshes posed by an Animator, so the mesh the exporter reads is a bind pose
         public bool ProbeTears;
         // how long -ProbeTears watches the tears with the animator actually running, in wall clock seconds
         public double TearSampleSeconds = 2.0;
@@ -1029,10 +946,8 @@ public static class UmaHeadlessExport
         /// <summary>`--dump-models-count`: how many models to dump; 0 is all of them.</summary>
         public int DumpModelsCount;
 
-        /// <summary>
-        /// The command this run was given ("export model"), or "" for the plain-flag form. Set by
-        /// <see cref="ApplyVerb"/> and used for validation and for the summary line, not for behaviour.
-        /// </summary>
+        /// <summary>The command this run was given ("export model"), or "" for the plain-flag form. Set by
+        /// <see cref="ApplyVerb"/>; read for validation and the summary line, never for behaviour.</summary>
         public string Verb = "";
 
         public double TimeoutSeconds = 600;
@@ -1044,26 +959,21 @@ public static class UmaHeadlessExport
         public int ShotWidth = 0;
         public int ShotHeight = 0;
         public double ShotYaw = 0;
-        // several yaws in one run: "-umaShotYaw 0,45,-45" writes one png per angle, which is what shading work
-        // is judged on - the same view under different light directions
+        // several yaws in one run: "-umaShotYaw 0,45,-45" writes one png per angle, the same view under different light directions
         public string ShotYaws = "";
         // azimuths for the face light, in degrees: the Nars face shader shades with _ViewDirX/_ViewDirY
         public string ShotAzimuths = "";
 
-        // for probing which texture a term of the game's compiled shader reads: "Property=r,g,b" or
-        // "Property=null", applied before the shots and undone after them
+        // for probing which texture a term of the compiled shader reads: "Property=r,g,b" or "Property=null", undone after the shots
         public List<string> ShotTextures = new List<string>();
 
-        // for probing what a shader *global* does to the face - the viewer's own global buffer carries
-        // the fog and lightmap colours, so the absolute brightness of its render is scene state
+        // for probing a shader *global*: the viewer's own buffer carries the fog and lightmap colours, so absolute brightness is scene state
         public List<string> ShotGlobals = new List<string>();
 
-        // for probing a material float: _faceShadowAlpha is driven by the Shade_Ctrl morph rather than
-        // being a material constant, so its rest value is 0 and the cheek and nose regions never show
+        // for probing a material float: _faceShadowAlpha is driven by the Shade_Ctrl morph, so its rest value is 0 and the cheek never shows
         public List<string> ShotFloats = new List<string>();
 
-        // freezes the model at this normalised time before the shots, because an A/B pair is only a
-        // comparison if the pose is the same in both. Negative leaves the animation alone.
+        // freezes the model at this normalised time before the shots: an A/B pair is only a comparison if the pose is the same in both
         public double PinPose = -1;
 
         // limits -umaShotTexture / -umaShotFloat / -umaShotGlobal's face work to materials whose name
@@ -1090,8 +1000,7 @@ public static class UmaHeadlessExport
             }
             // the marker is not a flag: drop it so the switch below never sees it
             argv = argv.Where(argument => !argument.StartsWith("--verb=", StringComparison.Ordinal)).ToArray();
-            // the double-dash names are rewritten into the single-dash ones the switch below knows, so there is one
-            // parser and one set of cases however a caller spells a flag
+            // double-dash names are rewritten into the single-dash ones the switch below knows: one parser, one set of cases
             string[] normalised = Normalise(argv);
             for (int i = 0; i < normalised.Length; i++)
             {
@@ -1122,8 +1031,7 @@ public static class UmaHeadlessExport
                     case "-umaListCostumes": options.ListCostumes = true; break;
                     case "-umaListProps":
                         options.ListProps = true;
-                        // the filter is optional: only consume the next argument if it is a value,
-                        // not another -umaX switch
+                        // the filter is optional: only consume the next argument if it is a value, not another -umaX switch
                         if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-")) options.ListPropsFilter = normalised[++i];
                         break;
                     case "-umaListTextures":
@@ -1140,8 +1048,7 @@ public static class UmaHeadlessExport
                     case "-umaScanExport": options.ScanExport = true; break;
                 case "-umaDumpProps": options.DumpProps = Next(); break;
                 case "-umaDumpPropsFilter":
-                    // optional value: the wrapper omits an empty filter, but a script that passes one
-                    // anyway must not swallow the next switch as the filter
+                    // optional value: a script that passes an empty filter must not swallow the next switch as the filter
                     if (i + 1 < normalised.Length && !normalised[i + 1].StartsWith("-")) options.DumpPropsFilter = normalised[++i];
                     break;
                 case "-umaDumpPropsCount": options.DumpPropsCount = int.Parse(Next()); break;
@@ -1188,8 +1095,7 @@ public static class UmaHeadlessExport
                     case "--doctor": options.Doctor = true; break;
                     case "--json": options.Json = true; break;
                     default:
-                        // anything else is Unity's own argument or the shell's; but a -uma flag nobody handles
-                        // means the flag table and this switch have drifted apart, which is worth saying out loud
+                        // anything else is Unity's own argument; but a -uma flag nobody handles means the flag table and this switch drifted apart
                         if (key.StartsWith("-uma", StringComparison.Ordinal))
                         {
                             Debug.LogWarning($"{Tag} ignoring unknown flag {key} (is the flag table out of date?)");
@@ -1218,11 +1124,7 @@ public static class UmaHeadlessExport
     private const double TranslationWaitSeconds = 15.0;
     private static double _playDeadline;
     private static DateTime _playModeEnteredUtc;
-    /// <summary>
-    /// When the run started. It lives in the session rather than in a field because entering play mode reloads
-    /// the domain: a field reads back as year one after that, which made the play mode retry heuristic fire on
-    /// every tick and the result line report zero seconds.
-    /// </summary>
+    /// <summary>When the run started. In the session: after the play-mode reload a field reads back as year one, and the retry heuristic then fires every tick.</summary>
     private static DateTime RunStartedUtc
     {
         get
@@ -1235,17 +1137,12 @@ public static class UmaHeadlessExport
     }
     private static int _playModeRetries;
 
-    /// <summary>
-    /// Entry point for the editor's `-executeMethod`. Everything after the argument parsing is shared with the
-    /// player entry (<see cref="RunInPlayer"/>), so both hosts run the same stages; only the way the scene is
-    /// reached differs.
-    /// </summary>
+    /// <summary>Entry point for the editor's `-executeMethod`. Everything after the argument parsing is shared with
+    /// the player entry (<see cref="RunInPlayer"/>), so both hosts run the same stages; only the way the scene is
+    /// reached differs.</summary>
     public static void Run() => Begin(Environment.GetCommandLineArgs());
 
-    /// <summary>
-    /// True when this process was started with command line flags this build understands. The player bootstrap
-    /// asks before doing anything, so a normal launch of the viewer is untouched by any of this.
-    /// </summary>
+    /// <summary>True when this process was started with flags this build understands, so a normal launch of the viewer is untouched.</summary>
     public static bool LooksLikeCommandLine(string[] argv)
     {
         foreach (string argument in argv)
@@ -1258,15 +1155,13 @@ public static class UmaHeadlessExport
 
         // a command line can be nothing but a verb: `UmaViewer.exe list families` has no flags at all. Asking the
         // verb table is the only way to tell that apart from a normal launch, and forgetting it meant those
-        // commands started the viewer and did nothing at all.
+        // commands started the viewer and did nothing.
         return ApplyVerb(argv, out _).Any(argument => argument.StartsWith("--verb=", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// The shared beginning of a run: parse, answer --help/--about, validate, then set the state machine going.
-    /// In the editor the scene is opened and play mode is entered; in a player the scene is already the one
-    /// running, so the stages start at <see cref="Stage.WaitStartup"/> instead.
-    /// </summary>
+    /// <summary>The shared beginning of a run: parse, answer --help/--about, validate, then set the state machine
+    /// going. The editor opens the scene and enters play mode; a player's scene is already running, so its stages
+    /// start at <see cref="Stage.WaitStartup"/>.</summary>
     public static void Begin(string[] argv)
     {
         Options options;
@@ -1296,8 +1191,7 @@ public static class UmaHeadlessExport
         if (options.Help)
         {
             PrintHelp();
-            // every mode ends with this marker, including the ones that print and exit: a wrapper waits for it
-            // and a mode that only logs its own summary looks like a hang
+            // every mode ends with this marker, including the ones that print and exit: a wrapper waits for it, and a run that only logs looks like a hang
             Debug.Log($"{Tag} OK");
             CliHost.Exit(0);
             return;
@@ -1347,8 +1241,7 @@ public static class UmaHeadlessExport
         _attachmentsApplied = false;
         _translationWarned = false;
 
-        // a player is already past "start the scene and enter play mode": the scene it was built with is running
-        // and the viewer is booting in it, so the run starts at the stage that waits for that boot
+        // a player is already past "start the scene and enter play mode", so its run starts at the stage that waits for the boot
         CurrentStage = CliHost.IsEditor ? Stage.WaitPlayMode : Stage.WaitStartup;
         Debug.Log($"{Tag} starting a run in {(CliHost.IsEditor ? "the editor" : "a player")}, "
                   + $"scene {options.ScenePath}");
@@ -1358,15 +1251,8 @@ public static class UmaHeadlessExport
         if (CliHost.IsEditor) CliHost.EnterPlayMode();
     }
 
-    /// <summary>
-    /// Runs after every domain reload (including the one caused by entering play mode), which is
-    /// where the update subscription made by <see cref="Run"/> gets lost.
-    /// </summary>
 #if UNITY_EDITOR
-    /// <summary>
-    /// Runs after every domain reload (including the one caused by entering play mode), which is
-    /// where the update subscription made by <see cref="Run"/> gets lost.
-    /// </summary>
+    /// <summary>Runs after every domain reload, including the one entering play mode causes: that is where the subscription made by <see cref="Run"/> gets lost.</summary>
     [UnityEditor.InitializeOnLoadMethod]
     private static void Bootstrap()
     {
@@ -1403,8 +1289,7 @@ public static class UmaHeadlessExport
                         break;
                     }
 
-                    // Entering play mode is cancelled by a script recompile while the editor is starting,
-                    // which otherwise leaves the run sitting here until the timeout.
+                    // Entering play mode is cancelled by a script recompile while the editor is starting, which leaves the run here until the timeout.
                     if ((DateTime.UtcNow - RunStartedUtc).TotalSeconds > 20)
                     {
                         _playModeRetries++;
@@ -1435,9 +1320,9 @@ public static class UmaHeadlessExport
                     var builder = UmaViewerBuilder.Instance;
                     if (main == null || builder == null) return;
 
-                    // UmaViewerMain.Start() ends by loading the shader list, but it also downloads the
-                    // english translations from GitHub first - on a slow or blocked network that never
-                    // completes, so fall through after a while instead of hanging forever.
+                    // UmaViewerMain.Start() ends by loading the shader list, but first downloads the english
+                    // translations from GitHub - which never completes on a blocked network, so fall through
+                    // after a while instead of hanging forever.
                     bool fullyBooted = builder.ShaderList != null && builder.ShaderList.Count > 0;
                     bool usable = main.AbList != null && main.AbList.Count > 0;
                     long bootTicks = long.TryParse(CliState.GetString(KeyBootStarted, ""), out long started) ? started : 0;
@@ -1447,7 +1332,7 @@ public static class UmaHeadlessExport
 
                     // The english names arrive from a download that runs beside the rest of the boot, and a run
                     // that starts without them writes the japanese name into the model's english name field. Give
-                    // them a few seconds of their own - not the whole boot timeout, which would stall an offline
+                    // them a few seconds of their own, not the whole boot timeout, which would stall an offline
                     // machine for two minutes over a nicety.
                     bool wantNames = Config.Instance != null && Config.Instance.Language == Language.En;
                     int nameCount = main.Translations != null && main.Translations.ContainsKey(TranslationTables.UmaNames)
@@ -1457,8 +1342,7 @@ public static class UmaHeadlessExport
 
                     if (!usable || !namesSettled || (!fullyBooted && bootSeconds < options.BootTimeoutSeconds)) return;
 
-                    // once per run: a -umaScanExport sweep comes back through this stage for every prop, and
-                    // the boot summary is about the run, not about the prop
+                    // once per run: a -umaScanExport sweep comes back here for every prop, and the boot summary is about the run, not the prop
                     if (CliState.GetInt(KeyBootReported, 0) == 0)
                     {
                         CliState.SetInt(KeyBootReported, 1);
@@ -1490,8 +1374,7 @@ public static class UmaHeadlessExport
 
                     if (options.MorphNameMode >= 0)
                     {
-                        // the enum no longer has a slot 3 (it used to be "both"), and an unknown value would
-                        // otherwise be cast straight through and only show up as the wrong spelling in the file
+                        // a value past the last enum slot would otherwise be cast straight through and only show up as the wrong spelling in the file
                         if (options.MorphNameMode > (int)PmxMorphNameMode.Unified)
                         {
                             Fail($"-umaMorphNameMode takes 0 (tagged), 1 (short english) or 2 (unified), not {options.MorphNameMode}");
@@ -1594,8 +1477,7 @@ public static class UmaHeadlessExport
 
                     if (!string.IsNullOrEmpty(options.DumpProps))
                     {
-                        // The dump a picker or a web viewer reads: every prop, one folder each (its own textures
-                        // inside), and an index.json the page can load once instead of walking the tree.
+                        // The dump a picker or a web viewer reads: every prop, one folder each with its own textures, and an index.json the page loads once.
                         string root = Path.GetFullPath(options.DumpProps);
                         Directory.CreateDirectory(root);
                         LoadDumpIndex(root);
@@ -1682,17 +1564,15 @@ public static class UmaHeadlessExport
 
                         if (options.ScanExport)
                         {
-                            // straight on to the export stage with everything the export step reads set up,
-                            // exactly as the single -umaProp run does it
+                            // straight on to the export stage with everything the export step reads set up, exactly as the single -umaProp run does it
                             string sweepPath = Path.Combine(SweepFolder(options),
                                                             Path.GetFileName(entry.Name) + ".pmx");
                             sweepPath = Path.GetFullPath(sweepPath);
                             Directory.CreateDirectory(Path.GetDirectoryName(sweepPath));
                             // A sweep writes every prop into ONE folder, so a second run finds the first
                             // run's files. The success check below is File.Exists, which would then report
-                            // a scene that now fails to export as "exported" - at the old file's size - and
-                            // the run would exit 0. A sweep exists to find exactly those scenes, so the
-                            // target is cleared first and the check means what it says.
+                            // a scene that now fails to export as "exported" - and the run would exit 0. A
+                            // sweep exists to find exactly those scenes, so the target is cleared first.
                             if (File.Exists(sweepPath)) File.Delete(sweepPath);
                             CliState.SetString(KeyOutPath, sweepPath);
                             CliState.SetInt(KeyIsProp, 1);
@@ -1790,10 +1670,10 @@ public static class UmaHeadlessExport
                 }
 
                 case Stage.Settle:
+                    Lap("settle");
                     if (_settleFramesLeft-- > 0) return;
 
-                    // attachments go on once the character is settled and before anything is measured, so a
-                    // screenshot or an export of the run includes them (they are not a setting of their own)
+                    // attachments go on once the character is settled and before anything is measured, so the run's screenshots and exports include them
                     if (options.Attach.Count > 0 && !_attachmentsApplied)
                     {
                         _attachmentsApplied = true;
@@ -1810,9 +1690,7 @@ public static class UmaHeadlessExport
                         }
                         // `LoadAnimation` does nothing at all while the character's animator is still being built -
                         // it takes an `if (UmaAnimator)` and has no else - so applying the motion any earlier is a
-                        // silent no-op and the character then plays its own idle. Wait for the animator instead;
-                        // measured: without this, `-umaMotion <a dance>` logged "loading motion" and then reported
-                        // the character's `idle01_loop` as current, and the take recorded the idle.
+                        // silent no-op and the character then plays its own idle. Wait for the animator instead.
                         if (target.UmaAnimator == null)
                         {
                             return;
@@ -1832,17 +1710,14 @@ public static class UmaHeadlessExport
                         target.LoadAnimation(motionEntry);
                         // `LoadAnimation` puts a loop motion into the override controller's `clip_2` slot and
                         // starts the `motion_1` state, so what the animator reports as current at this instant is
-                        // still the clip it was playing - the previous one. Remember the clip that was asked for
-                        // and record that: measuring through `CurrentClip` recorded the character's own idle
-                        // against a 76-frame dance, 30 frames of `clip_t`.
+                        // still the previous clip. Remember the clip that was asked for and record that.
                         _requestedClip = motionEntry.Get<AnimationClip>();
                         if (_requestedClip != null) _requestedClip.name = motionEntry.Name;
                         Debug.Log($"{Tag} now playing '{CurrentClip(target.UmaAnimator)?.name}' "
                                   + $"(requested '{_requestedClip?.name}')");
                         CliState.SetInt(KeyMotionLoaded, 1);
                         _settleFramesLeft = options.ExtraFrames; // let the new clip settle before sampling
-                        // batch mode runs editor updates back to back, so frames alone are no time at all:
-                        // PlaySeconds is what lets a one shot animation actually reach its end
+                        // batch mode runs editor updates back to back, so frames alone are no time at all: PlaySeconds is what lets a one shot reach its end
                         _playDeadline = CliHost.Now + options.PlaySeconds;
                         return;
                     }
@@ -1852,8 +1727,7 @@ public static class UmaHeadlessExport
                         return;
                     }
 
-                    // the tears last: they have to be watched with the animator running, which needs wall clock
-                    // time rather than frames (see the note by _playDeadline)
+                    // the tears last: they have to be watched with the animator running, which needs wall clock time rather than frames
                     if (options.ProbeTears)
                     {
                         if (!_tearSamplingStarted)
@@ -1876,9 +1750,7 @@ public static class UmaHeadlessExport
 
                 case Stage.Screenshot:
                 {
-                    // the game's own render of the loaded character, for comparing a Blender shading setup
-                    // against what the game actually looks like. Several yaws in one run give the same view
-                    // under different light directions, which is what shading work is judged on.
+                    // the game's own render of the loaded character, for comparing a Blender shading setup against the game; several yaws give one per light direction.
                     string shotPath = Path.GetFullPath(options.Screenshot);
                     Directory.CreateDirectory(Path.GetDirectoryName(shotPath));
                     var container = CurrentContainer();
@@ -1893,20 +1765,16 @@ public static class UmaHeadlessExport
                         : ApplyShotFloatOverrides(container.gameObject, options.ShotFloats,
                                                   options.ShotMaterial);
                     double[] yaws = ParseShotYaws(options.ShotYaws, options.ShotYaw);
-                    // the viewer's face shading reads its light direction from the materials' _ViewDirX/_ViewDirY,
-                    // so a grid steps those instead of moving a scene light
+                    // the viewer's face shading reads its light direction from _ViewDirX/_ViewDirY, so a grid steps those instead of moving a light
                     double[] azimuths = ParseShotYaws(options.ShotAzimuths, 0.0);
                     string baseName = Path.GetFileNameWithoutExtension(shotPath);
                     string extension = Path.GetExtension(shotPath);
                     string folder = Path.GetDirectoryName(shotPath);
                     foreach (double azimuth in azimuths)
                     {
-                        // the light is applied for every shot, not only when there are several azimuths. A
-                        // single azimuth is a legitimate request - "render this view with the light at 90
-                        // degrees" - and skipping it silently renders the scene's own light instead, which
-                        // makes a one-value-per-run light sweep look as though the light does not matter.
-                        // Found by sweeping the light through six azimuths and measuring a 0.98 overlap
-                        // between two opposite ones.
+                        // the light is applied for every shot, not only when there are several azimuths: skipping it
+                        // for a single azimuth silently renders the scene's own light instead, which makes a
+                        // one-value-per-run light sweep look as though the light does not matter.
                         ApplyLightAzimuth(azimuth, options.ShotLightElevation);
                         foreach (double yaw in yaws)
                         {
@@ -1954,12 +1822,10 @@ public static class UmaHeadlessExport
                         return;
                     }
 
-                    // The motion has to be the thing actually playing, not merely the thing asked for. Applying it
+                    // The motion has to be the thing actually playing, not merely the thing asked for: applying it
                     // in the settle stage raced the character's own load sequence, which re-applies the idle
-                    // afterwards: measured, layer 0 was still playing `anm_eve_chr1001_00_idle01_loop` while a
-                    // 75-frame take labelled with the dance was recorded, so the take held the idle's animation
-                    // for the dance's frame count - a static hip and a constant spine. Re-apply and wait again
-                    // until the requested clip is the one on the animation layer.
+                    // afterwards, so the take held the idle's animation for the dance's frame count. Re-apply and
+                    // wait again until the requested clip is the one on the animation layer.
                     if (_requestedClip != null && _recordAttempts < 6)
                     {
                         var playing = CurrentClip(character.UmaAnimator);
@@ -2001,8 +1867,7 @@ public static class UmaHeadlessExport
 
                     if (CliState.GetInt(KeyVmdStarted, 0) == 0)
                     {
-                        // the motion that was asked for wins over what the state machine reports as current: the
-                        // state reports the clip it is still transitioning *from* (see the -umaMotion site)
+                        // the motion that was asked for wins over what the state machine reports as current (see the -umaMotion site)
                         var clip = _requestedClip != null ? _requestedClip : CurrentClip(character.UmaAnimator);
                         Debug.Log($"{Tag} recording clip '{clip?.name}' "
                                   + $"(animator currently reports '{CurrentClip(character.UmaAnimator)?.name}')");
@@ -2043,9 +1908,7 @@ public static class UmaHeadlessExport
 
                     if (CliState.GetInt(KeyVmdDone, 0) == 0) return; // still recording
 
-                    // The component defaults to 2 (its interactive default); recordings from here should be
-                    // full fidelity unless asked otherwise, which is also what Config.VmdKeyReductionLevel
-                    // means in the UI.
+                    // The component defaults to 2 (its interactive default); a recording from here should be full fidelity unless asked otherwise.
                     recorder.KeyReductionLevel = options.RecordReduction > 0
                         ? options.RecordReduction
                         : Mathf.Max(1, Config.Instance.VmdKeyReductionLevel);
@@ -2062,6 +1925,7 @@ public static class UmaHeadlessExport
 
                 case Stage.Export:
                 {
+                    Lap("export");
                     var container = CurrentContainer();
                     if (container == null)
                     {
@@ -2109,8 +1973,7 @@ public static class UmaHeadlessExport
                     }
 
                     Debug.Log($"{Tag} exporting to {exportPath}");
-                    // the exporter records what it writes, so the pmx can be compared against the game's
-                    // own data vertex by vertex rather than by matching positions after the fact
+                    // the exporter records what it writes, so the pmx can be compared against the game's own data vertex by vertex
                     ModelExporter.VertexDumpPath = options.DumpFace ? exportPath + ".vertices.txt" : null;
                     bool fbx = FbxExporter.IsFbxPath(exportPath);
                     Debug.Log($"{Tag} format: {(fbx ? "FBX" : "PMX")}"
@@ -2183,8 +2046,7 @@ public static class UmaHeadlessExport
         }
         catch (Exception ex)
         {
-            // A sweep exists to find the scenes that throw, so one of them throwing is a result, not the end of
-            // the run: it is recorded and the next prop is loaded. Any other stage keeps the old behaviour.
+            // A sweep exists to find the scenes that throw, so one of them throwing is a result, not the end of the run: it is recorded and the next loaded.
             if (CurrentOptions.ScanExport && CurrentStage == Stage.Export)
             {
                 ContinueSweep($"{ex.GetType().Name}: {ex.Message}");
@@ -2194,7 +2056,7 @@ public static class UmaHeadlessExport
                 ContinueBatch($"{ex.GetType().Name}: {ex.Message}");
                 return;
             }
-            // a dump is a sweep over 1 300 models: one that throws is recorded and skipped, like a sweep's
+            // a dump is a sweep over 1 300 models: one that throws is recorded and skipped, as in a sweep
             if (!string.IsNullOrEmpty(CurrentOptions.DumpProps)
                 && (CurrentStage == Stage.Export || CurrentStage == Stage.WaitModel || CurrentStage == Stage.Settle))
             {
@@ -2213,10 +2075,7 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// Sets a texture set row of the materials panel to on, which is exactly what clicking the
-    /// dropdown/toggle does. Returns true when a matching row was found.
-    /// </summary>
+    /// <summary>Sets a texture set row of the materials panel to on, exactly as clicking it does. True when a matching row was found.</summary>
     private static bool TryClickTextureSetRow(string variant, out string rowName)
     {
         rowName = null;
@@ -2273,14 +2132,10 @@ public static class UmaHeadlessExport
         return Path.Combine(Path.GetDirectoryName(Application.dataPath), "HeadlessExports", "scan");
     }
 
-    /// <summary>
-    /// Ends one prop of a -umaScanExport sweep and starts the next.
-    ///
-    /// The per-prop state has to go with it: the out path, the "is a prop" flag and the prop name are what the
-    /// export stage reads, and a leftover value would make the next prop write over the last one's file, or
-    /// name it wrongly in the log. The stage goes back to <see cref="Stage.WaitStartup"/>, which is where the
-    /// scan list is walked.
-    /// </summary>
+    /// <summary>Ends one prop of a -umaScanExport sweep and starts the next. The per-prop state has to go with it:
+    /// the out path, the "is a prop" flag and the prop name are what the export stage reads, and a leftover value
+    /// would make the next prop write over the last one's file. Back to <see cref="Stage.WaitStartup"/>, where the
+    /// scan list is walked.</summary>
     private static void ContinueSweep(string failure)
     {
         string name = CliState.GetString(KeyPropName, "");
@@ -2306,8 +2161,7 @@ public static class UmaHeadlessExport
     /// <summary>Name of the file a dump describes itself with, next to the model folders.</summary>
     private const string DumpIndexName = "index.json";
 
-    /// <summary>The three prop families, by manifest path prefix. `attach` and `sweat` are not props - see
-    /// docs/ASSET_FAMILIES.md - and their `clothes` variants are parts of a prop, not props.</summary>
+    /// <summary>The three prop families, by manifest path prefix. `attach` and `sweat` are not props (docs/ASSET_FAMILIES.md), nor are their `clothes` variants.</summary>
     private static readonly string[] PropPrefixes = { "pfb_chr_prop", "pfb_toon_prop", "pfb_rich_prop" };
 
     /// <summary>Every prop the manifest holds, in path order, optionally filtered and capped.</summary>
@@ -2318,8 +2172,7 @@ public static class UmaHeadlessExport
 
         var all = main.AbList.Values
             .Where(entry => IsPropPath(entry.Name))
-            // a dump is meant to be complete: a prop whose bundle is not in the local cache yet is downloaded as
-            // it is loaded (Config.DownloadMissingResources), and one that cannot be is reported and skipped
+            // a dump is meant to be complete: a prop whose bundle is not cached yet is downloaded as it is loaded (Config.DownloadMissingResources)
             .Where(entry => string.IsNullOrEmpty(filter) || entry.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
             .OrderBy(entry => entry.Name, StringComparer.Ordinal)
             .ToList();
@@ -2350,11 +2203,8 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Where a prop's model goes: `&lt;root&gt;/&lt;family&gt;/&lt;prop folder&gt;/&lt;prefab&gt;.pmx`.
-    ///
-    /// One folder per model, because the exporter writes its textures into `Texture2D/` beside the file: a single
-    /// flat folder would have every prop's maps in one place, which is fine on disk and wrong for a web page that
-    /// fetches one model at a time.
+    /// Where a prop's model goes: `&lt;root&gt;/&lt;family&gt;/&lt;prop folder&gt;/&lt;prefab&gt;.pmx`. One folder per model because
+    /// the exporter writes its textures into `Texture2D/` beside the file, and a web page fetches one model at a time.
     /// </summary>
     private static string DumpPath(string root, UmaDatabaseEntry entry, out string family)
     {
@@ -2430,11 +2280,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Records one model in the index and writes index.json.
-    ///
-    /// It is rewritten after every model rather than at the end: a full dump is 1 300 models and twenty minutes,
-    /// and a run that is stopped - by the user, by a crash, by one bad bundle - should still leave an index that
-    /// describes everything on disk.
+    /// Records one model in the index and writes index.json. Rewritten after every model rather than at the end
+    /// because a full dump is 1 300 models and twenty minutes, and a run that is stopped part way should still
+    /// leave an index that describes everything on disk.
     /// </summary>
     private static void RecordDump(string root, UmaDatabaseEntry entry, string family, string modelPath,
                                    UmaContainer container, string failure = null)
@@ -2512,10 +2360,7 @@ public static class UmaHeadlessExport
         File.WriteAllText(Path.Combine(root, DumpIndexName), JsonUtility.ToJson(index, true));
     }
 
-    /// <summary>
-    /// Ends one model of a `-umaDumpProps` run and starts the next: records it, then goes back to the stage that
-    /// walks the list. The per-prop state is cleared with it, so the next model cannot inherit the last one's path.
-    /// </summary>
+    /// <summary>Ends one model of a `-umaDumpProps` run and starts the next, with the per-prop state cleared so it cannot inherit the last one's path.</summary>
     private static void ContinueDump(string root, UmaDatabaseEntry entry, string family, string modelPath,
                                      UmaContainer container, string failure)
     {
@@ -2556,9 +2401,7 @@ public static class UmaHeadlessExport
     private static List<UmaDatabaseEntry> ScanCandidates(string filter, int count)
     {
         return UmaViewerMain.Instance.AbList.Values
-            // scenes first, but a character prop is a legitimate scan target too: "what is this family, and which
-            // of it hangs off a hand" is answered by loading a batch of them, and they load through the same
-            // UmaContainerProp path the UI uses
+            // scenes first, but a character prop is a legitimate scan target too: they load through the same UmaContainerProp path the UI uses
             .Where(e => e.Name.StartsWith("3d/env", StringComparison.OrdinalIgnoreCase)
                         || e.Name.StartsWith(UmaDatabaseController.CharaPath, StringComparison.Ordinal))
             .Where(e => Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
@@ -2570,11 +2413,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// One line on how a loaded prop is rigged: skinned to a hand, to a whole body, or not at all.
-    ///
-    /// This is how "which of these are held props" gets answered without opening sixty bundles by hand: a
-    /// hand-held prop's skin names wrist/finger bones, a scene prop has none (or a single root), and a prop that
-    /// merely reuses the uma armature names whole-body bones while sitting nowhere near a hand.
+    /// One line on how a loaded prop is rigged: skinned to a hand, to a whole body, or not at all. A hand-held
+    /// prop's skin names wrist/finger bones, a scene prop has none (or a single root), and a prop that merely reuses
+    /// the uma armature names whole-body bones while sitting nowhere near a hand.
     /// </summary>
     private static string SummarizeRig(UmaContainer container)
     {
@@ -2626,19 +2467,13 @@ public static class UmaHeadlessExport
                + $", size {size}";
     }
 
-    /// <summary>
-    /// How many of a prop's bone names the rig summary spells out. A prop can name fifty bones, and
-    /// the names are the only description the game gives it, so the sweep needs more than the first
-    /// handful - but a whole body skin's worth of names on one line buries the eight that say where
-    /// it mounts and what it is.
-    /// </summary>
+    /// <summary>How many of a prop's bone names the rig summary spells out: enough to say where it mounts and what it is.</summary>
     private const int RigNamesShown = 8;
 
     /// <summary>
-    /// Wears the `-umaAttach` prefabs on the loaded character, before anything is measured.
-    ///
-    /// Returns false (having failed the run) when a pattern matches nothing or no character is loaded, because a
-    /// measurement of an unattached character that was asked to be dressed is worse than no measurement.
+    /// Wears the `-umaAttach` prefabs on the loaded character, before anything is measured. Returns false (having
+    /// failed the run) when a pattern matches nothing or no character is loaded, because a measurement of an
+    /// unattached character that was asked to be dressed is worse than no measurement.
     /// </summary>
     private static bool ApplyAttachments(List<string> patterns)
     {
@@ -2685,6 +2520,9 @@ public static class UmaHeadlessExport
     }
 
 
+    /// <summary>Reports what the loaded model's materials actually resolved to. Props and scenes get no material
+    /// post-processing at all in UmaContainerProp, so materials the game assigns at runtime (weather/banner texture
+    /// sets) stay empty and render flat white.</summary>
     private static string SummarizeMaterials(UmaContainer container)
     {
         if (container == null) return "!! no container";
@@ -2713,16 +2551,12 @@ public static class UmaHeadlessExport
                + $"noMainTexProp={noMainTexProperty} missingShader={missingShader} shaders={shaders.Count} {resolved}";
     }
 
-    /// <summary>
-    /// Points the character's materials at a light azimuth, for the grid: the Nars face shader shades with its
-    /// view-rotated light direction, and _ViewDirX/_ViewDirY are what rotate it. Half a turn either way covers
-    /// the face from both sides.
-    /// </summary>
     private static Quaternion s_lightRestRotation;
     private static bool s_lightRestCaptured;
     private static double s_lightElevation = -1.0;
     private static float s_lightRestYaw = 0f;
 
+    /// <summary>Points the character's materials at a light azimuth: the Nars face shader shades with its view-rotated light direction (_ViewDirX/_ViewDirY).</summary>
     private static void ApplyLightAzimuth(double azimuth, double elevation)
     {
         s_lightElevation = elevation;
@@ -2737,8 +2571,7 @@ public static class UmaHeadlessExport
             if (!s_lightRestCaptured)
             {
                 s_lightRestRotation = light.transform.rotation;
-                // the scene's own azimuth is the zero: it is the direction the viewer lights the character from,
-                // and rebuilding the direction without it put the sun behind the model
+                // the scene's own azimuth is the zero - the direction the viewer lights the character from - and rebuilding without it put the sun behind the model
                 s_lightRestYaw = light.transform.eulerAngles.y;
                 s_lightRestCaptured = true;
             }
@@ -2748,12 +2581,10 @@ public static class UmaHeadlessExport
             turned++;
             Debug.Log($"{Tag} turned the directional light '{light.name}' to azimuth {azimuth:+0;-0;0} degrees "
                       + $"(elevation {light.transform.eulerAngles.x:F0}, at {light.transform.eulerAngles.y:F0})"
-                      // the vector itself, so the Blender tool can be given the same light: Unity's directional
-                      // light travels along its own forward
+                      // the vector itself, so the Blender tool can be given the same light: Unity's directional light travels along its own forward
                       + $", travelling along ({light.transform.forward.x:F4}, "
                       + $"{light.transform.forward.y:F4}, {light.transform.forward.z:F4})"
-                      // the colour and intensity too: the game's pixel program multiplies the diffuse by a
-                      // global that carries the light colour, so a warm scene light tints the face warm
+                      // the colour and intensity too: the pixel program multiplies the diffuse by a global carrying the light colour, so a warm light tints the face
                       + $", colour ({light.color.r:F3}, {light.color.g:F3}, {light.color.b:F3}) "
                       + $"intensity {light.intensity:F3}");
         }
@@ -2777,10 +2608,7 @@ public static class UmaHeadlessExport
             Debug.Log($"{Tag} and _ViewDirX on {applied} material(s)");
     }
 
-    /// <summary>
-    /// The camera angles to shoot: the comma separated list when one was given, otherwise the single -umaShotYaw
-    /// value. One angle writes the file as named, several write "&lt;name&gt;_yaw+45.png" and so on.
-    /// </summary>
+    /// <summary>The camera angles to shoot: the comma separated list when given, otherwise the single -umaShotYaw value; several write "_yaw+45.png" and so on.</summary>
     private static double[] ParseShotYaws(string list, double single)
     {
         if (string.IsNullOrWhiteSpace(list)) return new[] { single };
@@ -2798,12 +2626,10 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Renders the game's own view of the loaded character to a PNG, so a Blender shading setup can be
-    /// compared against what the game actually looks like. The camera is moved for the shot - the game
-    /// keeps its post processing, so this is the tone mapped result, not a raw buffer - and put back
-    /// afterwards, which leaves the export path untouched.
-    ///
-    /// Returns null on success, or a message describing what was missing.
+    /// Renders the game's own view of the loaded character to a PNG, so a Blender shading setup can be compared
+    /// against what the game actually looks like. The camera is moved for the shot - the game keeps its post
+    /// processing, so this is the tone mapped result, not a raw buffer - and put back afterwards. Returns null on
+    /// success, or a message describing what was missing.
     /// </summary>
     private static string CaptureGameScreenshot(Options options, string path)
     {
@@ -2827,8 +2653,7 @@ public static class UmaHeadlessExport
 
         var character = container as UmaContainerCharacter;
         Transform head = character != null && character.HeadBone != null ? character.HeadBone.transform : null;
-        // the game's bone axes point where the character looks, so the head's own forward is the way the face
-        // is turned - the same axis the exporter uses to aim the eye bones
+        // the game's bone axes point where the character looks, so the head's own forward is the way the face is turned - the axis the exporter aims eye bones with
         Vector3 facing = head != null ? head.forward : container.transform.forward;
         facing.y = 0f;
         if (facing.sqrMagnitude < 1e-6f) facing = Vector3.forward;
@@ -2897,10 +2722,7 @@ public static class UmaHeadlessExport
         return CliState.GetInt(KeyIsProp, 0) == 1 ? (UmaContainer)builder.CurrentOtherContainer : builder.CurrentUMAContainer;
     }
 
-    /// <summary>
-    /// Finds a prop/scene entry by exact asset path, or by a case insensitive substring of the path
-    /// or of the file name.
-    /// </summary>
+    /// <summary>Finds a prop/scene entry by exact asset path, or by a case insensitive substring of the path or of the file name.</summary>
     private static UmaDatabaseEntry FindPropEntry(string query)
     {
         var candidates = UmaViewerMain.Instance.AbList.Values.ToList();
@@ -2918,12 +2740,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Every texture asset in the character database whose name matches, filtered by name.
-    ///
-    /// This is how a variant set is *found* rather than assumed: the rain look exists because the game
-    /// ships a "..._wet" twin of every dry map, and that was established by reading names like this. Asking
-    /// for one character's textures and looking at the suffixes answers whether there is any other set (a
-    /// dirty one, a seasonal one) without guessing from a single prefab's material.
+    /// Every texture asset in the character database whose name matches, filtered by name. The suffixes are how a
+    /// variant set is *found* rather than assumed: the game ships a "..._wet" twin of every dry map, so any other
+    /// set it shipped would show up here as its own suffix.
     /// </summary>
     private static void PrintTextures(string filter)
     {
@@ -2947,8 +2766,7 @@ public static class UmaHeadlessExport
         var props = UmaViewerMain.Instance.AbList.Values
             .Where(e => e.Name.StartsWith("3d/env") && Path.GetFileName(e.Name).StartsWith("pfb_")
                         || (e.Name.StartsWith("cutt/cutt_son") && Path.GetFileName(e.Name).StartsWith("cutt_son"))
-                        // the prop families too: "list props" is asked by someone looking for a prop, and the
-                        // character props are the ones the prop panel shows
+                        // the prop families too: "list props" is asked by someone looking for a prop, and the panel shows the character props
                         || IsPropPath(e.Name))
             .Where(e => string.IsNullOrEmpty(filter) || e.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
             .OrderBy(e => e.Name)
@@ -2965,19 +2783,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// The families under `3d/chara/`, with what each one holds.
-    ///
-    /// The viewer asks for four of them by name (body, head, tail, mini) and touches `common` and `prop`
-    /// through narrower paths; `attach`, `richprop`, `sweat` and `toonprop` are loaded into <see
-    /// cref="UmaViewerMain.AbChara"/> at startup and then never asked for. Whether that is a missing
-    /// feature or four families of non-character assets is a question about **names**, so this answers it
-    /// from names alone: `AbChara` comes from the manifest, so nothing here opens a bundle (and
-    /// `Config.DownloadMissingResources` cannot fire).
-    ///
-    /// The `names:` column masks digit runs (`pfb_chr_prop####_##`) so ten thousand entries collapse to
-    /// the handful of forms a family is actually built from - that is what shows whether the prop panel's
-    /// literal `pfb_chr_prop` filter (UmaViewerUI.cs:555) can see a family. The `panel` column then counts
-    /// what that filter would offer today, so "does widening it help" is measurable rather than assumed.
+    /// The families under `3d/chara/`, with what each one holds. `AbChara` comes from the manifest, so nothing here
+    /// opens a bundle (and `Config.DownloadMissingResources` cannot fire). The `names:` column masks digit runs
+    /// (`pfb_chr_prop####_##`), and `panel` counts what the prop panel's literal `pfb_chr_prop` filter would show.
     /// </summary>
     private static void PrintFamilies(string filter)
     {
@@ -2988,8 +2796,7 @@ public static class UmaHeadlessExport
             return;
         }
 
-        // the same prefix UmaViewerMain.LoadDatabase filters on, so "family" here means the same thing it
-        // means there: everything under 3d/chara/
+        // the same prefix UmaViewerMain.LoadDatabase filters on, so "family" here means everything under 3d/chara/
         string charaPath = UmaDatabaseController.CharaPath;
         var byFamily = new Dictionary<string, List<UmaDatabaseEntry>>(StringComparer.Ordinal);
         foreach (var entry in main.AbChara)
@@ -3033,10 +2840,7 @@ public static class UmaHeadlessExport
             foreach (string sample in entries.Select(e => e.Name).OrderBy(n => n, StringComparer.Ordinal).Take(3))
                 Debug.Log($"{Tag}     e.g. {sample}");
 
-            // When the filter names a single family the question is about *that* family, and the useful next
-            // question is which ids it covers: a family's folder carries the character id and costume
-            // (attach1048_00, bdy1001_00), which is what a "these belong on this character" panel pairs
-            // against. Printed only for a single-family query, so a plain -umaListFamilies stays a summary.
+            // For a single family, which ids it covers: a family's folder carries the character id and costume (attach1048_00, bdy1001_00).
             if (families.Count == 1)
                 PrintFamilyFolders(entries, charaPath, family);
         }
@@ -3083,11 +2887,7 @@ public static class UmaHeadlessExport
         return masked.ToString();
     }
 
-    /// <summary>
-    /// Every property of every shader the model uses, with the value it has on the first material seen.
-    /// This is how the parameters worth carrying into an export were identified (the ones the uma shader
-    /// actually drives), and it is how a game update that renames them will be noticed.
-    /// </summary>
+    /// <summary>Every property of every shader the model uses, with the value it has on the first material seen: the parameters worth carrying into an export.</summary>
     private static void DumpShaderProperties(GameObject root, string stem)
     {
         var seen = new HashSet<string>();
@@ -3134,16 +2934,9 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// Reports what the loaded model's materials actually resolved to. Props and scenes get no
-    /// material post-processing at all in UmaContainerProp, so materials the game assigns at runtime
-    /// (weather/banner texture sets) stay empty and render flat white.
-    /// </summary>
-    /// <summary>
-    /// Freezes every animator under the container at a normalised time. Two shots of the same model are only
-    /// comparable if the pose matches, and this viewer's model animates: a baseline against a perturbed
-    /// render otherwise shows the pose moving as well as whatever was perturbed.
-    /// </summary>
+    /// <summary>Freezes every animator under the container at a normalised time. Two shots of the same model are
+    /// only comparable if the pose matches, and this viewer's model animates: a baseline against a perturbed render
+    /// otherwise shows the pose moving as well as whatever was perturbed.</summary>
     private static void PinContainerPose(UmaContainer container, double normalisedTime)
     {
         int pinned = 0;
@@ -3165,12 +2958,9 @@ public static class UmaHeadlessExport
         public float Original;
     }
 
-    /// <summary>
-    /// Sets named material floats for the duration of a shot. `_faceShadowAlpha` is the reason this exists:
-    /// it is a *driven* property of the game's facial driven-key system (`Gallop/FaceDrivenKeyTarget` binds it
-    /// to a `Shade_Ctrl` morph), so its value in the material is only its rest value of 0, and the cheek and
-    /// nose regions are inert. Forcing it is how to see what those regions do.
-    /// </summary>
+    /// <summary>Sets named material floats for the duration of a shot. `_faceShadowAlpha` is why this exists: it is
+    /// a *driven* property of the facial driven-key system (`Gallop/FaceDrivenKeyTarget` binds it to a `Shade_Ctrl`
+    /// morph), so the material only holds its rest value of 0 and the cheek and nose regions are inert.</summary>
     private static List<FloatOverride> ApplyShotFloatOverrides(GameObject root, List<string> specs,
                                                               string only = "")
     {
@@ -3235,12 +3025,10 @@ public static class UmaHeadlessExport
         public float Value;
     }
 
-    /// <summary>
-    /// Sets named shader globals for the duration of a shot. The face program ends by blending its colour
+    /// <summary>Sets named shader globals for the duration of a shot. The face program ends by blending its colour
     /// toward a global by a per-vertex factor, and that global lives in the viewer's own buffer
-    /// (UmaViewerGlobalShader), so overriding it is how to tell whether the viewer's render is fogged or
-    /// lightmapped in a way the game's material knows nothing about.
-    /// </summary>
+    /// (UmaViewerGlobalShader), so overriding it tells whether the viewer's render is fogged or lightmapped in a way
+    /// the game's material knows nothing about.</summary>
     private static List<GlobalOverride> ApplyShotGlobalOverrides(List<string> specs)
     {
         var applied = new List<GlobalOverride>();
@@ -3318,12 +3106,9 @@ public static class UmaHeadlessExport
         public Texture Original;
     }
 
-    /// <summary>
-    /// Replaces named texture properties with a solid colour, so a term of the game's compiled shader can be
-    /// asked what it reads: hand the term a colour it could not otherwise produce and see whether it turns up
-    /// in the render. This is the only way to name a texture register - the shipped containers have no RDEF
-    /// chunk, and the per-container records in the blob region are not in layout order.
-    /// </summary>
+    /// <summary>Replaces named texture properties with a solid colour, so a term of the game's compiled shader can
+    /// be asked what it reads: hand it a colour it could not otherwise produce and see whether it turns up in the
+    /// render. The shipped containers have no RDEF chunk, so this is the only way to name a texture register.</summary>
     private static List<ShotTextureOverride> ApplyShotTextureOverrides(GameObject root, List<string> specs,
                                                                      string only = "")
     {
@@ -3332,8 +3117,7 @@ public static class UmaHeadlessExport
 
         foreach (string raw in specs)
         {
-            // quoted forms turn up when a caller passes an array through a shell, so strip them rather
-            // than throw on them
+            // quoted forms turn up when a caller passes an array through a shell, so strip them rather than throw
             string spec = raw.Trim().Trim('\'', '"');
             int equals = spec.IndexOf('=');
             if (equals < 0)
@@ -3404,31 +3188,15 @@ public static class UmaHeadlessExport
         applied.Clear();
     }
 
-    /// <summary>
-    /// Everything after the meta database: the material the game's shader actually receives, the textures bound to
-    /// it, and the mesh facts the shader depends on. The stored bundle material is not necessarily the runtime one -
-    /// the viewer overwrites textures and properties when it loads a character - and the face shader's
-    /// _NormalizeNormal is 0, so the length of its vertex normals matters.
-    /// </summary>
     /// <summary>Whether the face pipeline has already been dumped this run; the editor probes share it.</summary>
     public static bool FaceDumped;
 
-    /// <summary>
-    /// What the facial morph system holds at runtime, for a character that was set up but not exported.
-    ///
-    /// The extra morphs are built in code from the character's own parts (FaceDrivenKeyTarget.InitializeExtra),
-    /// so a morph being absent means one of those parts was missing when the target initialised. This prints the
-    /// parts themselves as well, so the report says *why* rather than only what.
-    /// </summary>
     /// <summary>Watchers for -ProbeTears: the tears are sampled over wall clock time, not frames.</summary>
     private static bool _tearSamplingStarted;
     private static double _tearSampleDeadline;
     private static int _tearSampleCount;
 
-    /// <summary>
-    /// Switches the tears on the way the UI does - every `Tear*_Ctrl` weight to 1 - and marks the animation as
-    /// running. Note the objects only animate once they are active, and the animator then needs real time.
-    /// </summary>
+    /// <summary>Switches the tears on the way the UI does - every `Tear*_Ctrl` weight to 1. They only animate once active, and the animator then needs real time.</summary>
     private static void BeginTearSampling()
     {
         var character = CurrentContainer() as UmaContainerCharacter;
@@ -3452,8 +3220,7 @@ public static class UmaHeadlessExport
         }
         Debug.Log($"{Tag} [tears] sampling '{character.name}' for {_tearSampleSeconds:F1}s, {driven} weight(s) raised");
 
-        // and sweep the clip from end to end, because wall clock is far too slow in batch mode to walk 4.267s of
-        // animation (two seconds of it advance the state by about 1%)
+        // and sweep the clip from end to end: wall clock in batch mode is far too slow to walk 4.267s of animation (2s advances it about 1%)
         for (int index = 0; index < character.TearControllers.Count; index++)
         {
             TearController controller = character.TearControllers[index];
@@ -3464,10 +3231,7 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// Steps the animator through the clip by normalised time and reports the posed extent each step. This is the
-    /// routine an export would use to bake the roll into morphs, so it is the same code path either way.
-    /// </summary>
+    /// <summary>Steps the animator through the clip by normalised time and reports the posed extent each step - the routine an export would use to bake the roll.</summary>
     private static void SweepTearClip(string label, GameObject part)
     {
         Animator animator = part.GetComponent<Animator>();
@@ -3533,8 +3297,8 @@ public static class UmaHeadlessExport
             if (part == null) continue;
             Animator animator = part.GetComponent<Animator>();
             // An animator in the default culling mode does not write its bone transforms when the renderer is not
-            // being drawn, and batch mode draws nothing at all - which is exactly how a card that visibly rolls in
-            // the editor measured rigid here. AlwaysAnimate is what makes the pose real without a camera.
+            // being drawn, and batch mode draws nothing at all - which is how a card that visibly rolls in the
+            // editor measures rigid here. AlwaysAnimate is what makes the pose real without a camera.
             if (animator != null && animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
             {
                 animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
@@ -3578,14 +3342,10 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// How the animated tears are actually built, because the exporter only ever sees half of it.
-    ///
-    /// A tear is a <see cref="SkinnedMeshRenderer"/> posed by an <see cref="Animator"/> whose clip is the prefab's
-    /// own `default_animation`. `ModelExporter` reads `mesh.vertices`, which for a skinned mesh is the *bind*
-    /// pose - if the clip scales a bone to stretch the card from the eye corner down the cheek, the exported card
-    /// is only the bind-pose stub. This prints the bind-pose extent, the posed extent (through BakeMesh, which
-    /// runs the skinning for real), the skeleton, and the clip's own curves, so an authored-long card and a
-    /// card-that-only-becomes-long-when-posed can be told apart.
+    /// How the animated tears are actually built, because the exporter only ever sees half of it. A tear is a
+    /// <see cref="SkinnedMeshRenderer"/> posed by an <see cref="Animator"/> whose clip is the prefab's own
+    /// `default_animation`, and `ModelExporter` reads `mesh.vertices`, which for a skinned mesh is the *bind* pose:
+    /// a card a scaled bone stretches down the cheek exports as the bind-pose stub.
     /// </summary>
     private static void DumpTearState(UmaContainerCharacter character)
     {
@@ -3599,8 +3359,7 @@ public static class UmaHeadlessExport
                   + $"FaceDrivenKeyTarget={(character.FaceDrivenKeyTarget != null)}, "
                   + $"spring containers on the character={character.cySpringDataContainers.Count}");
 
-        // springs bind by bone *name* into one dictionary built from every transform on the character, so a
-        // container that lists joint000..joint010 is what makes a tear ribbon hang down the cheek
+        // springs bind by bone *name* into one dictionary built from every transform, so a container listing joint000..joint010 hangs the ribbon down the cheek
         int springHits = 0;
         foreach (CySpringDataContainer spring in character.cySpringDataContainers)
         {
@@ -3618,8 +3377,7 @@ public static class UmaHeadlessExport
         }
         Debug.Log($"{Tag} [tears] spring params naming a 'joint': {springHits}");
 
-        // every asset the prefab carries, because the body's chara_shader_effect was exactly the kind of thing
-        // that hid in a table we had not enumerated yet
+        // every asset the prefab carries: the body's chara_shader_effect was the kind of thing that hid in a table nothing had enumerated
         for (int index = 0; index < character.TearControllers.Count; index++)
         {
             TearController controller = character.TearControllers[index];
@@ -3664,8 +3422,7 @@ public static class UmaHeadlessExport
             }
         }
 
-        // the ribbon points along its own local +Y, so whichever transform it is hung from decides whether the
-        // stream runs down the cheek or up over the eye - print the attach bones' orientation, and the head's
+        // the ribbon points along its own local +Y, so the transform it hangs from decides whether the stream runs down the cheek or up over the eye
         Transform head = null;
         foreach (Transform candidate in character.GetComponentsInChildren<Transform>(true))
         {
@@ -3721,8 +3478,7 @@ public static class UmaHeadlessExport
                       + $"{holder._assetTableValue["texture_part_height"]}");
         }
 
-        // what is actually attached, because that says how the ribbon is meant to move: an Animator, a
-        // CySpringDataContainer, a DynamicBone, or nothing at all
+        // what is actually attached, because that says how the ribbon is meant to move: an Animator, a CySpringDataContainer, a DynamicBone, or nothing
         var types = new Dictionary<string, int>();
         foreach (Component component in part.GetComponentsInChildren<Component>(true))
         {
@@ -3743,8 +3499,7 @@ public static class UmaHeadlessExport
             Debug.Log($"{Tag} {label}   CySpring '{spring.name}' on '{spring.gameObject.name}'");
         }
 
-        // the parts sit switched off until a controller raises their weight, and skinning only evaluates on an
-        // active renderer, so the measurement happens on an activated copy of the state and the state is restored
+        // the parts sit switched off until a controller raises their weight, and skinning only evaluates on an active renderer, so this measures a copy
         bool wasActive = part.activeSelf;
         part.SetActive(true);
         try
@@ -3777,8 +3532,7 @@ public static class UmaHeadlessExport
                 Animator animator = part.GetComponent<Animator>() ?? part.GetComponentInChildren<Animator>(true);
                 DumpTearAnimator(label, animator, part);
 
-                // the game raises the weight, which activates the object, and only then does the animator run -
-                // an inactive animator never evaluates, so this is the state the mesh is actually drawn in
+                // the game raises the weight, which activates the object, and only then does the animator run - an inactive animator never evaluates
                 if (animator != null && animator.runtimeAnimatorController != null)
                 {
                     animator.speed = 1f;
@@ -3792,8 +3546,7 @@ public static class UmaHeadlessExport
                 {
                     if (animator != null && animator.runtimeAnimatorController != null && animator.avatar != null)
                     {
-                        // speed 1 with a tiny step: the pose is set by the normalised time, and the step is what
-                        // makes Unity evaluate it at all (a zero step often evaluates nothing)
+                        // speed 1 with a tiny step: the pose is set by the normalised time, and a zero step often evaluates nothing
                         animator.speed = 1f;
                         animator.Play(0, 0, time);
                         animator.Update(0.0001f);
@@ -3825,11 +3578,7 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// Every asset in the tear bundles, with curve counts for anything that is an animation. The clip the
-    /// reconstruction picks (`default_animation`) is empty as loaded; if the real animation lives in a sibling
-    /// clip, it is in one of these bundles and this finds it.
-    /// </summary>
+    /// <summary>Every asset in the tear bundles, with curve counts for animations: the clip the reconstruction picks (`default_animation`) is empty as loaded.</summary>
     private static void DumpTearBundles()
     {
         if (CliEditorProbeHooks.DumpTearBundles == null)
@@ -3896,10 +3645,7 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// The clip's serialized fields, to a shallow depth: which curve lists exist and how big they are. This is
-    /// how you tell "the clip is empty" apart from "the clip has data that GetCurveBindings does not report".
-    /// </summary>
+    /// <summary>The clip's serialized fields, to a shallow depth: which curve lists exist and how big, to tell an empty clip from unreported data.</summary>
     private static void DumpClipSerialized(string label, AnimationClip clip)
     {
         if (CliEditorProbeHooks.DumpClipSerialized == null)
@@ -3972,19 +3718,10 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// The eye-highlight numbers the game actually ships: how far <c>_Limit</c> drops in the teary state, and
-    /// the throb's rate and amplitude - the three values docs/UMA_EYE_SHADER.md leaves open.
-    ///
-    /// This is worth reading here rather than reaching for an extractor for two reasons. The harness already
-    /// loads the game's own bundles, and UmaContainerCharacter swaps each material's shader for the game's
-    /// *shipped* compiled shader out of shader.a (<see cref="UmaAssetManager.EyeShader"/>), so the property list
-    /// and the values below are the real ones rather than a port's. What a compiled shader can give is
-    /// properties and defaults, never source - the decompile stays the source of truth for the logic.
-    ///
-    /// Prints every property of the eye/face/cheek materials rather than a guessed subset: the property names
-    /// on the shipped shader are not known in advance, so a filter is what would hide the answer. Then it prints
-    /// chara_shader_effect, the one asset the game keeps runtime material-driving numbers in, and scans a few
-    /// motion bundles for clips that animate a material property - where a keyframed teary threshold would live.
+    /// The eye-highlight numbers the game actually ships: how far <c>_Limit</c> drops in the teary state, and the
+    /// throb's rate and amplitude - the three values docs/UMA_EYE_SHADER.md leaves open. UmaContainerCharacter swaps
+    /// each material's shader for the game's *shipped* compiled shader (<see cref="UmaAssetManager.EyeShader"/>), so
+    /// these defaults are the real ones. A compiled shader gives properties and defaults, never source.
     /// </summary>
     private static void DumpShaderFacts(UmaContainer container)
     {
@@ -4000,12 +3737,9 @@ public static class UmaHeadlessExport
     public static bool Contains(string text, string needle) =>
         !string.IsNullOrEmpty(text) && text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
 
-    /// <summary>
-    /// chara_shader_effect, printed as the serialised fields it is stored as. This is the one asset that carries
-    /// runtime material-driving numbers rather than a static material value: CharaShaderEffectData.updateUV
-    /// writes _UVEmissiveScroll and _UVEmissivePower from these params every frame, which is the mechanism
-    /// behind the animated tears. The fields are private, so this goes through SerializedObject.
-    /// </summary>
+    /// <summary>chara_shader_effect as the serialised fields it is stored as: the one asset carrying runtime
+    /// material-driving numbers, whose CharaShaderEffectData.updateUV writes _UVEmissiveScroll and _UVEmissivePower
+    /// every frame - the mechanism behind the animated tears. The fields are private, so this uses SerializedObject.</summary>
     private static void DumpShaderEffectData(string label, CharaShaderEffectData data)
     {
         if (CliEditorProbeHooks.DumpShaderEffectData == null)
@@ -4026,13 +3760,9 @@ public static class UmaHeadlessExport
         CliEditorProbeHooks.DumpFacePipeline(root, stem);
     }
 
-    /// <summary>
-    /// Writes the arrays the exporter reads for one renderer, so the pmx it produced can be compared
-    /// against the game's own data vertex by vertex rather than through a histogram. The positions are
-    /// written in exactly the space the exporter writes them in
-    /// (root.InverseTransformPoint(renderer.transform.TransformPoint(baked.vertices[i]))), which makes
-    /// the pmx's own order a valid alignment for the rest.
-    /// </summary>
+    /// <summary>Writes the arrays the exporter reads for one renderer, so the pmx it produced can be compared
+    /// against the game's own data vertex by vertex rather than through a histogram. The positions are written in
+    /// exactly the space the exporter writes them in, so the pmx's own vertex order is a valid alignment.</summary>
     public static void DumpMeshArrays(SkinnedMeshRenderer renderer, Mesh mesh, GameObject root)
     {
         string exportPath = CliState.GetString(KeyOutPath, "");
@@ -4170,9 +3900,7 @@ public static class UmaHeadlessExport
 
         if (string.IsNullOrEmpty(stem)) return;
 
-        // everything the loaded bundles brought into memory that belongs to this scene - this is both
-        // the evidence that the prefab's materials are intentionally textureless and the candidate
-        // list a texture-set dropdown would offer
+        // everything the loaded bundles brought into memory for this scene: the evidence that the prefab's materials are textureless, and the variant candidates
         var materialAssets = Resources.FindObjectsOfTypeAll<Material>()
             .Where(m => m.name.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0)
             .OrderBy(m => m.name)
@@ -4194,8 +3922,7 @@ public static class UmaHeadlessExport
         Debug.Log($"{Tag}   texture assets matching '{stem}': {textureAssets.Count}");
         foreach (string texture in textureAssets.Take(80)) Debug.Log($"{Tag}     {texture}");
 
-        // The interesting question: for a material like "mtl_<stem>_000_<suffix>" that has no texture,
-        // does a "tex_<stem>_<variant>_<suffix>" texture set exist as a separate loadable asset?
+        // The interesting question: for a "mtl_<stem>_000_<suffix>" material with no texture, is there a loadable "tex_<stem>_<variant>_<suffix>" set?
         var suffixes = Resources.FindObjectsOfTypeAll<Material>()
             .Where(m => m.name.StartsWith($"mtl_{stem}_", StringComparison.OrdinalIgnoreCase))
             .Where(m => m.HasProperty("_MainTex") && m.GetTexture("_MainTex") == null)
@@ -4299,11 +4026,7 @@ public static class UmaHeadlessExport
         public string kind;
         public int id;
         public string costume;
-        /// <summary>
-        /// What that costume is called - "Default", "Race Shorts", or the story outfit's own name ("スペシャルドリーマー").
-        /// The id alone ("00") says nothing, and the exporter already knows the name: it is what its save dialog
-        /// suggests as a file name, and what the costume list shows.
-        /// </summary>
+        /// <summary>What that costume is called - "Default", "Race Shorts", or the story outfit's own name. The id alone ("00") says nothing.</summary>
         public string costumeName;
         /// <summary>Prefab name for a prop, `&lt;id&gt;_&lt;costume&gt;` for a character.</summary>
         public string name;
@@ -4319,12 +4042,9 @@ public static class UmaHeadlessExport
         /// <summary>Every map file the model names, so one model can be downloaded on its own.</summary>
         public List<string> maps = new List<string>();
         public long bytes;
-        /// <summary>
-        /// The box the model's vertices occupy, "x,y,z" in PMX units. One unit is 8 cm - the convention the Blender
-        /// tools here import at (`--import-scale 0.08`, the reciprocal of the `--scale 12.5` the VMD tools use) - so
-        /// a 20.2-unit character is 1.6 m tall. Recorded in the file's own units because that is what the file says;
-        /// the conversion belongs to whoever is displaying it, and it is a convention rather than a measurement.
-        /// </summary>
+        /// <summary>The box the model's vertices occupy, "x,y,z" in PMX units. One unit is 8 cm - the convention the
+        /// Blender tools here import at (`--import-scale 0.08`, the reciprocal of the `--scale 12.5` the VMD tools
+        /// use) - so a 20.2-unit character is 1.6 m tall. Recorded in the file's own units, unfixed.</summary>
         public string size;
         public int bones;
         /// <summary>Hand and finger bones: a prop that says so is meant to be held.</summary>
@@ -4360,15 +4080,42 @@ public static class UmaHeadlessExport
 
     /// <summary>
     /// The dump a browser reads: characters and props under one root, one index.json, and one shared `Texture2D/`
-    /// folder per kind.
-    ///
-    /// The texture folder is shared *per kind* rather than per model because a PMX names its maps as relative
-    /// paths (`Texture2D/tex_x_diff.png`, resolved next to the model): models and their maps have to sit side by
-    /// side, and putting every character's models in one folder lets them share one `Texture2D/` - four costumes
-    /// of one character share 48 of their 180 maps - while everything that opens a PMX (MMD, Blender, a browser)
-    /// still resolves it with no help. `--packs` writes a `.zip` per model with the same layout inside, for a
-    /// single-model download.
+    /// folder per kind. A PMX names its maps as relative paths resolved next to the model, so models and maps must
+    /// sit side by side, and models of one kind can then share them - four costumes of a character share 48 of their
+    /// 180 maps. `--packs` writes a `.zip` per model with the same layout inside.
     /// </summary>
+    /// <summary>
+    /// The plan for this run, built once. Every model used to rebuild it by walking the whole manifest (37 579
+    /// entries) and sorting it, which cost about three seconds a model - half of a dump's wall clock - although the
+    /// manifest does not change between models. A domain reload clears the cache, and a manifest that grew
+    /// invalidates it, so a dump that downloads buckets still sees the entries it gained.
+    /// </summary>
+    private static List<ModelDumpJob> CachedModelDumpPlan(Options options, out string failure)
+    {
+        string key = $"{options.DumpModels}|{options.DumpModelsChars}|{options.DumpModelsProps}"
+                   + $"|{options.DumpPropsFilter}|{options.DumpModelsCount}";
+        int manifest = UmaViewerMain.Instance != null && UmaViewerMain.Instance.AbList != null
+            ? UmaViewerMain.Instance.AbList.Count
+            : 0;
+        if (_cachedPlanJobs != null && _cachedPlanKey == key && _cachedPlanManifest == manifest)
+        {
+            failure = null;
+            return _cachedPlanJobs;
+        }
+        var plan = ModelDumpPlan(options, out failure);
+        if (failure == null)
+        {
+            _cachedPlanKey = key;
+            _cachedPlanManifest = manifest;
+            _cachedPlanJobs = plan;
+        }
+        return plan;
+    }
+
+    private static string _cachedPlanKey;
+    private static int _cachedPlanManifest;
+    private static List<ModelDumpJob> _cachedPlanJobs;
+
     private static void ModelDumpStep(Options options)
     {
         string root = Path.GetFullPath(options.DumpModels);
@@ -4380,20 +4127,21 @@ public static class UmaHeadlessExport
             return;
         }
 
-        var plan = ModelDumpPlan(options, out string failure);
+        Lap("plan");
+        var plan = CachedModelDumpPlan(options, out string failure);
         if (failure != null)
         {
             Fail(failure);
             return;
         }
+        Lap("index");
         if (plan.Count == 0)
         {
             Fail("nothing to dump: no characters or props matched");
             return;
         }
 
-        // the plan is rebuilt from the manifest every time, so only the index has to survive the play-mode domain
-        // reload a long dump spans
+        // the plan is rebuilt from the manifest every time, so only the index has to survive the play-mode domain reload a long dump spans
         var entries = LoadModelDumpIndex(root);
         int index = CliState.GetInt(KeyModelDumpIndex, 0);
         if (CliState.GetInt(KeyModelDumpPlanned, 0) == 0)
@@ -4406,8 +4154,7 @@ public static class UmaHeadlessExport
                       + (options.Thumbs ? ", each with a preview" : ""));
         }
 
-        // skip what is already on disk *and complete*: a model whose file is there but whose maps are not would
-        // otherwise be skipped for ever, and the dump would stay quietly broken
+        // skip what is already on disk *and complete*: a model whose file is there but whose maps are not would otherwise be skipped for ever
         int skipped = 0;
         int repaired = 0;
         while (index < plan.Count && IsModelAlreadyDumped(root, plan[index], options.Packs, options.Thumbs))
@@ -4449,6 +4196,8 @@ public static class UmaHeadlessExport
         CliState.SetString(KeyPropName, job.kind == "prop" ? job.key : "");
         CliState.SetInt(KeyIsProp, job.kind == "prop" ? 1 : 0);
         Debug.Log($"{Tag} [{index + 1}/{plan.Count}] dumping {job.model}");
+        if (index == 0) ResetLaps();          // the first model has no idle lap to close
+        Lap("load");
 
         if (job.kind == "prop")
         {
@@ -4482,10 +4231,7 @@ public static class UmaHeadlessExport
         CurrentStage = Stage.WaitModel;
     }
 
-    /// <summary>
-    /// The job behind a file a dump just wrote: the path carries everything the record needs, so the export stage
-    /// does not have to keep one in a field that the play-mode reload would clear.
-    /// </summary>
+    /// <summary>The job behind a file a dump just wrote: the path carries everything the record needs, so nothing has to survive the play-mode reload.</summary>
     private static ModelDumpJob ModelDumpJobFor(Options options, string writtenPath)
     {
         string root = Path.GetFullPath(options.DumpModels);
@@ -4501,15 +4247,9 @@ public static class UmaHeadlessExport
         return new ModelDumpJob { kind = "prop", key = CliState.GetString(KeyPropName, ""), model = relative };
     }
 
-    /// <summary>
-    /// The name of a costume: the story outfit's own name when the game gives one, and the viewer's label for the
-    /// generic costumes otherwise ("Default", "Upgraded", "Race Shorts").
-    ///
-    /// This is `UmaViewerUI.GetCostumeName`, which is what the costume list and the export's save dialog use - the
-    /// dump records the same string so a browser can say "Special Week · Special Dreamer" rather than "1001_02".
-    /// The id alone never gets to the human: "00" is the only costume most characters have and it is still called
-    /// "Default".
-    /// </summary>
+    /// <summary>The name of a costume: the story outfit's own name when the game gives one, and the viewer's label
+    /// for the generic ones ("Default", "Upgraded", "Race Shorts") via `UmaViewerUI.GetCostumeName`, which is what the
+    /// costume list and the export's save dialog use. The id alone never reaches a human.</summary>
     private static string CostumeLabel(int charaId, string costumeId)
     {
         if (string.IsNullOrEmpty(costumeId)) return "";
@@ -4526,13 +4266,9 @@ public static class UmaHeadlessExport
 
     /// <summary>
     /// Rewrites every fact in a dump's index that can be read back from the models themselves, and exports nothing.
-    ///
-    /// This exists because the index records what the exporter believed at the time, and a belief can be wrong: the
-    /// size was measured from a skinned renderer's bounds - the box of the bones - and wrote character 1001 as 16.7 x
-    /// 6.2 x 25.9 units tall while she stands 1.6. Re-exporting a thousand models to correct a number is absurd when
-    /// the number is in the file, so this reads each PMX and rewrites the size and the map list from it. A model that
-    /// has gone missing is reported and skipped rather than silently dropped: the index is the dump's own statement of
-    /// what it holds.
+    /// The index records what the exporter believed at the time, and a belief can be wrong: the size was measured
+    /// from a skinned renderer's bounds - the box of the bones - which wrote character 1001 as 25.9 units tall while
+    /// she stands 1.6. Re-exporting a thousand models to correct a number that is in the file is absurd.
     /// </summary>
     private static void RefreshModelDump(string root)
     {
@@ -4581,15 +4317,9 @@ public static class UmaHeadlessExport
         Succeed();
     }
 
-    /// <summary>
-    /// Brings a skipped model's index entry up to date from its own PMX, without exporting anything.
-    ///
-    /// A dump records what the exporter believed while the model was loaded, and the exporter used to believe a
-    /// skinned model's bounding box - which is the box of its bones, not of its body: character 1001 was written as
-    /// 16.7 x 6.2 x 25.9 units tall while standing 1.6, and the browser showed that as "size". The PMX carries the
-    /// vertices, so the honest box can be read back at any time; doing it here means a dump made before this is
-    /// repaired by the next run over it rather than by exporting a thousand models again.
-    /// </summary>
+    /// <summary>Brings a skipped model's index entry up to date from its own PMX, without exporting anything: the
+    /// recorded size came from a skinned renderer's bounds - the box of the bones, not of the body - while the PMX
+    /// carries the vertices, so a dump made with the wrong bounds is repaired by the next run over it.</summary>
     private static bool RefreshSkippedFacts(string root, ModelDumpJob job, List<ModelDumpEntry> entries)
     {
         var record = entries.FirstOrDefault(entry => entry.model == job.model);
@@ -4597,8 +4327,7 @@ public static class UmaHeadlessExport
         try
         {
             var facts = PmxTextureList.Scan(Path.Combine(root, job.model));
-            // the costume name comes from the game's own data rather than from the file, so a dump made before it was
-            // recorded can still get it - which is the difference between repairing a dump and rebuilding it
+            // the costume name comes from the game's own data rather than the file, so a dump that never recorded it can still get it
             string costumeName = record.kind == "character" && string.IsNullOrEmpty(record.costumeName)
                 ? CostumeLabel(record.id, record.costume)
                 : record.costumeName;
@@ -4618,11 +4347,9 @@ public static class UmaHeadlessExport
         }
     }
 
-    /// <summary>
-    /// Whether a dump already holds this model, completely: the file, every map it names, and its pack.
-    /// Reading the PMX back is what makes a resumed dump able to repair itself instead of skipping past a hole -
-    /// deleting one texture is enough to make a model unloadable, and the skip used to be file existence alone.
-    /// </summary>
+    /// <summary>Whether a dump already holds this model, completely: the file, every map it names, and its pack.
+    /// Reading the PMX back is what lets a resumed dump repair itself instead of skipping past a hole - deleting one
+    /// texture is enough to make a model unloadable.</summary>
     private static bool IsModelAlreadyDumped(string root, ModelDumpJob job, bool wantPack, bool wantThumb)
     {
         string path = Path.Combine(root, job.model);
@@ -4698,10 +4425,7 @@ public static class UmaHeadlessExport
         return plan;
     }
 
-    /// <summary>
-    /// Records one model of a dump and moves to the next: reads the maps it names out of the PMX, writes its pack
-    /// when asked, and keeps the index current so an interrupted dump still describes what is on disk.
-    /// </summary>
+    /// <summary>Records one model of a dump and moves to the next: reads its maps out of the PMX, writes its pack when asked, keeps the index current.</summary>
     private static void ContinueModelDump(Options options, string root, ModelDumpJob job, UmaContainer container,
                                           string failure)
     {
@@ -4745,6 +4469,7 @@ public static class UmaHeadlessExport
         {
             try
             {
+                Lap("scan");
                 var facts = PmxTextureList.Scan(target);
                 record.maps = facts.Maps;
                 record.size = facts.Size;      // the model's own vertices: a renderer would report its bones
@@ -4757,6 +4482,7 @@ public static class UmaHeadlessExport
 
             if (options.Packs)
             {
+                Lap("pack");
                 record.pack = WriteModelPack(root, job, target, record.maps, out string packFailure);
                 if (packFailure != null) Debug.LogWarning($"{Tag} {job.model}: pack not written: {packFailure}");
             }
@@ -4766,6 +4492,7 @@ public static class UmaHeadlessExport
             // mean a second renderer that could disagree with the scene
             if (options.Thumbs)
             {
+                Lap("preview");
                 string thumbFailure = WriteModelThumbnail(root, job, container,
                     options.ThumbSize > 0 ? options.ThumbSize : 256, out string thumbPath);
                 if (thumbFailure != null)
@@ -4782,9 +4509,8 @@ public static class UmaHeadlessExport
         string key = record.model;
 
         // what an earlier run wrote stays described, if it is still there: the flags of *this* run say what to make
-        // now, not what the dump is. Re-running with fewer of them used to erase a pack or a preview from the index
-        // while leaving the file on disk, and a dump that no longer describes its own contents is a dump that
-        // check_dump.py fails on a machine where nothing is actually wrong.
+        // now, not what the dump is. Re-running with fewer of them would otherwise erase a pack or a preview from the
+        // index while leaving the file on disk, and a dump that no longer describes its contents fails check_dump.py.
         var previous = entries.FirstOrDefault(existing => existing.model == key);
         bool keptPack = false;
         bool keptThumb = false;
@@ -4824,6 +4550,12 @@ public static class UmaHeadlessExport
                           : $", preview {record.thumb}"));
         }
 
+        if (options.DumpModels != "") Debug.Log($"{Tag} {job.model}: {TakeLaps()}");
+
+        // the time between one model finishing and the next one starting - the unload and the index rewrite - is
+        // measured as the next model's first lap
+        if (options.DumpModels != "") { ResetLaps(); Lap("idle"); }
+
         CliState.SetInt(KeyModelDumpIndex, CliState.GetInt(KeyModelDumpIndex, 0) + 1);
         CliState.SetString(KeyOutPath, "");
         CliState.SetInt(KeyIsProp, 0);
@@ -4831,10 +4563,7 @@ public static class UmaHeadlessExport
         CurrentStage = Stage.WaitStartup;
     }
 
-    /// <summary>
-    /// One model as a zip a person can download on its own: the PMX at the root and its maps in `Texture2D/`
-    /// beside it, which is the layout a PMX expects when it resolves `Texture2D/tex_x.png`.
-    /// </summary>
+    /// <summary>One model as a zip a person can download on its own: the PMX at the root and its maps in `Texture2D/` beside it, as a PMX expects.</summary>
     private static string WriteModelPack(string root, ModelDumpJob job, string modelPath, List<string> maps,
                                          out string failure)
     {
@@ -4874,22 +4603,10 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// Renders one model as a square preview, so a browser can show what a model looks like before loading it.
-    ///
-    /// The browser page can render a preview itself - it does, for a dump without these - and that is the better
-    /// picture. But it costs a second load of every model the page shows, at whatever speed the visitor's machine
-    /// manages, for a thumbnail a few hundred pixels wide; and the dump is being made by a run that already has the
-    /// model in memory. So the preview is rendered here, from the same scene, and the page uses it when it is there.
-    ///
-    /// Framing is measured, not computed, because a `Renderer.bounds` is not the shape that gets drawn: a skinned
-    /// renderer reports the box of its bones, and one stray bone is enough to claim the model is 26 units deep when
-    /// it draws 6 wide (1001_00 reports 16.7 x 6.2 x 25.9 and draws a person). A camera framed from that box puts a
-    /// third of a person in the middle of a mostly empty square. So each pass renders, reads back the alpha channel,
-    /// and corrects from what actually appeared: the size tells the distance, the offset tells where to point. Three
-    /// passes is more than enough because each is a direct camera render, not a frame that arrives later.
-    ///
-    /// The view is turned a third of the way off the front, and slightly from above, so the picture reads as a model
-    /// rather than as a flat elevation.
+    /// Renders one model as a square preview, so a browser can show what a model looks like before loading it: the
+    /// page could render its own, but only by loading every model it shows. Framing is measured rather than computed
+    /// because a `Renderer.bounds` is not the shape that gets drawn - a skinned renderer reports the box of its bones,
+    /// and one stray bone claims 26 units deep for a model 6 wide - so each pass renders and corrects from the alpha.
     /// </summary>
     private static string WriteModelThumbnail(string root, ModelDumpJob job, UmaContainer container, int size,
                                               out string written)
@@ -4914,8 +4631,7 @@ public static class UmaHeadlessExport
 
         var character = container as UmaContainerCharacter;
         Transform head = character != null && character.HeadBone != null ? character.HeadBone.transform : null;
-        // the game's bone axes point where the character looks, so the head's forward is the front of the model -
-        // the same axis the exporter aims the eye bones with and the screenshot verb turns the camera by
+        // the game's bone axes point where the character looks, so the head's forward is the front of the model - the axis the exporter aims the eye bones with
         Vector3 facing = head != null ? head.forward : container.transform.forward;
         facing.y = 0f;
         if (facing.sqrMagnitude < 1e-6f) facing = Vector3.forward;
@@ -4931,8 +4647,7 @@ public static class UmaHeadlessExport
         direction = (direction + Vector3.up * 0.14f).normalized;                // and a little from above
         Vector3 target = bounds.center;
 
-        // the camera looks along -direction, so its own right is cross(world up, forward) - not cross(up, direction),
-        // which is the opposite way and turns every centring step into a step twice as far the wrong way
+        // the camera looks along -direction, so its own right is cross(world up, forward), not cross(up, direction), which turns every centring step the wrong way
         Vector3 forward = -direction;
         Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
         Vector3 up = Vector3.Cross(forward, right).normalized;
@@ -4973,8 +4688,7 @@ public static class UmaHeadlessExport
                 float halfWidth = distance * Mathf.Tan(halfFov);
                 target += right * (offsetX * 2f * halfWidth) + up * (offsetY * 2f * halfWidth);
 
-                // only stop when the picture is right as rendered: the correction above is applied by the *next*
-                // pass, so breaking on size alone would keep a frame whose offset was never drawn
+                // only stop when the picture is right as rendered: the correction above is applied by the *next* pass, so breaking on size alone keeps a stale offset
                 bool sized = Mathf.Abs(fill - want) <= 0.03f;
                 bool centred = Mathf.Max(Mathf.Abs(offsetX), Mathf.Abs(offsetY)) * size <= 3f;
                 if (sized && centred) break;
@@ -5030,10 +4744,7 @@ public static class UmaHeadlessExport
         return true;
     }
 
-    /// <summary>
-    /// Adds one file to a pack. The entries are stored, not deflated: they are a PMX and PNGs, which are already
-    /// compressed, so the extra pass buys a few per cent for a lot of time on a thousand models.
-    /// </summary>
+    /// <summary>Adds one file to a pack. The entries are stored, not deflated: a PMX and PNGs are already compressed, so deflating buys a few per cent.</summary>
     private static void AddZipEntry(System.IO.Compression.ZipArchive zip, string source, string entryName)
     {
         var entry = zip.CreateEntry(entryName, System.IO.Compression.CompressionLevel.NoCompression);
@@ -5088,11 +4799,7 @@ public static class UmaHeadlessExport
         File.WriteAllText(Path.Combine(root, "index.json"), JsonUtility.ToJson(index, true));
     }
 
-    /// <summary>
-    /// A dump's name rather than its absolute path: `index.json` travels to other machines, and the folder layout of
-    /// the machine that made it (a user name, usually) is not the browser's business. A relative `"."` would be
-    /// ambiguous; the folder name identifies the dump and nothing else.
-    /// </summary>
+    /// <summary>A dump's name rather than its absolute path: `index.json` travels to other machines, and a user name is not the browser's business.</summary>
     private static string DumpName(string root)
     {
         string trimmed = root.TrimEnd('/', '\\');
@@ -5100,13 +4807,9 @@ public static class UmaHeadlessExport
         return cut >= 0 ? trimmed.Substring(cut + 1) : trimmed;
     }
 
-    /// <summary>
-    /// Adds the bone counts a browser wants before loading anything.
-    ///
-    /// The *size* is not here on purpose: it is read from the PMX's vertices instead, because a skinned renderer's
-    /// bounds are the box of its bones and the numbers it produced were wrong by an order of magnitude. Bones are
-    /// counted from the loaded rig, which is the only thing that knows them.
-    /// </summary>
+    /// <summary>Adds the bone counts a browser wants before loading anything. The *size* is deliberately not here:
+    /// it is read from the PMX's vertices instead, because a skinned renderer's bounds are the box of its bones and
+    /// were wrong by an order of magnitude. Bones come from the loaded rig, the only thing that knows them.</summary>
     private static void FillRigFactsInto(ModelDumpEntry record, UmaContainer container)
     {
         int bones = 0;
@@ -5143,11 +4846,9 @@ public static class UmaHeadlessExport
     }
 
     /// <summary>
-    /// The models a `--all-costumes` / `--all-chars` run will write, in the order it will write them.
-    ///
-    /// It is rebuilt from the manifest rather than carried in memory, because a batch is long enough that the
-    /// editor's play-mode domain reload will happen in the middle of it: what is left is the index in
-    /// <see cref="KeyBatchIndex"/>, and the plan has to be derivable again from the game data alone.
+    /// The models a `--all-costumes` / `--all-chars` run will write, in the order it will write them. Rebuilt from the
+    /// manifest rather than carried in memory, because a batch is long enough that the editor's play-mode domain
+    /// reload will happen in the middle of it: what survives is the index in <see cref="KeyBatchIndex"/>.
     /// </summary>
     private static List<BatchJob> BatchPlan(Options options, out string failure)
     {
@@ -5214,8 +4915,7 @@ public static class UmaHeadlessExport
     private static void BatchStep(Options options)
     {
         string folder = Path.GetFullPath(options.OutPath);
-        // a batch writes many models, so --out is a folder here: a file name is almost certainly a mistake, and
-        // creating a directory called "1001_00.pmx" would be a confusing way to find out
+        // a batch writes many models, so --out is a folder here: creating a directory called "1001_00.pmx" would be a confusing way to find out
         string extension = Path.GetExtension(folder).ToLowerInvariant();
         if (extension == ".pmx" || extension == ".fbx")
         {
@@ -5310,10 +5010,7 @@ public static class UmaHeadlessExport
         CurrentStage = Stage.WaitModel;
     }
 
-    /// <summary>
-    /// Ends one model of a batch and moves to the next. The counters live in the session, so a batch that is
-    /// interrupted reports what it actually wrote rather than starting the count from zero next time.
-    /// </summary>
+    /// <summary>Ends one model of a batch and moves to the next. The counters live in the session, so an interrupted batch reports what it really wrote.</summary>
     private static void ContinueBatch(string failure)
     {
         int index = CliState.GetInt(KeyBatchIndex, 0);
@@ -5427,11 +5124,9 @@ public static class UmaHeadlessExport
         if (CurrentOptions != null && CurrentOptions.Json) _jsonPayload = ListPayload("chars", items);
     }
 
-    /// <summary>
-    /// Explains one sound asset's transcript - the text half of the audio export, so the join against the
-    /// game data can be checked without exporting (or playing) anything. Accepts a story sheet
-    /// (041047007), an asset name (snd_voi_story_041047007, snd_voi_home_100100) or a full asset path.
-    /// </summary>
+    /// <summary>Explains one sound asset's transcript - the text half of the audio export, so the join against the
+    /// game data can be checked without exporting or playing anything. Accepts a story sheet (041047007), an asset
+    /// name (snd_voi_story_041047007, snd_voi_home_100100) or a full asset path.</summary>
     private static void PrintTranscript(string query)
     {
         // a story sheet is also its timeline's name; print what the sheet resolves to first
@@ -5501,10 +5196,7 @@ public static class UmaHeadlessExport
 
     private static bool _audioExported;
 
-    /// <summary>
-    /// Writes one clip of a sound asset to an mp3, with its transcript in the tag. Accepts a story sheet
-    /// (041047007), the asset name (snd_voi_story_041047007) or a full asset path.
-    /// </summary>
+    /// <summary>Writes one clip of a sound asset to an mp3, with its transcript in the tag. Accepts a story sheet, an asset name or a full path.</summary>
     private static bool StartAudioExport(Options options)
     {
         string query = options.ExportAudio;
@@ -5608,24 +5300,19 @@ public static class UmaHeadlessExport
         if (CurrentOptions != null && CurrentOptions.Json) _jsonPayload = ListPayload("costumes", items);
     }
 
-    /// <summary>
-    /// The JSON a `list` or `doctor` run answers with, when `--json` was asked for. It is built where the data
-    /// already is, rather than re-read from the shapes the log prints, so the two cannot disagree.
-    /// </summary>
+    /// <summary>The JSON a `list` or `doctor` run answers with, when `--json` was asked for: built where the data is, so it cannot disagree.</summary>
     private static string _jsonPayload;
 
     /// <summary>How many items of a list are put in the result line before it is marked truncated.</summary>
     private const int InlineItemLimit = 2000;
 
-    /// <summary>Escapes a string for the hand-built JSON lines. The lists are built by hand because they are
-    /// arrays of shapes, which `JsonUtility` cannot express.</summary>
+    /// <summary>Escapes a string for the hand-built JSON lines, which are arrays of shapes `JsonUtility` cannot express.</summary>
     private static string JsonText(string value) =>
         (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", " ").Replace("\r", "");
 
-    /// <summary>
-    /// Finishes a `list` run's JSON: the items inline when there are few enough to read, all of them in `--out`
-    /// when the run asked for a file, and a truncated array with a count when there are too many for a log line.
-    /// </summary>
+    /// <summary>Finishes a `list` run's JSON: the items inline when there are few enough to read, all of them in
+    /// `--out` when the run asked for a file, and a truncated array with a count when there are too many for a log
+    /// line.</summary>
     private static string ListPayload(string kind, List<string> items, string note = null)
     {
         string options = CliState.GetString(KeyOptions, "");
@@ -5670,8 +5357,7 @@ public static class UmaHeadlessExport
     private class RunResult
     {
         public bool ok;
-        /// <summary>What kind of run it was: export, export-prop, vmd, screenshot, scan, scan-export, dump, list,
-        /// transcript, audio.</summary>
+        /// <summary>What kind of run it was: export, export-prop, vmd, screenshot, scan, scan-export, dump, list, transcript, audio.</summary>
         public string mode;
         /// <summary>The file the run wrote, with forward slashes, or "" when it wrote none.</summary>
         public string path;
@@ -5686,10 +5372,7 @@ public static class UmaHeadlessExport
         public string error;
     }
 
-    /// <summary>
-    /// Writes the `JSON` line when `--json` was given. It is emitted on success and on failure alike, so a caller
-    /// never has to tell "no JSON" from "the run died before it could write one" by reading the exit code as well.
-    /// </summary>
+    /// <summary>Writes the `JSON` line when `--json` was given, on success and on failure alike, so a caller never reads the exit code.</summary>
     private static void EmitResult(string error)
     {
         var options = CurrentOptions;
@@ -5743,13 +5426,11 @@ public static class UmaHeadlessExport
     private static void Succeed()
     {
         CurrentStage = Stage.Done;
-        // the result line is written first: it reads the options back out of the session, and clearing them
-        // here is what makes the next run start clean
+        // the result line is written first: it reads the options back out of the session, and clearing them is what makes the next run start clean
         EmitResult(null);
         CliState.SetString(KeyOptions, "");
         CliHost.Disarm();
-        // every mode has to emit this marker: the wrappers wait for it, and a mode that only logs its
-        // own summary looks like a hang to them
+        // every mode has to emit this marker: the wrappers wait for it, and a mode that only logs its own summary looks like a hang
         Debug.Log($"{Tag} OK");
         CliHost.Exit(0);
     }

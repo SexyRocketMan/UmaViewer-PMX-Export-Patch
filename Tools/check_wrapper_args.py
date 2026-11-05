@@ -2,13 +2,9 @@
 """Check what the PowerShell wrapper actually passes to the runner.
 
 `check_cli_parity.py` compares the two flag lists, which catches a flag that exists on one side and not the other.
-It cannot catch a wrapper switch that is accepted and then not forwarded - the switch is declared, the run says
-OK, and the run did something else. That is not hypothetical: `-DumpModels ... -DumpPropsFilter rich_prop` was
-accepted, ignored, and dumped the first four props of the whole install; three runs over three families produced
-the same four models, and each said OK.
-
-So this drives the wrapper for real with `-DryRun`, which prints the argument vector it would hand to Unity
-without launching anything, and asserts on it. Exit code 1 on any mismatch.
+It cannot catch a wrapper switch that is accepted and then not forwarded - the switch is declared, the run says OK,
+and the run did something else. This drives the wrapper with `-DryRun`, which prints the argument vector it would
+hand to Unity without launching anything, and asserts on it. Exit code 1 on any mismatch.
 
     python Tools/check_wrapper_args.py
     python Tools/check_wrapper_args.py --verbose
@@ -86,8 +82,8 @@ def main(argv):
             problems += 1
             continue
 
-        # a flag named only in `values` is a required flag too - listing it under "and its value must be this"
-        # once let a switch that was never forwarded count as fine, which is exactly the bug this file is for
+        # a flag named only in `values` is a required flag too, or a switch that was never forwarded would count as
+        # fine - which is the whole failure this file exists to catch
         required = list(expected) + [flag for flag in values if flag not in expected]
         missing = [flag for flag in required if flag not in passed]
         extra = [flag for flag in forbidden if flag in passed]

@@ -2,21 +2,14 @@
 """Check that every joint points at the joint MMD points it at.
 
 A PMX stores no bone axis, so the tail is the orientation: MMD, Blender and every tool that plays a motion read a
-bone's frame from head -> tail. Nothing in an export fails loudly when a tail is wrong - the file opens, the
-vertices are right, the motions play - the bone just rotates around a skewed axis, which shows up as a limb that
-leans the wrong way once it is animated.
-
-The convention is not a matter of taste: MMD's own rigs point the thigh at the knee, the elbow at the wrist, the
-wrist at the middle finger, the chest at the neck and the hip up the body. This reads the tails out of the file and
-checks each joint against that, so a change to the exporter's tail rule can be measured instead of eyeballed:
+bone's frame from head -> tail. A wrong tail is silent - the file opens, the vertices are right, the motion plays,
+the bone just turns about a skewed axis - so each joint is compared with the direction MMD's own rigs use.
 
     python Tools/check_tails.py C:/dump/characters
     python Tools/check_tails.py C:/dump/characters --min 0.99 --worst 10
 
-The rest pose is not checked here (Tools/dump_report.py does that) and neither is the eye rule: an eye bone points
-out of the face on purpose, so it is not in the table.
-
-Exit code 1 when fewer than --min of the joints land on their joint, so it can gate a dump.
+The rest pose is not checked here (Tools/dump_report.py is), nor is the eye rule: an eye bone points out of the face
+on purpose. Exit code 1 when fewer than --min of the joints land on their joint, so it can gate a dump.
 """
 
 import argparse
@@ -30,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pmx_inspect
 
 #: each joint and the bone(s) MMD points it at. The head has no joint below it to name: it is correct when its tail
-#: points up, which is checked separately.
+#: points up, which UP_JOINTS checks separately.
 EXPECTED = {
     "Hip": {"UpBody_Ctrl", "Waist", "Spine"},
     "Waist": {"Spine"},
@@ -89,7 +82,7 @@ def check_file(path):
     """-> (the joints of this model that are wrong, the joints it has at all)
 
     A tail is judged by the direction it points, not by how it is stored: naming the right child and writing an
-    offset that points the same way are the same orientation, and the exporter uses both.
+    offset that points the same way are the same orientation, and the exporter writes both.
     """
     model = pmx_inspect.read_model(path)
     by_name = {bone.name: bone for bone in model.bones}

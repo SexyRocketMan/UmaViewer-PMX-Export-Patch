@@ -1,29 +1,18 @@
 #!/usr/bin/env python3
 """Summarise a `dump models` dump: what it holds, how big it is, and whether it looks right.
 
-`check_dump.py` answers "is this dump self-consistent" - every model present, every map on disk, every pack containing
-what it should. This answers the questions that come after a long run, where the failures are quieter:
-
-  * **the shape of it** - models per kind and per prop family, bytes per kind, so 400 costumes and 1377 props can be
-    seen at a glance rather than inferred from a folder listing;
-  * **sizes** - the box of each model's vertices, in centimetres, with the range per kind. A character that is 20 m
-    tall or 2 cm tall is a bug, and at 1777 models nobody will notice it by looking;
-  * **costume names** - how many characters have one. They come from the game's data, so a missing name means the
-    dump could not read it, not that the costume has none;
-  * **preview framing** - the share of each preview the model actually covers, sampled. `dump models --thumbs`
-    converges on about 84% by measuring rendered pixels, so anything near 0 is an empty picture and anything at 100 is
-    a cropped one.
+Where `check_dump.py` asks whether the dump is self-consistent, this asks the quieter questions after a long run:
+models per kind and prop family, each model's vertex box in centimetres (a 2 cm character is invisible among
+thousands), costume names, and how much of each preview the model covers. It also asks one rig question only a dump
+can answer: whether UpBody_Ctrl sits at the same height in every model. Characters are scaled to their own height,
+so an invariant bone means the rest pose is restored before the height scale and every model is stretched - see
+UpBodyReset in Assets/Scripts/UmaContainerCharacter.cs.
 
     python Tools/dump_report.py C:/tmp/dump/full
     python Tools/dump_report.py C:/tmp/dump/full --sample 60
 
-It also asks one question about the *rig* that a dump can answer and a single model cannot: whether the control bone
-between the hips and the spine sits at the same height in every model. Characters are scaled to their own height, so
-that bone must scale with them; if it is identical across models it is being restored from a table captured before
-the scaling, which lifts the whole upper body and makes every model look stretched - the regression of 2026-11-02,
-described in the note by `UpBodyReset` in Assets/Scripts/UmaContainerCharacter.cs.
-
-Pillow is used for the preview numbers when it is installed and those lines are skipped when it is not.
+Pillow is used for the preview numbers when it is installed, and those lines are skipped when it is not. Exit code 1
+when the dump recorded a failure or the rest pose is character-independent.
 """
 
 import argparse
@@ -56,7 +45,7 @@ def size_of(root, relative):
 
 
 def centimetres(size):
-    """'20.206,12.709,6.072' -> (162, 102, 49): PMX units are 8 cm each, the convention the rest of the project uses."""
+    """'20.206,12.709,6.072' -> (162, 102, 49): PMX units are 8 cm each."""
     try:
         parts = [float(part) for part in str(size).split(",")]
     except ValueError:
@@ -129,7 +118,7 @@ def main(argv):
         print(f"  prop families: {families}")
     print(f"  {summary['packs']} pack(s), {summary['previews']} preview(s)")
 
-    # sizes, per kind: a character much shorter or taller than a person is a measurement bug
+    # sizes per kind: a character much shorter or taller than a person is a measurement bug
     for kind in sorted(by_kind):
         heights = [centimetres(model.get("size")) for model in models
                    if model["kind"] == kind and centimetres(model.get("size"))]
@@ -198,9 +187,8 @@ def main(argv):
             hip_spread = max(hips) - min(hips)
             print(f"  rest pose: UpBody_Ctrl {min(upbodies):.4f}..{max(upbodies):.4f} units over "
                   f"{len(upbodies)} model(s) (hips {min(hips):.4f}..{max(hips):.4f})")
-            # Only meaningful when the sample holds more than one character: costumes of the same uma share a height,
-            # so identical values there are correct. The signature of the bug needs both - hips that differ and an
-            # upper body that does not.
+            # Both conditions are needed, and only across more than one character: costumes of the same uma share a
+            # height, so identical values there are correct. The bug is hips that differ while the upper body does not.
             if spread < 0.01 and hip_spread > 0.05:
                 rest_pose_problem = (
                     f"UpBody_Ctrl sits at the same height ({min(upbodies):.4f} units) in every model while the hips "

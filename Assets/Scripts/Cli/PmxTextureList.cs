@@ -4,22 +4,12 @@ using System.IO;
 using System.Text;
 
 /// <summary>
-/// Reads what a dump needs to know about a PMX without loading it: the maps it names, and how big it really is.
+/// Reads what a dump needs to know about a PMX without loading it: the maps it names and how big it really is, so a
+/// service can answer "which files does this model need" and "do they all exist" from the file long after the export.
+/// Only the header, the vertices and the texture table are walked; PMX 2.0 only, which is what this project writes.
 ///
-/// This is what a dump needs to answer two questions a web service asks constantly: which files does one model
-/// need (for a per-model download) and does everything it references actually exist (for a validation pass). The
-/// exporter knows the answer while it writes, but the dump runs afterwards and the answer has to be recoverable
-/// from the file - especially once several models share one `Texture2D/` folder, where the folder no longer says
-/// which maps belong to whom.
-///
-/// Only the header, the vertices and the texture table are walked, so no geometry is allocated and nothing is
-/// loaded. PMX 2.0 only, which is what this project writes.
-///
-/// **The size comes from the vertices, not from a renderer.** A `SkinnedMeshRenderer.bounds` is the box of the
-/// model's *bones*, and one stray bone claimed character 1001 was 16.7 x 6.2 x 25.9 units while she stands 1.6: the
-/// dump recorded that, and the browser printed it. A PMX stores vertex positions in model space, so the box of those
-/// positions is the model as it is built - the same answer the viewer computes from the loaded mesh, and one that
-/// needs no scene at all, which is what lets an existing dump be repaired without exporting anything again.
+/// The size comes from the vertices, not from a renderer: `SkinnedMeshRenderer.bounds` is the box of the model's
+/// *bones*, and one stray bone claimed character 1001 was 25.9 units deep while she stands 1.6.
 /// </summary>
 public static class PmxTextureList
 {
@@ -103,12 +93,10 @@ public static class PmxTextureList
     }
 
     /// <summary>
-    /// Reads the vertex positions and steps over everything else in the section.
-    ///
-    /// A vertex is a position, a normal, a UV, any number of extra UVs, then a weight block whose size depends on
-    /// its type: BDEF1 is one bone, BDEF2 two and a float, BDEF4/QDEF four and four floats, and SDEF two bones, a
-    /// float and three C sets - which is why this cannot be a fixed stride. The position is the first 12 bytes, so
-    /// the rest of the vertex is stepped over, which is the only part that has to be understood exactly.
+    /// Reads the vertex positions and steps over everything else in the section. A vertex is a position, a normal, a
+    /// UV, any number of extra UVs, then a weight block whose size depends on its type (BDEF1 one bone, BDEF2 two and
+    /// a float, BDEF4/QDEF four and four floats, SDEF two bones, a float and three C sets), so this cannot be a fixed
+    /// stride: the position is the first 12 bytes and the rest is stepped over.
     /// </summary>
     private static void ReadVertices(BinaryReader reader, int vertexIndexSize, int boneIndexSize, int extraUv,
                                      out double[] size)
@@ -161,10 +149,8 @@ public static class PmxTextureList
         reader.BaseStream.Seek((long)count * vertexIndexSize, SeekOrigin.Current);
     }
 
-    /// <summary>
-    /// The texture paths as file names, which is how a PMX references them on disk: the exporter writes
-    /// `Texture2D/tex_x_diff.png` and the loader resolves that next to the model.
-    /// </summary>
+    /// <summary>The texture paths as file names, which is how a PMX references them on disk: the exporter writes
+    /// `Texture2D/tex_x_diff.png` and the loader resolves that next to the model.</summary>
     public static List<string> FileNames(string path)
     {
         return FileNames(Read(path));

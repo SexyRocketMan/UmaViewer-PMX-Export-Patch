@@ -5,26 +5,10 @@ using static LibMMD.Model.Morph;
 using static LibMMD.Model.SkinningOperator;
 
 /// <summary>
-/// The optional step that makes an exported FBX stand in for the one thing this fork's Blender workflow
-/// used to need the uma_addon for: the eye rig.
-///
-/// The add-on's <i>Refine Structure</i> merges the eyeball out of <c>Eye_L</c>/<c>Eye_R</c> into <c>Head</c>
-/// and drives eight shape keys from those bones with drivers, so rotating an eye bone moves the gaze. FBX
-/// has no driver, so an FBX that copies that structure would arrive with eyes that cannot be aimed. This
-/// step takes the other of the two routes to the same behaviour, the one the format can carry and the one
-/// MMD itself uses:
-///
-/// * the eyeball keeps its <c>Eye_L</c>/<c>Eye_R</c> weights, so rotating the bone rotates the eyeball;
-/// * the eye bones are re-aimed the way the add-on aims them - <b>Y out of the face</b> along the gaze, and
-///   <b>roll</b> such that the bone's Z points down - so the axes a user rotates are the ones the add-on's
-///   drivers read (X = up/down, Z = left/right), and the behaviour is the same without any driver.
-///
-/// The gaze is taken from the feet and "up" from the head bone, both as the add-on derives them, so the
-/// result does not depend on which way the exporter happened to aim the eye bones or on the rig sitting
-/// square to the world axes.
-///
-/// It is deliberately a pure function of the model and its skeleton, in a file of its own, so that an
-/// export can be taken with it or without it and nothing else in the exporter has to know it exists.
+/// Stands in for the one part of the uma_addon's Blender refinement an FBX cannot carry: the add-on drives eight eye shape
+/// keys from the eye bones with drivers, and FBX has no drivers. The eyeball keeps its <c>Eye_L</c>/<c>Eye_R</c> weights and
+/// the eye bones are re-aimed the way the add-on aims them - <b>Y out of the face</b> along the gaze, roll such that Z points
+/// down (X = up/down, Z = left/right) - so rotating a bone moves the gaze without any driver.
 /// </summary>
 public static class UmaModelRefinement
 {
@@ -36,19 +20,14 @@ public static class UmaModelRefinement
     };
 
     /// <summary>
-    /// The bones the add-on's <i>Set Bone Collections</i> puts in its hidden <c>Handle</c> collection, and
-    /// which its <i>Del</i> deletes outright. They sit exactly on the bone they belong to, hold no weights
-    /// and exist so the exporter has somewhere to hang a curve - so a rig without them poses and skins the
-    /// same. An FBX has no "hidden", so the only way to give a reader the rig the add-on shows is to leave
-    /// them out.
+    /// The add-on hides these in its <c>Handle</c> collection and <i>Del</i> deletes them: they sit on the bone they belong to,
+    /// carry no weights, and an FBX has no "hidden".
     /// </summary>
     private const string HiddenBoneSuffix = "Handle";
 
     /// <summary>
-    /// The rest of what the add-on hides - <i>Refine Structure</i>'s own list. These are the ground-contact
-    /// offsets, the hand attach points and the upper-body control: controls for posing, not joints of the
-    /// model, and each of them sits on top of the bone it belongs to, which is what makes its owner's drawn
-    /// length come out as a dot when nothing else is under it.
+    /// The rest of what the add-on's <i>Refine Structure</i> hides: ground-contact offsets, hand attach points and the upper-body
+    /// control - controls for posing, not joints.
     /// </summary>
     private static readonly string[] HiddenBoneNames =
     {
@@ -57,11 +36,9 @@ public static class UmaModelRefinement
     };
 
     /// <summary>
-    /// Drops the helper bones from the model, moving any weight they carried onto the bone they belong to
-    /// (their parent - for a <c>&lt;name&gt;_Handle</c> that is the bone itself). Returns how many went.
-    ///
-    /// This runs before the skeleton is built, because dropping a bone renumbers the ones after it and the
-    /// vertex skinning refers to them by index.
+    /// Drops the helper bones, moving any weight they carried onto the bone they belong to (their parent - for a
+    /// <c>&lt;name&gt;_Handle</c> that is the bone itself). Returns how many went. Runs before the skeleton is built, because
+    /// dropping a bone renumbers the ones after it and vertex skinning refers to them by index.
     /// </summary>
     public static int OmitHiddenBones(RawMMDModel model)
     {
@@ -95,8 +72,8 @@ public static class UmaModelRefinement
         }
         if (droppedCount == 0) return 0;
 
-        // old index -> new index, for the bones that stay. The skinning and the bone morphs refer to bones
-        // by index too, so this one table is what keeps a vertex weighted to the bone it was weighted to.
+        // old index -> new index for the bones that stay; skinning and bone morphs refer to bones by index,
+        // so this one table is what keeps a vertex weighted to the bone it was weighted to.
         int[] newIndex = new int[bones.Length];
         for (int i = 0; i < newIndex.Length; i++) newIndex[i] = -1;
         List<LibMMD.Model.Bone> kept = new List<LibMMD.Model.Bone>();
@@ -122,10 +99,8 @@ public static class UmaModelRefinement
             int parent = bones[i].ParentIndex;
             bones[i].ParentIndex = parent >= 0 && parent < bones.Length ? finalIndex[parent] : -1;
 
-            // The tail is a bone index as well, and it is what the writer reads a bone's direction and
-            // length from. Left stale it points at whichever bone moved into that slot - how a rig comes out
-            // with its bones aimed at each other's neighbours - so it is renumbered, and where the child it
-            // named has been left out it becomes an offset that keeps the same direction and length.
+            // the tail is a bone index too and sets the bone's direction and length: left stale it points at
+            // whichever bone moved into that slot, so a dropped child becomes an offset of the same direction
             LibMMD.Model.Bone.ChildBone tail = bones[i].ChildBoneVal;
             if (tail == null || !tail.ChildUseId) continue;
             int oldTail = tail.Index;
@@ -179,9 +154,8 @@ public static class UmaModelRefinement
                 {
                     Bdef2 bdef2 = (Bdef2)skinning.Param;
                     ResolvePair(bdef2.BoneId, finalIndex);
-                    // both slots landing on the same bone means that bone carries the whole vertex, which
-                    // is what a weight of 1 says - leaving the pair split across one bone would leave a
-                    // reader with two entries for it and half the weight
+                    // both slots on one bone means that bone carries the whole vertex: a split pair would leave
+                    // a reader with two entries for it and half the weight
                     if (bdef2.BoneId[0] == bdef2.BoneId[1]) bdef2.BoneWeight = 1f;
                     break;
                 }
@@ -194,7 +168,7 @@ public static class UmaModelRefinement
                         if (bone < 0 || bone >= finalIndex.Length || finalIndex[bone] < 0) continue;
                         bdef4.BoneId[slot] = finalIndex[bone];
                     }
-                    // fold slots that now name the same bone into the first of them
+                    // fold slots that ended up naming the same bone into the first of them
                     for (int slot = 0; slot < 4; slot++)
                     {
                         for (int other = slot + 1; other < 4; other++)
@@ -224,9 +198,8 @@ public static class UmaModelRefinement
     }
 
     /// <summary>
-    /// Two bones whose weights are (w, 1-w). A bone that was left out leaves its weight on its own slot and
-    /// only changes which bone that slot names - the bone it belongs to picks the weight up, which is what
-    /// the add-on's Del does when it deletes a collection's bones.
+    /// Two bones whose weights are (w, 1-w). A dropped bone leaves its weight on its own slot and only changes which bone the
+    /// slot names, so the bone it belonged to picks the weight up - what the add-on's Del does.
     /// </summary>
     private static void ResolvePair(int[] bones, int[] finalIndex)
     {
@@ -277,9 +250,8 @@ public static class UmaModelRefinement
     }
 
     /// <summary>
-    /// Re-aims the eye rig on <paramref name="skeleton"/> and reports on the parts of the add-on's
-    /// refinement that no FBX can carry. <paramref name="model"/> is read, never modified: the weights and
-    /// morphs it already has are exactly what this route wants.
+    /// Re-aims the eye rig on <paramref name="skeleton"/> and reports the parts of the refinement no FBX can carry.
+    /// <paramref name="model"/> is read, never modified: its weights and morphs are what this route wants.
     /// </summary>
     public static Report Apply(RawMMDModel model, FbxExporter.Skeleton skeleton)
     {
@@ -302,8 +274,7 @@ public static class UmaModelRefinement
         }
         foreach (string name in EyeHelpers)
         {
-            // The locators are aimed the same way so a rig that follows them keeps the same axes; they
-            // carry no weights themselves, so this is cosmetic, but it is what the add-on's rig looks like.
+            // aimed too, so a rig following them keeps the same axes (cosmetic: these carry no weights)
             Aim(skeleton, name, gaze, up);
         }
 
@@ -314,8 +285,10 @@ public static class UmaModelRefinement
         return report;
     }
 
-    /// <summary>Aims one bone: Y along <paramref name="direction"/>, roll such that Z points away from
-    /// <paramref name="up"/> - the add-on's `align_roll(down)`. Both are Unity-space vectors.</summary>
+    /// <summary>
+    /// Aims one bone: Y along <paramref name="direction"/>, roll so Z points away from <paramref name="up"/> - the
+    /// add-on's `align_roll(down)`. Both are Unity-space vectors.
+    /// </summary>
     private static bool Aim(FbxExporter.Skeleton skeleton, string name, Vector3 direction, Vector3 up)
     {
         int index = skeleton.IndexOf(name);
@@ -327,9 +300,8 @@ public static class UmaModelRefinement
     }
 
     /// <summary>
-    /// Which way the model looks, taken from the feet: the toe sits in front of the ankle on every
-    /// humanoid rig, so this does not depend on how the eye bones themselves were aimed. This is the
-    /// add-on's <c>gaze_direction</c>, with the same fallback to the model's forward.
+    /// Which way the model looks, taken from the feet: the toe sits in front of the ankle on every humanoid rig, so this does
+    /// not depend on how the eye bones were aimed. The add-on's <c>gaze_direction</c>, same fallback.
     /// </summary>
     private static bool TryGazeFromFeet(FbxExporter.Skeleton skeleton, out Vector3 gaze)
     {
@@ -341,10 +313,8 @@ public static class UmaModelRefinement
             int ankle = skeleton.IndexOf("Ankle_" + side);
             if (toe < 0 || ankle < 0) continue;
             Vector3 direction = skeleton.Bones[toe].Head - skeleton.Bones[ankle].Head;
-            // Drop the vertical component, so the gaze is the horizontal way the model faces. The add-on
-            // drops its Z because it works in Blender's Z-up space; this side is in Unity's Y-up space, so
-            // it is Y that has to go - dropping Z here would leave a mostly vertical vector, which aims the
-            // eye bones down instead of forward.
+            // drop the vertical component so the gaze is the horizontal way the model faces. The add-on drops Z because it works Z-up
+            // in Blender; this side is Y-up, so dropping Z here would leave a mostly vertical vector and aim the eyes down.
             direction.y = 0f;
             if (direction.sqrMagnitude < 1e-10f) continue;
             sum += direction.normalized;
@@ -360,9 +330,8 @@ public static class UmaModelRefinement
     }
 
     /// <summary>
-    /// Up, in the model's own frame: the head bone points out of the neck, so its direction is up. This is
-    /// the add-on's <c>up_direction</c>, and using the rig instead of the world keeps the eye controls'
-    /// axes right on a model that is not square to the world.
+    /// Up, in the model's own frame: the head bone points out of the neck, so its direction is up - the add-on's
+    /// <c>up_direction</c>, which keeps the eye axes right on a model not square to the world.
     /// </summary>
     private static bool TryHeadDirection(FbxExporter.Skeleton skeleton, out Vector3 up)
     {
@@ -382,7 +351,7 @@ public static class UmaModelRefinement
         return true;
     }
 
-    /// <summary>How many mesh vertices the eye bones actually carry - gaze by bone rotation needs some.</summary>
+    /// <summary>How many mesh vertices the eye bones carry - gaze by bone rotation needs some.</summary>
     private static int CountEyeSkinnedVertices(RawMMDModel model, FbxExporter.Skeleton skeleton)
     {
         int left = skeleton.IndexOf("Eye_L");

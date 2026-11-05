@@ -3,28 +3,29 @@
     Export a PMX model, a VMD motion, or prop/scene info from UmaViewer without the GUI.
 
 .DESCRIPTION
-    Drives Assets/Editor/UmaHeadlessExport.cs through Unity in batch mode: the viewer scene is
-    opened, its normal startup runs in play mode, then the requested asset is loaded and exported
-    exactly like the in-app buttons do - just without any clicking.
+    Drives Assets/Scripts/Cli/UmaHeadlessExport.cs through Unity in batch mode: the viewer scene is opened, its
+    normal startup runs in play mode, then the requested asset is loaded and exported exactly like the in-app
+    buttons do. The model's extension picks the writer (PMX or FBX); -DryRun prints the argument vector and
+    launches nothing. Exits 1 when the log has no result marker or a FAILED one, 0 otherwise.
 
 .EXAMPLE
     ./Tools/headless_export.ps1 -ListChars
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_rac_type01_run02_stride -RecordVmd D:/out/run.vmd
-    # let a one shot animation run to its end first, the state the viewer is in when a user records
-    # after the animation finished (batch mode alone gets nowhere near the end of the clip)
+    # let a one shot animation run to its end first, the state a recording is made in; batch mode alone gets
+    # nowhere near the end of the clip
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_res_chr1001_001 -PlaySeconds 8 -RecordVmd D:/out/res.vmd
     # write plain pre-2.6 materials (no uma shader data in each material comment)
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -PlainMaterials -Out D:/out/plain.pmx
     # the game's own render of the face, as the baseline to compare a Blender shading setup against
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/game_face.png -ShotOnly
-    # ... and the same view from several angles, which is what shading has to hold up under
+    # the same view from several angles, which is what shading has to hold up under
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -ShotYaws 0,45,-45,90 `
         -Screenshot D:/out/game_face.png -ShotOnly
     ./Tools/headless_export.ps1 -ListProps home10001
-    # what the ten 3d/chara families hold and what their prefabs are called - manifest names only, so
-    # this opens no bundle and downloads nothing. The filter needs its own parameter, exactly like
-    # -ListProps: after a [switch] the next bare word binds positionally to -Char
+    # what the ten 3d/chara families hold and what their prefabs are called - manifest names only, so this
+    # opens no bundle and downloads nothing. The filter needs its own parameter, exactly like -ListProps:
+    # after a [switch] the next bare word binds positionally to -Char
     ./Tools/headless_export.ps1 -ListFamilies
     ./Tools/headless_export.ps1 -ListFamilies -ListFamiliesFilter richprop
     # wear a character's attachments and hold its toon props: -Attach is an array, so several go comma
@@ -72,7 +73,6 @@ param(
     # the harness's own explanations: what the flags are, and what this build is
     [switch]$Help,
     [switch]$About,
-    # the harness's machine readable result line (the double-dash flags are the harness's own)
     # batches: one boot, many models (docs/CLI.md)
     # the dump a browser reads: characters and props, one index.json, shared textures
     [string]$DumpModels = "",
@@ -86,6 +86,7 @@ param(
     [switch]$AllCostumes,
     [switch]$AllChars,
     [double]$BootTimeout = 0,
+    # the harness's machine readable result line; the double-dash flags are the harness's own
     [switch]$Json,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
@@ -158,9 +159,8 @@ function Clear-StaleUnityLock {
 
 function Wait-UnityExit {
     <#
-      Unity's launcher returns (and the runner writes its result) before the editor process has fully
-      released the project. Starting the next run while that is still happening fails with "project
-      already open in another instance", so wait for it when chaining exports.
+      Unity's launcher returns (and the runner writes its result) before the editor process has fully released
+      the project, so starting the next run too early fails with "project already open in another instance".
     #>
     param([string]$Project, [int]$Seconds = 120)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -232,11 +232,10 @@ if ($ScanProps) {
 }
 if ($DumpProps) {
     $arguments += @("-umaDumpProps", $DumpProps)
-    # both are optional: an empty string would be dropped by PowerShell and the next switch taken as
-    # its value, which is how a full dump once turned into "no props matching -umaDumpPropsCount"
+    # both are optional: an empty string would be dropped by PowerShell and the next switch taken as its value
     if ($DumpPropsCount -gt 0) { $arguments += @("-umaDumpPropsCount", $DumpPropsCount) }
 }
-# a model dump takes the same filter, and used to accept this switch without passing it on
+# a model dump takes the same filter
 if ($DumpPropsFilter -and ($DumpProps -or $DumpModels)) {
     $arguments += @("-umaDumpPropsFilter", $DumpPropsFilter)
 }
@@ -279,8 +278,7 @@ foreach ($entry in ($ShotTexture -split ';')) {
     if ($entry.Trim()) { $arguments += @("-umaShotTexture", $entry.Trim()) }
 }
     # the camera angle and the light height are independent: the editor side reads -umaShotYaw for the
-    # camera and -umaShotLightElevation to rebuild the light's direction. Passing either one used to drop
-    # the other, so a run that asked for both rendered the camera at yaw 0 with the light raised.
+    # camera and -umaShotLightElevation to rebuild the light's direction, so both are always passed
     $arguments += @("-umaShotYaw", $ShotYaw)
     if ($ShotLightElevation -ge 0) { $arguments += @("-umaShotLightElevation", $ShotLightElevation) }
     if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
@@ -320,12 +318,11 @@ Write-Host ""
 & $UnityExe @arguments | Out-Null
 $launcherExit = $LASTEXITCODE
 
-# Unity's launcher process can exit before the editor it spawned has finished, so the process exit
-# code is not proof of anything: wait for the runner's own result marker in the log instead.
+# Unity's launcher process can exit before the editor it spawned has finished, so the process exit code is
+# not proof of anything: wait for the runner's own result marker in the log instead.
 #
 # Only the *terminal* marker counts, which is why the pattern is anchored: a sweep logs `[7] name: exported
-# (...)` and `[8] name: FAILED: ...` per prop, and matching those as the result both reported a sweep with a
-# failed prop as a success and would have stopped the wait at the first prop that failed.
+# (...)` and `[8] name: FAILED: ...` per prop, and matching one of those would stop the wait at the first prop.
 $marker = $null
 $deadline = (Get-Date).AddSeconds($Timeout + 120)
 while ((Get-Date) -lt $deadline) {
@@ -355,7 +352,6 @@ if ($marker.Line -match "FAILED") {
     exit 1
 }
 
-# leave the project free for the next run in a chain (the companion dev tooling's run_workflow.ps1
-# starts several in a row)
+# leave the project free for the next run in a chain
 [void](Wait-UnityExit -Project $ProjectPath)
 exit 0

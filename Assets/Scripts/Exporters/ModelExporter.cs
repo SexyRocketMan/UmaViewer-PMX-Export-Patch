@@ -22,15 +22,9 @@ using System.Linq;
 public class ModelExporter
 {
     /// <summary>
-    /// The version of the *metadata* this export writes, on its own line of the model comment - not the
-    /// version of the application, which says nothing about whether a reader can understand the file.
-    ///
-    /// Rules, all of them in docs/PMX_EXTENSIONS.md:
-    ///   * a **missing** line means version 1, i.e. whatever the exporter wrote before this line existed, so
-    ///     an old export is a supported input rather than a special case;
-    ///   * bump it only when a reader that understood the previous version would *misunderstand* this one -
-    ///     adding a token or a line does not qualify, because readers must ignore what they do not know;
-    ///   * a reader must never *require* the line, and must never gate on <see cref="Application.version"/>.
+    /// The version of the metadata this export writes, on its own line of the model comment. Rules are in
+    /// docs/PMX_EXTENSIONS.md: a missing line means version 1, so an old export stays a supported input; bump only when
+    /// a reader of the previous version would misunderstand the file; no reader may require the line.
     /// </summary>
     public const int MetadataVersion = 2;
 
@@ -46,13 +40,8 @@ public class ModelExporter
         container.EnableEyeTracking = false;
         container.FaceDrivenKeyTarget?.FacialResetAll();
 
-        // Everything the export adds to the character comes back off in the `finally`.
-        //
-        // `AddBlendShape` bakes the facial frames onto the character's *shared* mesh, and the billboard adds objects
-        // under it; both were cleaned up only on the success path. Any throw in between - a mesh that is not
-        // readable, a texture that will not encode, the writer - left the model double-deforming for the rest of the
-        // session: the baked frames and the live `FaceDrivenKeyTarget` both moved the face, and the next export
-        // appended the frames a second time. An export that fails should leave the model exactly as it found it.
+        // everything the export adds comes back off in the finally: baked facial frames on a shared mesh and the
+        // billboard's objects, so a throw cannot leave the model double-deforming for the rest of the session
         try
         {
             AddBlendShape(container);
@@ -62,8 +51,7 @@ public class ModelExporter
                                                            MorphPartRenderers(container),
                                                            MorphPartTextures(container));
             RawMMDModel model;
-            // Reads both the baked vertices and the bone positions, so the rest pose has to be in place for
-            // the whole read. A no-op unless Config.PmxAPoseRestPose is set.
+            // reads baked vertices and bone positions, so the rest pose has to hold for the whole read (no-op unless PmxAPoseRestPose)
             using (UmaAPose.Enter(container))
             {
                 model = ReadPMXModel(container, textures, container.CharaEntry);
@@ -92,31 +80,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The index widths a pmx needs for this model.
-    ///
-    /// Worth spelling out because the writer's fallback is not safe for every model: `PMXWriter`'s default is
-    /// `VertexIndexSize = 2` and the 2-byte path casts each index with `(ushort)`, so a model past 65,535 vertices
-    /// wraps its indices silently instead of failing. The character path used to rely on that default while the
-    /// generic one computed the widths, which meant the *common* case was the unwatched one. Counts decide every
-    /// width here, so a costume with more parts than usual cannot quietly corrupt the file.
-    ///
-    /// Every index in a pmx is *signed* at the one-byte width - -1 is how the format says "none", for a parent
-    /// bone or a texture - so a 1-byte index addresses 128 entries and not 256. That is the rule
-    /// `Tools/pmx_inspect.py integrity` checks (`capacity = 128 * 256 ** (size - 1)`), and it is what the
-    /// one-byte path of this project's own reader does: `MMDReaderWriteUtil.ReadIndex` reads one byte with
-    /// `ReadSByte`, but **two with `ReadUInt16`** and four with `ReadInt32` (see `PMXReader.PmxConfig` for
-    /// where it is called). The sign bit therefore only costs capacity at one byte; the 2-byte threshold below
-    /// stays far inside the unsigned range, so nothing hinges on which reading a consumer takes. Reading the
-    /// 1-byte threshold as unsigned is not a rounding error: a scene with 129 to 255 bones was written with
-    /// 1-byte bone indices, and every index past 127 came out negative on the way out (`(sbyte)213` is -43) -
-    /// which is what `pfb_env_race10006_cutt000_002`'s 230-bone export showed as vertices "skinned to bone
-    /// -27", and its 212 materials the same way. Scene skeletons are exactly where that range occurs; a
-    /// character's 437 bones are past it, and nothing else about the export fails, so the file looks fine until
-    /// a consumer reads it.
-    ///
-    /// The pmx *specification* does call the vertex index unsigned, so 128 to 255 vertices could legally use one
-    /// byte - but only a reader that agrees would get those indices right, and a 1-byte index is worth a few
-    /// hundred bytes at most here, so every index takes the signed width.
+    /// The index widths a pmx needs for this model. They follow the counts because PMXWriter's default
+    /// (VertexIndexSize = 2) casts with (ushort) and wraps silently past 65,535 vertices. A one-byte index is signed -
+    /// -1 is the format's "none" - so it addresses 128 entries, not 256, and every index takes the signed width.
     /// </summary>
     private static PmxConfig PmxConfigFor(RawMMDModel model)
     {
@@ -154,7 +120,6 @@ public class ModelExporter
             return;
         }
 
-        // Vertex index size fix
         PmxConfig pmxConfig = PmxConfigFor(model);
 
         FileStream fileStream = new FileStream(path, FileMode.Create);
@@ -169,10 +134,8 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// Writes the model as FBX instead of PMX. Same model, same code path that read it - only the writer
-    /// changes - and the uma refinement step is applied here and nowhere else, so it can be turned off
-    /// without touching either writer. The texture paths are the model's own list: the texture exporter has
-    /// already written the files next to the model by the time this is called.
+    /// Writes the model as FBX instead of PMX: same model from the same read, only the writer differs. The uma
+    /// refinement is applied here and nowhere else, so it can be switched off without touching either writer.
     /// </summary>
     public static void WriteFbx(string path, RawMMDModel model)
     {
@@ -184,13 +147,11 @@ public class ModelExporter
         };
         bool refine = Config.Instance != null && Config.Instance.FbxApplyUmaRefinement;
 
-        // The helpers go before the skeleton is built: dropping bones renumbers the ones after them, and
-        // the skeleton, the skin clusters and the vertex weights all refer to bones by index.
+        // the helpers go before the skeleton is built: dropping bones renumbers the rest, and clusters and weights refer to bones by index
         int omitted = refine ? UmaModelRefinement.OmitHiddenBones(model) : 0;
         FbxExporter.Skeleton skeleton = FbxExporter.Skeleton.FromModel(model, options.LeafBones);
 
-        // The FBX writer converts Unity space to FBX space, so it is worth saying in the log what it was
-        // handed: a rig and a mesh that disagree on scale would show up here before it shows up in Blender.
+        // logged because the FBX writer converts Unity space to FBX space: a rig and a mesh disagreeing on scale shows up here first
         if (model.Bones != null && model.Bones.Length > 1 && model.Vertices != null && model.Vertices.Length > 0)
         {
             Debug.Log($"{Tag} fbx source: {model.Bones.Length} bones, {model.Bones[0].Name} at "
@@ -215,19 +176,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The export settings that decide what is in the file, always written so a reader - the uma addon, or a
-    /// person with a text editor - can tell why two exports of the same character differ, instead of
-    /// inferring it from the content:
-    ///
-    ///   * `morph_names` renames every morph, so it decides whether the tokens and shape keys a reader looks
-    ///     for exist at all. This line is how a naming-mode change shows itself without a metadata bump -
-    ///     the names cannot say which mode wrote them, but this can.
-    ///   * `extra_morphs`, `texture_variants` decide whether the advanced morphs and the variant maps exist.
-    ///   * `a_pose` changes the rest pose the model stands in.
-    ///   * `uma_material_fields` decides whether the material comments carry the uma shader values at all.
-    ///
-    /// Values are **names, not numbers**: the enum's numbering is implementation detail and has already
-    /// moved once (Both retired, Unified 3 -> 2), so a reader keying on `2` would have read the wrong mode.
+    /// The export settings that decide what is in the file, always written so a reader can tell why two exports of the
+    /// same character differ: morph_names, extra_morphs, texture_variants, a_pose, uma_material_fields. Values are names,
+    /// not numbers: the enum's numbering already moved once, so a reader keying on `2` would read the wrong mode.
     /// </summary>
     private static string ExportSettingsLine()
     {
@@ -254,16 +205,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The model-level half of the texture-variant contract, so a reader can tell three states apart
-    /// without scanning every material comment:
-    ///
-    ///   * no line at all - this export did not ask for the variants (`PmxTextureVariants` is off), or it
-    ///     predates the option, so there are no variant files beside it;
-    ///   * `texture variants: none` - they were asked for, and this character or prop ships none;
-    ///   * `texture variants: wet N, dirt M` - they were asked for and these are the family sizes.
-    ///
-    /// It states names and counts only. Which files belong to which material is the per-material
-    /// `wet=`/`dirt=` token, because one line cannot say that and a material has no second texture slot.
+    /// The model-level half of the texture-variant contract: no line means the variants were not asked for, "none" that
+    /// they were asked for and ship none here, "wet N, dirt M" the family sizes. Which file belongs to which material is
+    /// the per-material <c>wet=</c>/<c>dirt=</c> token, since a material has no second texture slot.
     /// </summary>
     private static string TextureVariantsNote()
     {
@@ -295,13 +239,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The variant files this material's maps have twins for, as the `wet=` / `dirt=` tokens a reader
-    /// needs. `wet=` lists files that *replace* their dry map - the dry name is the token's name minus
-    /// "_wet" - and `dirt=` lists the game's dirt maps, which are an overlay rather than a replacement.
-    ///
-    /// A pmx material has one texture slot, so a second map can only be named in text; that is the same
-    /// reason `morph=` and `blend=` exist. The files themselves are written by
-    /// <see cref="TextureExporter.ExportAllTexture"/>, which records the pairing as it goes.
+    /// The variant files this material's maps have twins for, as the <c>wet=</c> / <c>dirt=</c> tokens: <c>wet=</c> lists
+    /// files that replace their dry map (the dry name is the token minus "_wet"), <c>dirt=</c> the game's dirt maps, an
+    /// overlay. A material has one texture slot, so a second map can only be named in text - the same reason
+    /// <c>morph=</c> and <c>blend=</c> exist. <see cref="TextureExporter.ExportAllTexture"/> records the pairing.
     /// </summary>
     private static string TextureVariantComment(Material material)
     {
@@ -333,8 +274,7 @@ public class ModelExporter
         var character = container as UmaContainerCharacter;
         string morphNote = ExtraMorphsNote(character);
         string variantNote = TextureVariantsNote();
-        // always, and before the optional lines: two exports of one character can differ completely because of
-        // these switches, and the alternative to saying so is a reader inferring it from the file's contents
+        // always, and before the optional lines: two exports can differ completely because of these switches, so say so rather than leave it to be inferred
         string settingsNote = "\n" + ExportSettingsLine();
         if (entry != null)
         {
@@ -360,9 +300,7 @@ public class ModelExporter
 
         //Read vertices And triangles
         List<Renderer> renderers = new List<Renderer>(container.GetComponentsInChildren<Renderer>());
-        // the parts an extra morph drives are inactive, so the walk above misses them. Added here, before the
-        // vertices, so their triangles are in the mesh; they are collapsed onto a point inside the head and a
-        // deploy morph puts each one back, which is the state the game has them in at rest.
+        // the parts an extra morph drives are inactive, so the walk misses them; added before the vertices, and they rest collapsed inside the head
         var morphParts = MorphPartRenderers(character);
         var restInvisible = new HashSet<Renderer>();
         foreach (Renderer renderer in morphParts)
@@ -371,14 +309,9 @@ public class ModelExporter
             if (!renderers.Contains(renderer)) renderers.Add(renderer);
             restInvisible.Add(renderer);
         }
-        // The animated tears are runtime instances, switched off until a tear controller raises their weight, so
-        // the walk above misses them exactly like the eye manga. They are hidden the same way as the other
-        // decals: collapsed at rest, deployed by a morph of their own.
-        //
-        // This follows `PmxExtraMorphs` like every other part of the feature. It used to be unconditional, which
-        // defeated the switch in the worst way: with the morphs off the cards still came in, collapsed onto the
-        // head with no deploy morph to show them - and the tokens that explain them were dropped, so nothing in the
-        // file said what they were.
+        // the animated tears are runtime instances, switched off until a tear controller raises their weight, so the walk
+        // above misses them like the eye manga; they are hidden the same way. Gated on PmxExtraMorphs: without the morphs
+        // the cards would arrive collapsed with nothing to show them and no token saying what they are
         var tearObjects = new List<GameObject>();
         bool extraMorphs = Config.Instance == null || Config.Instance.PmxExtraMorphs;
         if (extraMorphs && character != null && character.TearControllers != null)
@@ -405,25 +338,9 @@ public class ModelExporter
         model.Vertices = ReadVerticesAndTriangles(renderers, bones, ref triangles, container.transform, vertexRanges);
         model.TriangleIndexes = triangles.ToArray();
 
-        // The decal parts are collapsed onto one point inside the head, and a deploy morph per part puts each
-        // one back. A pmx is read with every morph at 0, so the collapsed state is the one the model must
-        // *rest* in - and a collapsed decal is a handful of zero-area triangles, invisible, wherever the point
-        // is. This is the idiom MMD models use for a hidden accessory: Appearance Miku hides two eye highlights
-        // with `HL消1`/`HL消2`, which move 58 and 116 vertices onto a single point each.
-        //
-        // The deployed position is nudged clear of the surface it is painted on: the parts were drawn *at* the
-        // surface, so at their original position a deployed decal is coplanar with the face - the eye manga
-        // disappear behind the eye the moment an eye-hide morph moves it, and the blush z-fights the cheek it is
-        // painted on, which a renderer shows as shadow acne across the face. Offsetting the deploy target rather
-        // than the rest position keeps the rest state exactly as hidden as before.
-        //
-        // The offset is that clearance along the decal's own normal, which is the one direction in which an offset
-        // *is* clearance. It used to be `6% of the distance from the head bone`, along the radius from that bone, and
-        // measured per decal that was wrong twice over: the radius is not the surface normal (the eye manga sat 25
-        // degrees off theirs, the left static tear 48), so most of the offset slid the decal *across* the face
-        // instead of off it - 0.061 of sideways travel on the manga, 0.074 on the left static tear - and the
-        // clearance that did result came out as anything from 0.039 to 0.063 depending on the part's angle. Same
-        // clearance for every part now, and no sideways travel.
+        // the decal parts rest collapsed onto one point inside the head, a deploy morph per part putting them back: a pmx is
+        // read with every morph at 0, and zero-area triangles are invisible wherever the point sits. The deployed target is
+        // nudged clear of the painted surface along the decal's own normal - the one direction where an offset is clearance
         var deployed = new Dictionary<int, Vector3>();
         Vector3 collapsePoint = Vector3.zero;
         if (morphParts.Count > 0)
@@ -440,9 +357,7 @@ public class ModelExporter
                 int end = Mathf.Min(range.start + range.count, model.Vertices.Length);
                 if (end <= range.start) continue;
 
-                // the part's outward direction, from its own normals: a decal is a picture painted on a surface, so
-                // its normal is what "off the face" means. Oriented away from the head bone, because a mirrored
-                // instance carries mirrored normals and those point *into* the head.
+                // the part's outward direction from its own normals, oriented away from the head bone, since mirrored instances carry inward normals
                 Vector3 partNormal = Vector3.zero;
                 Vector3 partCentre = Vector3.zero;
                 for (int i = range.start; i < end; i++)
@@ -455,13 +370,8 @@ public class ModelExporter
                 if (Vector3.Dot(partNormal, partCentre - collapsePoint) < 0f) partNormal = -partNormal;
                 partNormal.Normalize();
 
-                // The clearance has to be scale-free: these coordinates are the character container's, not a
-                // physical length, and the pmx round trip multiplies them again (measured: the head bone reads
-                // 1.34 here and 16.79 in the file, 12.5x). A constant length here would therefore be a different
-                // physical distance in every export, which is how a "0.063" became 0.79 in the file and pushed
-                // every decal almost 0.8 clear of the face. The part's distance from the head bone is the scale
-                // the old code used and the only one available, so keep the fraction - and change only what was
-                // actually wrong, the direction.
+                // the clearance has to be scale-free: these are container coordinates and the pmx round trip scales them again
+                // (12.5x), so a constant length would differ per export. Hence a fraction of the part's distance from the head bone.
                 float radius = 0f;
                 for (int i = range.start; i < end; i++)
                 {
@@ -470,22 +380,9 @@ public class ModelExporter
                 radius /= (end - range.start);
                 float clearance = DecalClearanceFraction * radius;
 
-                // A part's facing from its **winding**, not from its vertex normals.
-                //
-                // The mirrored right-hand instances arrive with their triangles reversed while the normals they
-                // carry still point outward, so the file ends up holding a part whose polygons face into the
-                // head and whose shading normals face out. Measured with `Tools/probe_decal_normals.py`, whose
-                // "avg normal" is Newell's normal of each *deployed polygon*: two of the four eye manga and one
-                // tear sheet read -0.705 / -0.704 / -0.793 where their twins read +0.70 / +0.79.
-                //
-                // A fix gated on the vertex normals therefore cannot see it - that version was written, changed
-                // nothing at all (byte-identical file), and was reverted - so the test here is the geometric
-                // one: sum the triangles' cross products (the same right-hand convention Newell's normal uses)
-                // and compare with the direction away from the head. The winding is reversed on a part that
-                // fails, which is the same surface with correct facing; the normals are left alone precisely
-                // because they were already right.
-                //
-                // Done before the collapse below: a collapsed triangle has no area, and therefore no winding.
+                // facing comes from the **winding**, not the vertex normals: the mirrored right-hand instances arrive with their
+                // triangles reversed while their normals still point outward, so a fix gated on normals cannot see it. Sum the cross
+                // products (Newell's convention) and reverse the winding where it faces the head, before the collapse.
                 Vector3 winding = Vector3.zero;
                 for (int t = 0; t + 2 < model.TriangleIndexes.Length; t += 3)
                 {
@@ -645,9 +542,7 @@ public class ModelExporter
         // Naming is decided in one place so exported models and exported motions agree, see MorphNaming.
         var mode = Config.Instance != null ? Config.Instance.PmxMorphNameMode : PmxMorphNameMode.Unified;
 
-        // Morph name -> accumulated per-vertex offsets. Keyed by name so a morph that exists on
-        // several meshes (e.g. the same eyebrow morph baked onto M_Face and M_Mayu) can either be
-        // kept apart (tagged names) or merged (the unified/short spellings) depending on the mode.
+        // morph name -> accumulated per-vertex offsets, keyed by name so one morph on several meshes is kept apart (tagged) or merged (unified)
         Dictionary<string, Morph> morphsByName = new Dictionary<string, Morph>();
         Dictionary<string, Dictionary<int, Vector3>> morphOffsets = new Dictionary<string, Dictionary<int, Vector3>>();
         List<string> morphOrder = new List<string>();
@@ -667,8 +562,7 @@ public class ModelExporter
             }
             else
             {
-                // the effect parts the facial morphs drive are not all meshes (a manga eye can be a particle or
-                // a sprite); anything without a mesh is simply not geometry this export can carry
+                // the effect parts the facial morphs drive are not all meshes (a manga eye can be a particle); anything without one is not geometry here
                 continue;
             }
             if (mesh == null) continue;
@@ -701,7 +595,7 @@ public class ModelExporter
                     var offsets = morphOffsets[morphName];
                     for (int j = 0; j < vertexCount; j++)
                     {
-                        // Offset ensures the vertices map to the correct mesh in the combined PMX
+                        // the offset maps the vertex into the combined pmx's vertex list
                         offsets[vertexOffset + j] = deltaVertices[j];
                     }
                 }
@@ -729,9 +623,8 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// Morph categories come from the parsed family, not from the spelling of the exported name:
-    /// the unified spelling renames "EyeBrow_*" to "Brow_*", which a name sniff would classify as
-    /// "other".
+    /// Morph categories come from the parsed family, not from the spelling of the exported name: the unified spelling
+    /// renames "EyeBrow_*" to "Brow_*", which a name sniff would classify as "other".
     /// </summary>
     private static MorphCategory GetMorphCategory(MorphNaming.Parts parts)
     {
@@ -758,9 +651,7 @@ public class ModelExporter
             pmxbone.Movable = true;
             pmxbone.Rotatable = true;
             pmxbone.Controllable = true;
-            // A PMX bone's tail is either the index of one of its children or an offset from its own position.
-            // The uma rig has no tails, so a child's head becomes the tail - the child that continues the
-            // bone's own chain, which is what makes Blender draw the bone along it.
+            // a pmx tail is a child index or an offset; the uma rig has none, so the head of the chain-continuing child becomes it
             pmxbone.ChildBoneVal = BoneTail(bone, bonelist);
             pmxbones.Add(pmxbone);
         }
@@ -768,37 +659,18 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// How the tail of one bone is written: the head of the child that continues the chain, or an offset from the
-    /// bone's own position.
-    ///
-    /// "Continues the chain" is the child that MMD would point the bone at (see <see cref="ChainChild"/>), which
-    /// is how MMD's own rigs are built - measured over 98 reference models, the upper body, the neck and the second
-    /// upper body point at their chain child 97, 94 and 90 times out of their 98, 95 and 93 appearances. Taking the
-    /// first child instead goes wrong wherever the rig hangs attachments off the same joint: the hip's first child
-    /// is a skirt panel 35 degrees off the body axis while the spine's own control bone, 2 degrees off it, comes
-    /// fifteenth in the hierarchy.
-    ///
-    /// When that continuation is not the first child, it is named as the tail when it sits within 1.5 segments of
-    /// the bone - the hip at its spine control bone, the wrist at the middle finger, the elbow at the wrist, which
-    /// is how MMD's own rigs store the spine chain (the upper body at 上半身2, the neck at 頭) - and written as an
-    /// offset of at most the segment leading into the bone otherwise, so a bone stays in proportion instead of
-    /// growing a spike toward the hair: the head's continuation sits 2.75 away where the neck segment is 0.68.
-    /// Otherwise the first child is named as the tail, as it always was.
-    ///
-    /// Two kinds of bone are not tailed along the chain at all. The eyes point out of the face (<see
-    /// cref="FacesForward"/>), because a gaze is a rotation around the bone's own axes. A bone with nothing usable
-    /// below it - finger tips, hair and tail ends, and the roll helpers, whose only child sits on top of
-    /// themselves - gets a tail along the chain they belong to (<see cref="LeafTail"/>).
+    /// How one bone's tail is written: the head of the child that continues the chain (the one MMD would point the bone at,
+    /// see <see cref="ChainChild"/>), or an offset from the bone's own position when that child is not the first or sits more
+    /// than 1.5 incoming segments away. The eyes point out of the face instead (<see cref="FacesForward"/>), and a bone with
+    /// nothing usable below it follows its own chain (<see cref="LeafTail"/>).
     /// </summary>
     private static Bone.ChildBone BoneTail(Transform bone, List<Transform> bonelist)
     {
         Vector3 chain = ChainDirection(bone);
         if (FacesForward(bone))
         {
-            // the eyes: their tail points out of the face, not along the chain that arrives at them. The rig's
-            // bone axes have forward pointing where the character looks (in the exported file that is -z, where
-            // the face helpers sit), and the eye bones themselves hang off the head, so the head's forward is
-            // what they look along. See FacesForward.
+            // the eyes: their tail points out of the face, not along the chain arriving at them. The rig's bone axes have forward
+            // where the character looks (-z in the exported file) and the eye bones hang off the head; see FacesForward.
             Vector3 forward = bone.parent != null ? bone.parent.forward : bone.forward;
             if (forward.sqrMagnitude > 1e-8f)
             {
@@ -809,8 +681,7 @@ public class ModelExporter
         Transform first = PMXTailChild(bone, bonelist);
         if (first == null || chain.sqrMagnitude <= 1e-10f)
         {
-            // a leaf, or a bone whose ancestry describes no direction (a root): the first usable child is the only
-            // hint there is, and the chain stub of LeafTail is the fallback when even that is missing
+            // a leaf, or a root: the first usable child is the only hint, and the chain stub of LeafTail is the fallback
             return first != null ? ChildIndex(first, bonelist) : OffsetTail(LeafTail(bone));
         }
         Transform continuation = ChainChild(bone, bonelist, chain);
@@ -818,11 +689,8 @@ public class ModelExporter
         {
             return ChildIndex(first, bonelist);
         }
-        // The first child was an attachment and the chain runs through another child after all: name that one when
-        // it is roughly where the next joint should be - the hip at its spine control bone, the wrist at the middle
-        // finger, the elbow at the wrist, which is what MMD's own rigs store. Only an outlier gets turned into an
-        // offset of at most the segment leading into the bone, which is the head: its continuation, a head-height
-        // helper, sits four times further away than the neck segment is long.
+        // the first child was an attachment and the chain runs through another child after all: name that one when it
+        // is roughly where the next joint should be, else write an offset of at most the segment leading into the bone
         Vector3 direction = continuation.position - bone.position;
         float distance = direction.magnitude;
         if (distance <= chain.magnitude * 1.5f)
@@ -853,12 +721,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The bones whose tail has to point out of the face instead of along the chain that arrives at them:
-    /// the eyeballs and the locators that drive them. MMD points an eye bone at the viewer, so that rotating
-    /// it around its own axes moves the gaze - carried along the chain (which comes in from the middle of the
-    /// head, up and out towards the temple) a gaze rotation reads as a roll instead, and the eyes look inward.
-    /// The direction comes from the bone's own forward axis, which on this rig points where the character
-    /// looks; the length stays the same as any other leaf tail, half the segment leading into the bone.
+    /// The bones whose tail has to point out of the face instead of along the chain arriving at them: the eyeballs and the
+    /// locators that drive them. MMD points an eye bone at the viewer so rotating it about its own axes moves the gaze;
+    /// carried along the chain (which comes in from the middle of the head towards the temple) a gaze rotation reads as a
+    /// roll instead and the eyes look inward.
     /// </summary>
     private static bool FacesForward(Transform bone)
     {
@@ -877,29 +743,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The child that continues the chain best: the one whose direction lies closest to the segment arriving at
-    /// the bone, with the rig's attachment families losing ties to the body skeleton.
-    ///
-    /// Every joint of the body has a child that is really the next joint, but the rig hangs attachments off the
-    /// same joint - the hip carries fifteen skirt and ribbon panels before the spine, the chest carries a jacket
-    /// and a mantle, the wrist carries a hand attachment, the elbow carries the arm roll helper - and the first
-    /// child in the hierarchy is not necessarily the one the chain runs through. Measured over the 368 models of
-    /// the dump against the joint MMD points each bone at (the thigh at the knee, the elbow at the wrist, the
-    /// wrist at the middle finger, the chest at the neck, the hip up the body), taking the first usable child
-    /// lands on the right joint 71.8% of the time and this choice 99.9%:
-    ///
-    ///   * alignment with the incoming segment decides between body children (the hip's spine control bone sits
-    ///     2 degrees off the body axis where every skirt panel is 30 to 54 degrees off it),
-    ///   * a child of one of the attachment families only wins when there is no body child at all, which is what
-    ///     keeps a hair strand - 145 degrees off the head segment and the only child there is - pointing along
-    ///     the strand the way MMD's own rigs do,
-    ///   * a tie (the elbow's arm roll helper and the wrist are both along the forearm to within a tenth of a
-    ///     degree) goes to the child with more bones below it, then to the farther one.
-    ///
-    /// Children that were filtered out of the export (the Col_* colliders) and the "_Handle" helpers describe no
-    /// direction and are left out; a child sitting exactly on the bone is walked through, because the rig hangs
-    /// an offset there and the real joint off that (the ankle offset, then the toe). Null when nothing below the
-    /// bone can be measured, or when there is no incoming segment to measure against.
+    /// The child that continues the chain best: the one whose direction lies closest to the segment arriving at the bone, with
+    /// the rig's attachment families losing to body children whatever the angles. Taking the first child instead lands on MMD's
+    /// joint 71.8% of the time against 99.9% for this choice, measured over 368 models; ties go to more bones below, then the
+    /// farther child. Null when nothing below the bone can be measured.
     /// </summary>
     private static Transform ChainChild(Transform bone, List<Transform> bonelist, Vector3 chain)
     {
@@ -954,10 +801,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The children that can act as a tail: every child that describes a direction, and - for a child sitting
-    /// exactly on the bone, which is how the rig hangs an offset and then the real joint off it - the children of
-    /// that child, since the chain runs on through them. "_Handle" helpers describe no direction, and children
-    /// filtered out of the export (the Col_* colliders) are not in the bone list at all.
+    /// The children that can act as a tail: every child describing a direction, plus - for a child sitting exactly on the
+    /// bone, which is how the rig hangs an offset and then the real joint off it - the children of that child. "_Handle"
+    /// helpers describe no direction, and children filtered out of the export are not in the bone list.
     /// </summary>
     private static void CollectTailCandidates(Transform pivot, Transform bone, List<Transform> bonelist,
                                               List<Transform> into, int depth)
@@ -977,10 +823,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The prefixes the rig gives the parts that hang off the body rather than forming it: Sp_ spring chains for
-    /// cloth, hair and accessories (63744 bones across the dump), Tp_ and Pc_ prefab parts, Ex_ extras. A body
-    /// joint carries no such prefix - Hip, UpBody_Ctrl, Waist, Spine, Chest, Neck, Head, Thigh_L, Knee_L, Arm_L,
-    /// Elbow_L, Wrist_L, Ankle_L, Toe_L, and the fingers.
+    /// The prefixes the rig gives parts that hang off the body rather than forming it: Sp_ spring chains for cloth, hair and
+    /// accessories, Tp_ and Pc_ prefab parts, Ex_ extras. A body joint carries none - Hip, Waist, Spine, Chest, Neck, Head,
+    /// Thigh_L, Knee_L, Arm_L, Elbow_L, Wrist_L, Ankle_L, Toe_L and the fingers.
     /// </summary>
     private static bool IsAttachment(Transform bone)
     {
@@ -1003,15 +848,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The first child that describes a direction: one that is in the export, not a "_Handle" helper, and not
-    /// sitting at the bone's own position. Children that were filtered out of the export (the Col_* colliders)
-    /// and the "_Handle" helpers describe no direction at all.
-    ///
-    /// A child sitting exactly on the bone describes no direction either, but the chain can still continue
-    /// through it: the ankle's own children are the ankle offset and the IK handle, both exactly on the ankle,
-    /// and the toe that continues the foot hangs off the offset. Looking one level further in matches what a
-    /// known-good MMD model does with its ankle - measured on four of them, 足首 points down and forward
-    /// towards the toes, never straight down the way the knee segment arrives.
+    /// The first child that describes a direction: in the export, not a "_Handle" helper, and not sitting at the bone's own
+    /// position. Such a child describes no direction either, but the chain can continue through it - the ankle's children are
+    /// the ankle offset and the IK handle, both on the ankle, and the toe hangs off the offset - so it looks one level
+    /// further in, which is what known-good MMD rigs do with 足首.
     /// </summary>
     private static Transform PMXTailChild(Transform bone, List<Transform> bonelist, int depth = 1)
     {
@@ -1031,9 +871,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The direction the chain runs in as it arrives at this bone: the segment from its parent to itself, or
-    /// - for a bone sitting exactly on its parent, which is how the uma rig places the roll helpers - the
-    /// first ancestor segment that is not degenerate. Zero when there is none, e.g. for the root.
+    /// The direction the chain runs in as it arrives at this bone: the segment from parent to self, or - for a bone sitting
+    /// exactly on its parent, as the uma rig places the roll helpers - the first ancestor segment that is not degenerate.
+    /// Zero when there is none, e.g. for the root.
     /// </summary>
     private static Vector3 ChainDirection(Transform bone)
     {
@@ -1047,17 +887,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The tail offset for a bone with nothing usable below it: half of the direction the chain runs in, so
-    /// that a finger tip carries on the finger and a roll helper points along the arm or forearm it rolls -
-    /// away from the body on both sides, instead of following its own local axes (a mirrored rig does not lay
-    /// those out the same way on both sides, which used to point one roll helper at the neck).
-    ///
-    /// A bone that describes no direction at all (a root, or a bone whose whole ancestry is degenerate) falls
-    /// back to the direction of its first child that has one, and otherwise to a short stub, so that there is
-    /// always something to draw.
-    ///
-    /// The value is an offset from the bone's own position, not a position: mmd_tools reads it as
-    /// <c>tail = head + offset</c> (core/pmx/importer.py), and its own exporter writes it the same way.
+    /// The tail offset for a bone with nothing usable below it: half of the direction the chain runs in, so a finger tip
+    /// carries on the finger and a roll helper points along the arm it rolls rather than along its own local axes (a mirrored
+    /// rig does not lay those out the same on both sides). A bone describing no direction at all falls back to its first
+    /// directional child, then to a short stub. An offset, not a position: mmd_tools reads <c>tail = head + offset</c>.
     /// </summary>
     private static Vector3 LeafTail(Transform bone)
     {
@@ -1069,15 +902,13 @@ public class ModelExporter
             Vector3 delta = bone.GetChild(i).position - bone.position;
             if (delta.sqrMagnitude > 1e-10f) return delta * 0.5f;
         }
-        // nothing around it describes a direction: a stub along the bone's own up, which at least keeps the
-        // bone visible in a bone list that only stores head, tail and roll
+        // nothing around it describes a direction: a stub along the bone's own up at least keeps it visible in a head/tail/roll list
         return bone.up * 0.1f;
     }
 
     /// <summary>
-    /// The exported texture a uma material uses for one of its maps, found in the model's texture list the
-    /// same way the albedo is (by file name). Null when the material has no such map, or when the texture
-    /// did not make it into the export - the caller decides what to do without it.
+    /// The exported texture a uma material uses for one of its maps, found in the model's texture list by file name as
+    /// the albedo is. Null when the material has no such map or the texture did not make it into the export.
     /// </summary>
     private static MMDTexture FindExportedTexture(RawMMDModel model, Material material, string property)
     {
@@ -1095,12 +926,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The texture a material is pointed at when its own is not in the export: the first one, which at least
-    /// gives the surface *a* texture instead of nothing. Null when the model carries no textures at all - a
-    /// scene the game colours entirely at runtime, `3d/env/live/common` and `3d/env/race/common` among them -
-    /// and null is what the writer turns into PMX's own "-1, no texture". Reading `TextureList[0]` blind on
-    /// such a model threw `ArgumentOutOfRangeException` out of the export, which is the same
-    /// "textures written, no model" symptom the missing normals produced.
+    /// The texture a material is pointed at when its own is not in the export: the first one, which at least gives the
+    /// surface a texture. Null when the model carries none at all - a scene the game colours entirely at runtime - and null
+    /// is what the writer turns into PMX's own "-1, no texture".
     /// </summary>
     private static MMDTexture FirstTexture(RawMMDModel model)
     {
@@ -1118,16 +946,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The uma shader parameters an MMD material has no field for, written into the material comment as one
-    /// line of key=value pairs. mmd_tools imports that comment onto the material
-    /// (<c>material.mmd_material.comment</c>), and the uma addon's Shading operator reads it back to set its
-    /// shader up with the values this model was exported with instead of its own defaults. Anything that does
-    /// not know about it sees a comment, and a property the game renames is skipped rather than breaking the
-    /// export - which is also how a rename will be noticed.
-    ///
-    /// Values use dots for decimals and commas only between the components of a colour, and the numbers are
-    /// written with the invariant culture so that a machine with a comma decimal separator cannot produce a
-    /// comment that parses as something else.
+    /// The uma shader parameters an MMD material has no field for, written into the material comment as one line of
+    /// key=value pairs. mmd_tools keeps that comment (<c>material.mmd_material.comment</c>) and the uma addon's Shading
+    /// operator reads it back; a property the game renames is skipped rather than breaking the export. Numbers use the
+    /// invariant culture, so a comma decimal separator cannot produce a comment that parses differently.
     /// </summary>
     private static string UmaMaterialComment(Material material, RawMMDModel model)
     {
@@ -1168,8 +990,7 @@ public class ModelExporter
             comment.Append(' ').Append(key).Append('=').Append(texture.name);
         }
 
-        // the shade ramp and the light threshold are what the Blender shader group calls "Shaded Texture"
-        // and "Light Threshold"
+        // the shade ramp and the light threshold are the Blender shader group's "Shaded Texture" and "Light Threshold"
         Number("toon_step", "_ToonStep");
         Number("toon_feather", "_ToonFeather");
         Number("specular_power", "_SpecularPower");
@@ -1192,40 +1013,25 @@ public class ModelExporter
         Number("emissive_rim_intensity", "_EmissiveRimIntensity");
         Number("use_option_mask", "_UseOptionMaskMap");
 
-        // what the game's face shader needs and an MMD material has no field for. _faceShadow* gates the cheek and
-        // nose regions, so without them the addon cannot tell a character whose regions are on from one whose are
-        // off; _NormalizeNormal 0 means the game uses the raw vertex normal rather than a normalised one.
-        //
-        // _CylinderBlend comes from the material, and after this round it is the *shipped asset's* value rather
-        // than an override: the game sets the rim, toon and saturation values at runtime
-        // (Gallop/Live/Director.cs:215-258) and never sets this one, so the asset's value is what the game
-        // renders with. The viewer used to force 0.25 here, which the exporter then carried; that override is
-        // gone. The cost of the change was measured at 0.04 of a level on the face crop's mean luminance.
+        // what the game's face shader needs and an MMD material has no field for. _faceShadow* gates the cheek and nose
+        // regions; _NormalizeNormal 0 means the raw vertex normal rather than a normalised one. _CylinderBlend is the *shipped
+        // asset's* value: the game sets only the rim, toon and saturation values at runtime, never this one.
         Number("cylinder_blend", "_CylinderBlend");
         Number("normalize_normal", "_NormalizeNormal");
         Number("face_shadow_end_y", "_faceShadowEndY");
         Number("face_shadow_length", "_faceShadowLength");
-        // the alpha that gates the region path. In the game it is *driven*: Gallop/FaceDrivenKeyTarget binds it,
-        // with no curve between them, to the X scale of a locator named "Shade_Ctrl" (BindProperty.LocatorPart.ScaX,
-        // Type Shader, PropertyName "_faceShadowAlpha"). That locator is neither a bone nor a morph in the exported
-        // skeleton - the export has no node by that name at all - so what a static pmx can carry is the rest value.
-        // Writing it means a character whose material does set the alpha renders its regions with nobody forcing it.
+        // the alpha that gates the region path is *driven* in the game - FaceDrivenKeyTarget binds it to the X scale of a
+        // locator named "Shade_Ctrl" that is neither a bone nor a morph in the export - so a static pmx carries the rest value
         Number("face_shadow_alpha", "_faceShadowAlpha");
         Tint("face_shadow_color", "_faceShadowColor");
-        // the two strengths the region gates compare `factor >= 1 - strength` against: named for exactly
-        // that role, and 0.775 makes a threshold the factor can actually cross
+        // the strengths the region gates compare `factor >= 1 - strength` against; 0.775 makes a threshold the factor can cross
         Number("cheek_threshold", "_CheekPretenseThreshold");
         Number("nose_threshold", "_NosePretenseThreshold");
         Number("vertex_color_toon_power", "_VertexColorToonPower");
         Vector("original_light", "_OriginalDirectionalLightDir");
 
-        // The region colours, and they are per character: the viewer sets all twelve from the character's own
-        // colour data rows at runtime (UmaContainerCharacter.SetMaskColor), so an export that omits them leaves the
-        // region path with nothing to switch between. Six for the surface and six for the toon side, R/G/B in
-        // pairs, matching the six colour constants the game's pixel program uses.
-        // (The region's own gate, _faceShadowAlpha, is written above with the other face-shader values. It is a
-        // *driven* property of the facial driven-key system - Gallop/FaceDrivenKeyTarget binds it to the X scale
-        // of a locator named "Shade_Ctrl" - so what the export can carry is its rest value. See the note there.)
+        // the region colours are per character: the viewer sets all twelve from the character's colour data rows at runtime
+        // (UmaContainerCharacter.SetMaskColor), so omitting them leaves the region path nothing to switch between.
         Tint("mask_r1", "_MaskColorR1");
         Tint("mask_r2", "_MaskColorR2");
         Tint("mask_g1", "_MaskColorG1");
@@ -1249,14 +1055,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The extra facial morphs that touch a material, as one <c>morph=</c> token in its comment.
-    ///
-    /// An MMD material has no slot for a texture swap or a shader property, but it does have a comment, and the
-    /// uma addon reads it back (<c>material.mmd_material.comment</c>). The grammar is one token per material,
-    /// holding every morph that binds it: <c>morph=&lt;morph&gt;:&lt;bind type&gt;:&lt;locator part&gt;:&lt;property&gt;[, ...]</c>,
-    /// so the cheek decal reads <c>morph=Cheek_Ctrl:Texture:ScaX:_CheekRate,ScaY:_CheekRate,ScaZ:_CheekRate</c>.
-    /// The locator part is the axis of the transform the game's own animation drives; turning that into a
-    /// driver is the addon's job. Anything that does not know the token sees a comment.
+    /// The extra facial morphs that touch a material, as one <c>morph=</c> token in its comment - an MMD material has no slot
+    /// for a texture swap or a shader property but it does have a comment, and the uma addon reads it back. One token per
+    /// material, holding every morph that binds it:
+    /// <c>morph=&lt;morph&gt;:&lt;bind type&gt;:&lt;locator part&gt;:&lt;property&gt;[, ...]</c>.
     /// </summary>
     private static string ExtraMorphComment(UmaContainerCharacter character, Material material)
     {
@@ -1290,15 +1092,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The sprite-sheet grid of an animated tear material, as `scroll=<cols>x<rows>`.
-    ///
-    /// This token is the *only* carrier of the grid: the pmx used to hold it a second time as one uv morph per sheet
-    /// frame, and those are gone (see `TearMorphs`). A consumer that reads the comment - the Blender add-on - steps
-    /// the texture itself over this grid, which is what a sprite sheet scroll is. The grid is the prefab's, not the
-    /// material's: `texture_width`/`_height` and the part size come from the tear object's own asset table.
-    ///
-    /// Only the pool card gets the token: the rolling card is not exported, so a scroll aimed at it would animate a
-    /// decal that is not in the model (see `TearMorphs`).
+    /// The sprite-sheet grid of an animated tear material, as <c>scroll=&lt;cols&gt;x&lt;rows&gt;</c> - the only carrier of the
+    /// grid, since no uv morph is written for it (see <c>TearMorphs</c>). The grid comes from the tear prefab's asset
+    /// table, and only the pool card gets the token: the rolling card is not exported.
     /// </summary>
     private static string ExtraMorphGrid(UmaContainerCharacter character, Renderer renderer)
     {
@@ -1328,20 +1124,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// How the part is meant to be drawn, when MMD's plain alpha blend is not it.
-    ///
-    /// The cheek decal is a *multiply* overlay: its texture is white where the face shows through and tinted
-    /// where the blush is, and the game's `MultiplyCheek` shader multiplies it into the face. An MMD material
-    /// has no multiply blend, so drawn as it is the decal paints a white shell over the cheeks. The map is
-    /// exported exactly as the game ships it and the token says what the part is, so a consumer that
-    /// understands it - the uma addon - multiplies it and takes the transparency from the same map (its
-    /// "Fix mini umamusume model" operator does precisely this for minis, which ship the same defect: a
-    /// multiply map with no alpha). The exporter used to bake an alpha-only copy of the map instead; that
-    /// copy is gone, because it was a degraded duplicate of what a shade pass can do exactly.
-    ///
-    /// Plain MMD still draws the texture with its own alpha, which is a white shell on a deployed cheek -
-    /// which is why the part is hidden by geometry at rest rather than by zeroing the material, and why a
-    /// model exported for MMD alone should leave the cheek morph alone.
+    /// How the part is meant to be drawn, when MMD's plain alpha blend is not it. The cheek decal is a *multiply* overlay - white
+    /// where the face shows, tinted where the blush is - and an MMD material has no multiply blend, so as it stands the decal
+    /// paints a white shell. The map ships as the game has it and the token says what the part is; a consumer that understands it
+    /// takes the transparency from the same map. That white shell is why the part is hidden by geometry, not by zeroing the material.
     /// </summary>
     private static string ExtraMorphBlend(Material material)
     {
@@ -1350,12 +1136,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// One vertex morph per decal part, carrying the offsets that put the part back where the game has it - plus the
-    /// clearance that keeps it off the surface it is painted on (`DecalClearanceFraction`).
-    ///
-    /// Named for what a user looks for: `Manga_Spin_L` … `Manga_Wide_R` for the eye manga, `Tear_Static_L`/`_R` for the
-    /// static tears, `Tear_Stream_*`/`Tear_Pool_*` for the animated cards, `Cheek_Blush` for the blush. At weight 0 the
-    /// part is collapsed away (the model's rest state, as in the game); at 1 it is deployed.
+    /// One vertex morph per decal part, carrying the offsets that put the part back where the game has it plus the clearance
+    /// that keeps it off the painted surface (<c>DecalClearanceFraction</c>). At weight 0 the part is collapsed away - the
+    /// model's rest state, as in the game - and at 1 it is deployed.
     /// </summary>
     private static List<Morph> DeployMorphs(UmaContainerCharacter character,
                                             List<(Renderer renderer, int start, int count)> ranges,
@@ -1375,10 +1158,8 @@ public class ModelExporter
         {
             if (morph == null) continue;
 
-            // the object the material lives on (the cheek decal) and the objects a bind shows and hides. By
-            // *instance*, not by name: the four eye-manga prefabs are the same four names once for each eye,
-            // so keying on the name folded the right eye into the left one and five parts came out where
-            // eight belong.
+            // the object the material lives on (the cheek decal) and the objects a bind shows and hides. By *instance*, not by
+            // name: the four eye-manga prefabs use the same four names for each eye, so a name key folded them together.
             var parts = new List<GameObject>();
             if (morph.BindGameObject != null) parts.Add(morph.BindGameObject);
             if (morph.BindProperties != null)
@@ -1412,9 +1193,8 @@ public class ModelExporter
                     }
                 }
                 if (data.Count == 0) continue;
-                // where the part actually sits, from the vertices a deploy morph puts back - a mirrored
-                // right-eye instance keeps the left one's position (the mirror is a negative scale), so the
-                // renderer's own bounds cannot say which eye it is, while its deployed vertices can
+                // where the part sits, from the vertices a deploy morph puts back: a mirrored right-eye instance keeps the left one's
+                // position (the mirror is a negative scale), so only its deployed vertices say which eye it is
                 var sum = Vector3.zero;
                 int placed = 0;
                 foreach (var item in data)
@@ -1440,34 +1220,18 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// How far a deployed decal sits off the surface it was painted on, as a fraction of the part's distance from
-    /// the head bone.
-    ///
-    /// A fraction rather than a length, because the export has no physical unit: the coordinates come from the
-    /// character container and the pmx round trip scales them again (measured, the head bone reads 1.34 here and
-    /// 16.79 in the file), so only a ratio means the same distance on any character. 0.046 is what reproduces the
-    /// clearance the eye manga and the tear cards came out with before - about 0.062 to 0.072 in the file's own
-    /// units, enough to beat z-fighting without looking like the decal is floating.
+    /// How far a deployed decal sits off the painted surface, as a fraction of the part's distance from the head bone. A
+    /// fraction because the export has no physical unit: the coordinates come from the character container and the pmx round
+    /// trip scales them again, so only a ratio means the same distance. 0.046 comes out at about 0.062 to 0.072 in the
+    /// file's own units - enough to beat z-fighting without looking like the decal floats.
     /// </summary>
     private const float DecalClearanceFraction = 0.046f;
 
     /// <summary>
-    /// The animated tears: one deploy morph per tear object.
-    ///
-    /// Each `TearController` keeps two prefabs (`pfb_chr_tear000`, `pfb_chr_tear001`) whose animation is a
-    /// *sprite sheet scroll*: `TearController.UpdateOffset` steps `_TexScrollParam` across the sheet, and the
-    /// grid comes from the prefab's own asset table (`texture_width`/`_height`, `texture_part_width`/`_height`).
-    /// That grid is not a deform - it is a texture coordinate - and its consumer is the add-on's fragment
-    /// animation, so it travels as the `scroll=<cols>x<rows>` token in the material comment (`ExtraMorphGrid`)
-    /// and *no* uv morph is written for it any more.
-    ///
-    /// The uv morph stacks this used to emit (one per sheet frame, and a rotation stack for the `@_@` face) were
-    /// removed deliberately: nothing in the pipeline reads them. Blender cannot animate a uv layer, so the add-on
-    /// drives the spin with a Vector Rotate node and the scroll with a Mapping node, both from the comment tokens -
-    /// which left 42 of the model's 249 morphs as sliders that no tool of ours uses, on effects that are already
-    /// animated. The cost of dropping them is that a consumer without the add-on (plain MMD, where a material
-    /// animation can only *translate* uvs and a comment is not readable) no longer gets these two effects; the
-    /// whole point of this pipeline is the add-on, and it does.
+    /// The animated tears: one deploy morph per tear object. Each <c>TearController</c> keeps two prefabs whose animation is
+    /// a sprite-sheet scroll - <c>TearController.UpdateOffset</c> steps <c>_TexScrollParam</c> over a grid from the prefab's
+    /// asset table. That grid is a texture coordinate, not a deform, so it travels as the <c>scroll=</c> token
+    /// (<c>ExtraMorphGrid</c>) and no uv morph is written for it.
     /// </summary>
     private static List<Morph> TearMorphs(UmaContainerCharacter character,
                                           List<(Renderer renderer, int start, int count)> ranges,
@@ -1482,14 +1246,12 @@ public class ModelExporter
         foreach (var range in ranges) rangeOf[range.renderer] = (range.start, range.count);
 
         // cards already written, by side + geometry, so a controller that duplicates another one's card is skipped
-        // instead of shipped twice
         var seenCards = new HashSet<string>();
 
         foreach (TearController tear in character.TearControllers)
         {
             if (tear == null) continue;
-            // `tear001`, the wide card. `tear000` - the tall stream that rolls from the eye corner to the chin - is
-            // deliberately not exported; the comment above says why and how to bring it back.
+            // `tear001`, the wide card; `tear000`, the tall stream that rolls from eye corner to chin, is deliberately not exported (see above)
             GameObject part = tear.TearObject_1;
             if (part == null) continue;
 
@@ -1513,11 +1275,9 @@ public class ModelExporter
             string side = SideOf(character, centre);
             string name = "Tear_Pool_" + side;
 
-            // The four controllers are not four positions: `SetDir` puts both of a controller's prefabs on one eye,
-            // and what separates them in the game is `TearSide`, a position-Y offset the face clips drive and this
-            // viewer never does. So controllers 1 and 3 hold the *same* card in the same place, as do 2 and 4 -
-            // writing a deploy morph for each shipped four redundant morphs and drew the decal twice. The signature
-            // is the placed geometry itself, so a model whose controllers genuinely differ keeps them.
+            // the four controllers are not four positions: `SetDir` puts both of a controller's prefabs on one eye, and what
+            // separates them in the game is `TearSide`, a position-Y offset the face clips drive and this viewer never does. So 1
+            // and 3 hold the *same* card, as do 2 and 4; the signature is the placed geometry, so genuine differences survive.
             string signature = side + "|" + CardSignature(indices, deployed);
             if (!seenCards.Add(signature)) continue;
 
@@ -1554,12 +1314,8 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The expressions the four eye manga draw, in the order the game selects them, as morph-name words.
-    ///
-    /// These used to be the emoticons themselves (`@_@`, `✦_✦`, `>_<`, `o_o`), which read nicely in a morph list
-    /// but sort into nothing and collide with every other name a user might already have. Every advanced morph now
-    /// carries a feature prefix and a word for what it does - `Manga_Spin_L`, `Tear_Static_L`, `Cheek_Blush` - so
-    /// they group together in a list and a user can find one without knowing the game's notation.
+    /// The expressions the four eye manga draw, in the order the game selects them, as morph-name words - each morph
+    /// carries a feature prefix so they group together in a list instead of sorting as emoticons.
     /// </summary>
     private static readonly string[] MangaFaces = { "Manga_Spin", "Manga_Star", "Manga_Shut", "Manga_Wide" };
 
@@ -1587,13 +1343,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// Which eye a manga part belongs to: `L` or `R`.
-    ///
-    /// The four manga prefabs are the same four names twice, once for each eye - nothing in the name says which,
-    /// so the side has to be read from where the part sits. In the game's rig `Eye_L` and `Eye_R` are the
-    /// anchors: the midpoint between them splits the head, and a part on the eye-bone side of it is that eye.
-    /// Mirrored instances sit at a negative scale, which the center position ignores, so a part is placed
-    /// before this is asked.
+    /// Which eye a manga part belongs to: "L" or "R". The four manga prefabs are the same four names twice, once per eye,
+    /// and nothing in the name says which - so the side is read from where the part sits, against the <c>Eye_L</c> and
+    /// <c>Eye_R</c> bones whose midpoint splits the head. A part is placed before this is asked, since mirrored instances
+    /// sit at a negative scale.
     /// </summary>
     private static string SideOf(UmaContainerCharacter character, Vector3 centre)
     {
@@ -1608,8 +1361,7 @@ public class ModelExporter
             }
             if (eyeL != null && eyeR != null)
             {
-                // which side of the head x *is* left is a property of the rig, not of the exporter: compare the
-                // part against the bones rather than against an assumed sign
+                // which side of the head x *is* left belongs to the rig, not the exporter: compare the part against the bones, not a sign
                 bool leftIsPositive = eyeL.position.x > eyeR.position.x;
                 bool positive = centre.x > (eyeL.position.x + eyeR.position.x) * 0.5f;
                 return positive == leftIsPositive ? "L" : "R";
@@ -1619,10 +1371,8 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The model-level note: what the extra morphs are, where the material-bound ones went, and the object-bound
-    /// ones (visibility, eye-manga selection, tears) that no material comment could hold.
-    ///
-    /// This is the "decode it one day" line. It goes into the model comment, which mmd_tools keeps as
+    /// The model-level note: what the extra morphs are, where the material-bound ones went, and the object-bound ones
+    /// (visibility, eye-manga selection, tears) that no material comment could hold. mmd_tools keeps it as
     /// <c>mmd_root</c>, and it names both token grammars and the document that defines them.
     /// </summary>
     private static string ExtraMorphsNote(UmaContainerCharacter character)
@@ -1641,11 +1391,8 @@ public class ModelExporter
                 if (property == null) continue;
                 if (property.Type == BindProperty.BindType.Texture || property.Type == BindProperty.BindType.Shader)
                     continue;
-                // the objects by name, without the runtime's " (Clone)" and without repeats: the eye manga are
-                // the same four prefabs twice, once for each eye, and nothing outside the game needs to know.
-                // Each is followed by '>' and the materials it is drawn with, because a consumer acts on
-                // materials - the object name is not a material name (`pfb_eff_chr_emo_eye_000` is drawn by
-                // `mtl_eff_chr_emo_eye_000` here, which happens to look like a rename and is not one).
+                // the objects by name, without the runtime's " (Clone)" and without repeats. Each is followed by '>' and the materials
+                // it is drawn with, because a consumer acts on materials and the object name is not a material name.
                 var entries = new List<string>();
                 if (property.BindPrefabs != null)
                 {
@@ -1656,9 +1403,8 @@ public class ModelExporter
                         var materials = new List<string>();
                         foreach (Renderer renderer in prefab.GetComponentsInChildren<Renderer>(true))
                         {
-                            // only the renderers the model actually carries: these prefabs can hang a
-                            // material on something that is not a mesh (`Lit` on a particle, say), and a token
-                            // naming a material that is not in the file is just noise for whoever reads it
+                            // only the renderers the model carries: these prefabs can hang a material on something that is not a mesh (`Lit` on
+                            // a particle), and a token naming a material that is not in the file is noise for whoever reads it
                             if (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer)) continue;
                             foreach (Material part in renderer.sharedMaterials)
                             {
@@ -1686,9 +1432,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The name a morph's driver reads: its locator transform, which is not always the morph's own name.
-    /// `StaticTear_Ctrl` is the one that differs - the game drives it from `Cheek_Ctrl`'s position - so the
-    /// token has to say `Cheek_Ctrl` or a reader would look for a bone that does not exist.
+    /// The name a morph's driver reads: its locator transform, which is not always the morph's own name -
+    /// <c>StaticTear_Ctrl</c> is driven from <c>Cheek_Ctrl</c>'s position, so the token has to say <c>Cheek_Ctrl</c> or a reader
+    /// would look for a bone that does not exist. See the token grammar above.
     /// </summary>
     private static string LocatorName(FacialOtherMorph morph)
     {
@@ -1696,9 +1442,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// Textures the extra morphs bind that no material necessarily uses - the second cheek map is one: the game
-    /// swaps it into the same slot when the locator raises the other axis, so it is only ever referenced by the
-    /// morph. Without it in the exported folder a consumer cannot swap to it.
+    /// Textures the extra morphs bind that no material necessarily uses - the second cheek map is one: the game swaps it
+    /// into the same slot when the locator raises the other axis, so only the morph references it, and without it in the
+    /// exported folder a consumer cannot swap to it.
     /// </summary>
     public static List<Texture2D> MorphPartTextures(UmaContainerCharacter character)
     {
@@ -1739,9 +1485,8 @@ public class ModelExporter
                 }
             }
 
-            // the object-bound parts: the objects the morph shows and hides - the eye manga and the static
-            // tears. They are effect prefabs the viewer instantiates and keeps inactive, so they are not in
-            // the walk either, and without them a visibility driver has nothing to hide.
+            // the object-bound parts: the objects the morph shows and hides - the eye manga and the static tears. They are effect
+            // prefabs the viewer keeps inactive, so they are not in the walk, and a visibility driver would have nothing to hide.
             if (morph.BindProperties == null) continue;
             foreach (BindProperty property in morph.BindProperties)
             {
@@ -1757,11 +1502,9 @@ public class ModelExporter
             }
         }
 
-        // The animated tears are the same kind of part but none of the morphs above owns them: they are runtime
-        // instances a `TearController` makes, off until its weight rises. They belong in this list for two
-        // reasons - the vertices that make their decals, and their *texture*, which lives on the prefab's own
-        // material and not in the character's texture set. This list is also what `ExportAllTexture` walks, so
-        // without them here their decals fall back to the first texture in the file (body diffuse).
+        // the animated tears are the same kind of part but no morph above owns them: runtime instances a `TearController`
+        // makes, off until its weight rises. They belong here for their decal vertices and for their *texture*, which lives on
+        // the prefab's own material - and this list is what `ExportAllTexture` walks, so otherwise they lose their map.
         if (character.TearControllers != null)
         {
             foreach (TearController tear in character.TearControllers)
@@ -1800,8 +1543,7 @@ public class ModelExporter
             }
             else
             {
-                // the effect parts the facial morphs drive are not all meshes (a manga eye can be a particle or
-                // a sprite); anything without a mesh is simply not geometry this export can carry
+                // the effect parts the facial morphs drive are not all meshes (a manga eye can be a particle); anything without one is not geometry here
                 continue;
             }
             if (mesh == null) continue;
@@ -1814,23 +1556,15 @@ public class ModelExporter
                 catch
                 {
                     UmaViewerUI.Instance.ShowMessage($"Skipping material for non-readable mesh: {mesh.name}", UIMessageType.Warning);
-                    // Nothing to advance, and nothing to count.
-                    //
-                    // `ReadVerticesAndTriangles` skips this renderer the same way when it cannot copy it, so its
-                    // triangles are not in the model and its materials must not claim a range in it. The old code
-                    // tried to advance by `mesh.triangles.Length` - reading the very array that had just thrown -
-                    // and then added the count a second time on top, so it either re-threw out of its own handler
-                    // or shifted every later material's triangle range by triangles that were never written.
+                    // nothing to advance, and nothing to count: ReadVerticesAndTriangles skips this renderer too, so its triangles are not in the model
                     continue;
                 }
             }
             var materials = new List<Material>(renderer.sharedMaterials);
             for (int i = 0; i < mesh.subMeshCount; i++)
             {
-                // a renderer can carry no material at all - a scene mesh whose material slot was never filled -
-                // and indexing `materials[Count - 1]` on that took the whole export down the same way the
-                // missing normals did. The submesh still becomes a part, because it does have geometry: it is
-                // named after the object it is drawn on and carries no texture.
+                // a renderer can carry no material at all - a scene mesh whose slot was never filled - so index with a guard. The
+                // submesh still becomes a part, since it does have geometry, named after its object and carrying no texture.
                 var material = materials.Count == 0
                     ? null
                     : (i < materials.Count ? materials[i] : materials[materials.Count - 1]);
@@ -1851,34 +1585,24 @@ public class ModelExporter
                 mat.EdgeColor = Color.black;
                 mat.EdgeSize = decal ? 0f : 0.4f;
                 mat.DrawEdge = !decal;
-                // a decal part is hidden by its own geometry, not by its alpha: every vertex of it sits on one
-                // point inside the head, so at rest it is a handful of zero-area triangles and draws nothing,
-                // and a deploy morph puts it back. The material therefore stays at full alpha - zeroing it
-                // would make the *deployed* state invisible as well, which is the whole point of the morph.
+                // a decal part is hidden by its own geometry, not its alpha: every vertex sits on one point inside the head, so at
+                // rest it is zero-area triangles, and a deploy morph puts it back. Zeroing the material would hide it deployed too.
                 if (decal)
                 {
-                    // double sided, because a decal is and because these parts arrive through instances the
-                    // game mirrors: a mirrored transform reverses the triangle winding, so with backface
-                    // culling on the copy for the right eye disappears no matter what its alpha says.
+                    // double sided, because a decal is and because these parts arrive through instances the game mirrors: a mirrored
+                    // transform reverses the winding, so backface culling would drop the right eye's copy whatever its alpha says.
                     mat.DrawDoubleFace = true;
                 }
-                // The writer writes the comment with no null guard, and MMD treats an empty comment as "none",
-                // so every material starts out with an empty one
+                // the writer writes the comment with no null guard, and MMD reads an empty comment as "none", so every material starts empty
                 mat.MetaInfo = string.Empty;
 
                 if (material != null && material.HasProperty("_MainTex") && material.mainTexture != null)
                 {
                     try
                     {
-                        // The texture this material is drawn with, named exactly as the game names it.
-                        //
-                        // A multiply decal (the cheek) keeps the game's **own** map. It used to be drawn with
-                        // a baked alpha-only copy instead, `<map>_blush.png`, because MMD cannot multiply and
-                        // the raw map paints a white shell over the cheeks. That copy is gone: the addon
-                        // derives the alpha from the game map at shade time with a multiply node and a
-                        // luminance ramp - the recipe its "Fix mini umamusume model" operator already uses
-                        // for exactly this defect on minis - and `blend=multiply` is the token that tells it
-                        // to. The bake was a degraded duplicate of that map, and every 2x2 of it was invented.
+                        // the texture this material is drawn with, named exactly as the game names it. A multiply decal (the cheek) keeps the
+                        // game's **own** map: MMD cannot multiply and the raw map paints a white shell, so the addon derives the alpha at shade
+                        // time with a multiply node and luminance ramp, and `blend=multiply` says so.
                         string textureName = material.mainTexture.name;
                         var tex = model.TextureList.Find(t => t.TexturePath.Contains($"/{textureName}.png"));
                         if (tex == null)
@@ -1906,50 +1630,35 @@ public class ModelExporter
                                            + " untextured (see UmaEnvTextureSet for environment scenes)"));
                     mat.Texture = FirstTexture(model);
                 }
-                // The morph tokens belong to the extra-morphs feature, not to the uma-material one, so they are
-                // collected outside the `PmxUmaMaterialFields` branch: a model exported with plain MMD materials and
-                // the advanced morphs on still needs `morph=`/`blend=`/`scroll=` to explain the shape keys it
-                // carries and how its decals are drawn. Each function gates itself on `PmxExtraMorphs`, so with
-                // that switch off this is the empty string.
+                // the morph tokens belong to the extra-morphs feature, not the uma-material one, so they are collected outside the
+                // `PmxUmaMaterialFields` branch: a model with plain MMD materials and the advanced morphs on still needs
+                // `morph=`/`blend=`/`scroll=` for its shape keys. Each function gates itself on `PmxExtraMorphs`.
                 string morphTokens = ExtraMorphComment(character, material)
                                    + ExtraMorphBlend(material)
                                    + ExtraMorphGrid(character, renderer);
 
-                // The variant files exist whether or not the uma fields are written, so they are collected
-                // here too: `wet=`/`dirt=` says what a *reader* finds beside the pmx, not what this
-                // material's shader values are.
+                // the variant files exist whether or not the uma fields are written: `wet=`/`dirt=` says what a reader finds on disk
                 string variantTokens = TextureVariantComment(material);
 
-                // Opt out for models that are meant to be used without the Blender addon: the plain MMD
-                // material values set above are then left alone, which is what an unadorned export looks like
+                // models meant to be used without the Blender addon opt out: the plain MMD material values above are then left alone
                 if (Config.Instance == null || Config.Instance.PmxUmaMaterialFields)
                 {
                     mat.MetaInfo = UmaMaterialComment(material, model) + morphTokens + variantTokens;
 
-                    // The uma maps stay out of MMD's sphere and toon slots, both measured by rendering them:
-                    //
-                    // * the uma environment map is added at the material's own _EnvRate (0.4) by the game, while
-                    //   MMD's "sphere add" mode adds it at full strength with no rate to scale it - the model
-                    //   came out washed out and glossy
-                    // * the uma shade map (shad_c) is the colour of the shaded part of the surface, not a ramp,
-                    //   so an MMD toon slot fed with it banded the model into harsh dark steps (black hair)
-                    //
-                    // Both maps are exported as textures and named in the comment, so a shader that understands
-                    // what they are (the uma addon's) can use them properly.
+                    // the uma maps stay out of MMD's sphere and toon slots: the game adds the environment map at its own _EnvRate (0.4)
+                    // where MMD's "sphere add" adds it at full strength, and the uma shade map (shad_c) is the colour of the shaded surface,
+                    // not a ramp, so it bands the model into harsh steps in a toon slot. Both are exported and named in the comment.
                     mat.Toon = null;
                     mat.SubTexture = null;
                     mat.SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexOff;
 
-                    // MMD's specular is a colour and a shininess; the uma material has a colour and a power on a
-                    // different scale, so the power scales the colour down instead of the colour being used as
-                    // it is (which made every part look polished).
+                    // MMD's specular is a colour and a shininess, the uma a colour and a power on another scale, so the power scales the colour down
                     var specular = PropertyColour(material, "_SpecularColor", Color.clear);
                     float specularPower = PropertyFloat(material, "_SpecularPower", 0f);
                     mat.SpecularColor = new Color(specular.r * specularPower, specular.g * specularPower,
                                                   specular.b * specularPower, 1f);
                     mat.EdgeColor = PropertyColour(material, "_OutlineColor", mat.EdgeColor);
-                    // a decal keeps the no-outline values set above: the uma shader's own outline width would
-                    // wrap the blush and the manga eyes in the character's outline colour
+                    // a decal keeps the no-outline values above: the uma outline width would wrap the blush in the character's outline colour
                     if (!decal)
                     {
                         mat.EdgeSize = PropertyFloat(material, "_OutlineWidth", mat.EdgeSize);
@@ -1958,9 +1667,7 @@ public class ModelExporter
                 }
                 else
                 {
-                    // plain MMD materials, but the advanced morphs are still on: the tokens that explain them
-                    // survive, the shader values do not. The variant tokens are not a shader value either -
-                    // they describe files that are on disk - so they survive with them.
+                    // plain MMD materials but the advanced morphs still on: the tokens that explain them survive, the shader values do not
                     mat.MetaInfo = morphTokens + variantTokens;
                 }
                 part.BaseShift = baseShift + mesh.GetSubMesh(i).indexStart;
@@ -1986,8 +1693,7 @@ public class ModelExporter
         {
             if (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer))
             {
-                // not a mesh renderer: the facial effect parts can be particles or sprites, and there is no
-                // geometry to read from one
+                // not a mesh renderer: the facial effect parts can be particles or sprites, with no geometry to read
                 continue;
             }
             if (renderer is MeshRenderer mr)
@@ -2022,19 +1728,12 @@ public class ModelExporter
                 {
                     Vertex vertex = new Vertex();
                     vertex.Coordinate = renderer.transform.TransformPoint(vertices[i]);
-                    // the normal goes through the same transform as the position. It used to be copied raw, so a
-                    // model whose part is rotated relative to the model wrote positions in one frame and normals in
-                    // another - invisible while every transform is identity, which is why it never showed on the
-                    // reference character, and wrong shade boundaries the moment one is not.
-                    //
-                    // `.normalized` because the transform chain is not scale-free: the part sits under a container
-                    // whose scale is not 1, and transforming a direction by it shortens the vector (measured: every
-                    // normal came out 0.9829 long against the 1.0000 the file had before).
+                    // the normal goes through the same transform as the position: copied raw it wrote positions in one frame and normals
+                    // in another, which is invisible while every transform is identity. `.normalized` because the container's scale is not 1.
                     vertex.Normal = renderer.transform.TransformDirection(normals[i]).normalized;
                     vertex.UvCoordinate = new Vector2(uv[i].x, 1 - uv[i].y);
 
-                    // exact length rather than "> 0": a channel that is present but shorter than the vertex list
-                    // (see CompleteVertexChannels) throws just as hard as a missing one
+                    // exact length rather than "> 0": a channel shorter than the vertex list throws as hard as a missing one
                     vertex.ExtraUvCoordinate = new Vector4[3]
                     {
                         uv1.Length == vertices.Length ? new Vector2(uv1[i].x, 1 - uv1[i].y) : Vector2.zero,
@@ -2094,15 +1793,14 @@ public class ModelExporter
                 var weights = mesh.boneWeights;
                 var bakemesh = new Mesh();
                 smr.BakeMesh(bakemesh,true);
-                // The pmx needs one normal and one uv per vertex whatever the mesh holds, and a mesh with no
-                // normal channel bakes without one as well - so both the source arrays and the baked normals are
-                // completed here (see CompleteVertexChannels for what was thrown and why).
+                // a pmx needs one normal and one uv per vertex whatever the mesh holds, and a mesh with no normal channel bakes
+                // without one too - so the source arrays and the baked normals are both completed here (see CompleteVertexChannels)
                 CompleteVertexChannels(renderer, mesh, vertices, mesh.triangles, ref normals, ref uv);
                 var bakedVertices = bakemesh.vertices;
                 var bakedNormals = bakemesh.normals;
                 if (bakedNormals.Length != bakedVertices.Length) bakedNormals = RebuiltNormals(bakedVertices, mesh.triangles);
-                // skin weights can be absent or short on a part that carries no skinning at all: read as "no
-                // bone count", which the switch below already treats as "ride the transform's own bone"
+                // skin weights can be absent or short on a part that carries no skinning: read as "no bone count",
+                // which the switch below already treats as "ride the transform's own bone"
                 bool weightsPresent = weights.Length == vertices.Length;
                 bool boneCountsPresent = boneCounts.Length == vertices.Length;
 
@@ -2110,21 +1808,15 @@ public class ModelExporter
                 {
                     Vertex vertex = new Vertex();
                     vertex.Coordinate = root.InverseTransformPoint(smr.transform.TransformPoint(bakedVertices[i]));
-                    // the same chain as the position, so the normal lands in the space the position is in: the baked
-                    // mesh carries skinned normals in the renderer's own frame, and they used to be written without
-                    // the renderer's rotation at all - positions in the root's frame, normals in the part's
-                    // `.normalized` because InverseTransformDirection divides by the root's scale, which is not 1:
-                    // without it every normal in the file came out 0.9829 long instead of 1.0000.
+                    // the same chain as the position, so the normal lands in the space the position is in. `.normalized` because
+                    // InverseTransformDirection divides by the root's scale, which is not 1 (normals came out 0.9829 long).
                     Vector3 skinnedNormal = root.InverseTransformDirection(
                         smr.transform.TransformDirection(bakedNormals[i]));
-                    // skinning can collapse a vertex to a point, and a collapsed normal bakes as zero (24 of them
-                    // on 1001). A zero normal in the file shades as black, so fall back to the rest pose's own
-                    // normal - which is exactly what these vertices were written with before.
+                    // skinning can collapse a vertex to a point, and a collapsed normal bakes as zero (24 on 1001); a zero normal shades black
                     if (skinnedNormal.sqrMagnitude < 1e-12f) skinnedNormal = normals[i];
                     vertex.Normal = skinnedNormal.normalized;
                     vertex.UvCoordinate = new Vector2(uv[i].x, 1 - uv[i].y);
-                    // the head-local height goes in the spare .z of the second extra uv, which mmd_tools
-                    // reads as `_UV2`; nothing else in the file uses that component
+                    // the head-local height goes in the spare .z of the second extra uv, which mmd_tools reads as `_UV2`
                     float headLocalY = 0f;
                     if (headBone != null)
                     {
@@ -2146,8 +1838,7 @@ public class ModelExporter
                     switch (boneCount)
                     {
                         case 0:
-                            // no bone weights at all: the part rides whatever bone its transform hangs from,
-                            // which for a decal is the head - not bone 0, which was what a missing index became
+                            // no bone weights at all: the part rides the bone its transform hangs from - for a decal the head, not bone 0
                             vertex.SkinningOperator = new SkinningOperator() { Type = SkinningType.SkinningBdef1 };
                             vertex.SkinningOperator.Param = new Bdef1()
                             {
@@ -2217,22 +1908,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// A mesh's normals and uvs, completed to one entry per vertex before the vertex loop reads them.
-    ///
-    /// A pmx vertex *is* a position, a normal and a uv, and the format has no way to say "this mesh had no
-    /// normals" - so the export has to produce one per vertex whatever the mesh holds, and not every mesh in
-    /// the game does. The race scenes are where this shows: `pfb_env_race10201_cutt000_002` (and its siblings)
-    /// carry meshes whose normal channel is missing or shorter than the vertex list, and the loop walked
-    /// `vertices.Length` while indexing `mesh.normals` and `mesh.uv`. That threw `IndexOutOfRangeException`
-    /// straight out of `ExportModel` - after the textures had been written (they are written first) and before
-    /// the pmx file was even opened, which is exactly the reported symptom: a `Texture2D/` folder, no model,
-    /// and a one-line "FAILED: IndexOutOfRangeException" that says nothing about which mesh or which scene
-    /// part.
-    ///
-    /// A missing normal is rebuilt from the mesh's own triangles, because a zero normal shades as black in MMD
-    /// and a pmx full of black normals reads as a broken import. A mesh whose triangles are unusable as well
-    /// keeps `up`, which at least shades as one flat colour instead of black. A missing uv is zeros: the
-    /// surface loses its texture, everything else about it stays right.
+    /// A mesh's normals and uvs, completed to one entry per vertex before the vertex loop reads them. A pmx vertex *is* a position,
+    /// a normal and a uv, and the format cannot say "this mesh had no normals", yet not every mesh has them - the race scenes carry
+    /// meshes whose normal channel is missing or too short. A missing normal is rebuilt from the mesh's own triangles (a zero normal
+    /// shades as black); unusable triangles keep <c>up</c>; a missing uv is zeros.
     /// </summary>
     private static void CompleteVertexChannels(Renderer renderer, Mesh mesh, Vector3[] vertices,
                                                int[] triangles, ref Vector3[] normals, ref Vector2[] uv)
@@ -2259,20 +1938,17 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// How many meshes the export has completed this run, and how many of those are named in the log.
-    ///
-    /// Named individually they buried everything else: a race scene's trees are one billboard mesh each, and
-    /// `pfb_env_race10201_cutt000_002` alone completes 688 of them (measured - 4 to 70 vertices each, no
-    /// normals at all). The count is reset by `ReadVerticesAndTriangles`, which runs exactly once per export.
+    /// How many meshes the export has completed this run, and how many of those are named in the log. Named individually they
+    /// buried everything else: a race scene's trees are one billboard mesh each, and one scene alone completes 688 of them.
+    /// The count is reset by <c>ReadVerticesAndTriangles</c>, which runs once per export.
     /// </summary>
     private static int _channelRepairs;
     private const int ChannelWarningsLogged = 6;
 
     /// <summary>
-    /// Area-weighted normals from a triangle list - the usual cross-product accumulation, which is what
-    /// `Mesh.RecalculateNormals` does, written out because the mesh this replaces is often unreadable (a
-    /// `Mesh` copy would need a fresh buffer for the same answer) and a vertex no triangle touches has no
-    /// normal to derive, for which `up` is the placeholder.
+    /// Area-weighted normals from a triangle list - the cross-product accumulation <c>Mesh.RecalculateNormals</c> does, written
+    /// out because the mesh it replaces is often unreadable and a copy would need a fresh buffer for the same answer. A
+    /// vertex no triangle touches gets <c>up</c>.
     /// </summary>
     private static Vector3[] RebuiltNormals(Vector3[] vertices, int[] triangles)
     {
@@ -2306,10 +1982,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// A skinned renderer's bone by the index a weight carries, or null when the weight names one the renderer
-    /// no longer has - the mesh and the `bones` array are not guaranteed to agree after an asset swap, and
-    /// indexing blind took the whole export down the same way the missing normals did. Null means "no such
-    /// bone", which <see cref="SkinningBone"/> turns into the head-bone fallback.
+    /// A skinned renderer's bone by the index a weight carries, or null when the weight names one the renderer no longer has -
+    /// the mesh and the <c>bones</c> array need not agree after an asset swap. Null means "no such bone", which
+    /// <see cref="SkinningBone"/> turns into the head-bone fallback.
     /// </summary>
     private static Transform SkinBoneAt(Transform[] skinBones, int index)
     {
@@ -2317,11 +1992,9 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// When set, every vertex is also recorded here in the order the pmx receives it. Set by the headless
-    /// exporter before an export and cleared after; null in normal use, which costs one comparison per
-    /// vertex. This exists because comparing the pmx against the live mesh has to be done vertex by vertex,
-    /// and a mesh read at a different moment than the write - while the viewer's model is animating - is
-    /// not the same vertex list at all.
+    /// When set, every vertex is also recorded here in the order the pmx receives it. Set by the headless exporter before
+    /// an export and cleared after; null in normal use, which costs one comparison per vertex. Comparing the pmx against
+    /// the live mesh has to go vertex by vertex, and a mesh read while the viewer animates is not the same list.
     /// </summary>
     public static string VertexDumpPath;
 
@@ -2363,14 +2036,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The bone a part with no skinning of its own should ride.
-    ///
-    /// A decal is a child of a bone, not a bone: `M_Cheek`, the eye-manga quads and the tear cards are parented to
-    /// `Head`, and their own transforms are not in the bone list. Asking for the index of one anyway gives -1, and
-    /// a vertex weighted to bone -1 does not move with the head at all - which is exactly what happens when the
-    /// head is turned in MMD or Blender with a decal deployed: the face turns and the decal stays where it was.
-    /// So walk up the parents to the first transform that *is* a bone, and fall back to the head bone, which is
-    /// where every decal in these models belongs.
+    /// The bone a part with no skinning of its own should ride. A decal is a child of a bone, not a bone: <c>M_Cheek</c>, the
+    /// eye-manga quads and the tear cards are parented to <c>Head</c> and their transforms are not in the bone list, so their
+    /// index is -1 and a vertex weighted to bone -1 does not move with the head - the face turns and the decal stays put.
+    /// Hence walk up to the first transform that *is* a bone, then fall back to the head bone.
     /// </summary>
     private static int SkinningBone(Transform transform, List<Transform> bones, Transform headBone)
     {
@@ -2384,14 +2053,10 @@ public class ModelExporter
     }
 
     /// <summary>
-    /// The head bone, whose space the game's facial shadow is measured in: the viewer sets
-    /// `_faceShadowHeadMat` from it every frame (`HeadBone.transform.worldToLocalMatrix`) and the vertex
-    /// program transforms each vertex by it, so the pixel program can read the vertex's height inside the
-    /// head. A static export can carry the same number computed at the rest pose.
-    ///
-    /// Matched loosely and reported when missing, because this bone is also the fallback a bone-less decal rides:
-    /// requiring the exact name "Head" quietly sent every decal to bone 0 on a rig that spells it otherwise, which
-    /// is the same "the decal does not follow the head" bug one fallback further along.
+    /// The head bone, whose space the game's facial shadow is measured in: the viewer sets <c>_faceShadowHeadMat</c> from it
+    /// every frame and the vertex program transforms each vertex by it, so the pixel program can read the height inside the
+    /// head. A static export carries the value computed at the rest pose. Matched loosely and reported when missing, because
+    /// it is also the fallback a bone-less decal rides.
     /// </summary>
     private static Transform FindHeadBone(List<Transform> bones)
     {

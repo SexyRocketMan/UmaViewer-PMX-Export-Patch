@@ -16,15 +16,8 @@ public class TextureExporter
     }
 
     /// <summary>
-    /// A readable copy of a texture, written as PNG by the export.
-    ///
-    /// The copy keeps the source's name, because `new Texture2D(...)` starts out unnamed and every caller
-    /// writes the copy under the name it was handed. That transfer is not cosmetic: before it, a derived file
-    /// was written as `_blush.png` and listed in the pmx under that name, while a second export into the same
-    /// folder - which skips the write because the file already exists - produced
-    /// `tex_chr1001_00_cheek0_blush.png` instead. Same model, two texture lists, one of them pointing at a
-    /// file named after nothing. (Nothing is derived any more - the cheek keeps the game's own map - but the
-    /// rule holds for whatever comes next.)
+    /// A readable copy of a texture, written as PNG by the export. It keeps the source's name on purpose: every caller writes
+    /// the copy under the name it was handed, so a nameless copy lands in the pmx under another name.
     /// </summary>
     static public Texture2D duplicateTexture(Texture2D source)
     {
@@ -66,11 +59,8 @@ public class TextureExporter
     }
 
     /// <summary>
-    /// The variant files the last <see cref="ExportAllTexture"/> wrote, keyed by the dry texture's name.
-    ///
-    /// Per-export state on purpose: the files are written while walking the materials, and the comment that
-    /// has to name them is built later in the same export (see <see cref="ModelExporter"/>), which cannot
-    /// re-derive them without walking the game's asset list again.
+    /// The variant files the last <see cref="ExportAllTexture"/> wrote, keyed by dry texture name. Per-export state on purpose:
+    /// the material comment naming them is built later in the same export (<see cref="ModelExporter"/>).
     /// </summary>
     static public IReadOnlyDictionary<string, VariantFiles> WrittenVariants => writtenVariants;
 
@@ -78,12 +68,9 @@ public class TextureExporter
         new Dictionary<string, VariantFiles>(StringComparer.Ordinal);
 
     /// <summary>
-    /// Every texture the model's materials use, written to `Texture2D/` next to the export.
-    ///
-    /// `extra` is for renderers that are not part of the usual walk - the facial parts a morph drives are
-    /// switched off in the viewer until a driven key raises their rate, and an inactive renderer is not in
-    /// <see cref="GameObject.GetComponentsInChildren{T}()"/>, so the cheek texture would never be written even
-    /// though the material that uses it is exported.
+    /// Every texture the model's materials use, written to `Texture2D/` next to the export. `extra` covers what the usual walk
+    /// misses: facial parts a morph drives stay inactive until a key raises their rate, and an inactive renderer is not in
+    /// <see cref="GameObject.GetComponentsInChildren{T}()"/>.
     /// </summary>
     static public string[] ExportAllTexture(string path, GameObject gameobj, IEnumerable<Renderer> extra = null,
                                             IEnumerable<Texture2D> extraTextures = null)
@@ -106,7 +93,6 @@ public class TextureExporter
             foreach (Material mat in renderer.sharedMaterials)
             {
                 if (mat == null) continue;
-                //»ñµÃ²ÄÖÊµÄËùÓÐÊôÐÔÃû£¬Èç¹û¸ÄÊôÐÔÃû¶ÔÓ¦µÄÊÇÌùÍ¼£¬ÌáÈ¡¸ÃÌùÍ¼
                 Shader mat_shader = mat.shader;
                 int p_num = mat_shader.GetPropertyCount();
                 for (int i = 0; i < p_num; i++)
@@ -125,29 +111,17 @@ public class TextureExporter
                             {
                                 textureNames.Add(dpath);
                             }
-                            // the game's wet and dirt twins, written beside the dry map whenever the export
-                            // was asked for them. Outside the File.Exists block on purpose: a second export
-                            // into the same folder skips the write but still has to record the pairing, or
-                            // the material comments would lose their tokens
+                            // the game's wet and dirt twins, written beside the dry map. Outside the File.Exists block on purpose: a repeat export
+                            // skips the write but still has to record the pairing, or the material comments would lose their tokens
                             if (variantAssets != null) WriteVariants(savePath, tex_name, variantAssets);
                             if (!File.Exists(tex_path))
                             {
 
                                 mat_texture = duplicateTexture(mat_texture);
 
-                                // The eye's `_MainTex` is a four-plate atlas (512x256 on 1001) and the mesh UVs are
-                                // plate-local: `_Offset` selects the plate and the shipped value is (0,0,0,0), so the
-                                // left plate is the one this export draws. Cropping to it keeps the UVs valid as they
-                                // stand (measured: the eye samples u 0.135..0.865, v 0.025..0.975 - a plate-local range,
-                                // not a whole-sheet one).
-                                //
-                                // The whole sheet is written beside it as `<name>_all.png`, under the file name it had
-                                // before this crop existed, because it is a *superset* a user may prefer: the plates are
-                                // the character's eye options (a variant with the highlights baked out among them), so
-                                // binding `_all` and setting the image node's Vector to scale x = 0.25 with an x offset
-                                // of plate * 0.25 selects any of them - offsets 0, 0.25, 0.5, 0.75. Nothing in a pmx can
-                                // name it (one texture slot per material, and the plate is chosen by a shader uniform),
-                                // so it ships as an extra rather than as the bound map.
+                                // eye0 is a four-plate atlas whose mesh UVs are plate-local, so crop to the plate _Offset selects (shipped (0,0,0,0) =
+                                // the left one). The whole sheet also ships as `<name>_all.png`: to reach another plate, scale image x to 0.25 and offset
+                                // by plate * 0.25. A pmx cannot name it (one texture slot per material), so it is an extra rather than the bound map.
                                 if (tex_name.EndsWith("eye0"))
                                 {
                                     var clip_texture = duplicateTexture(mat_texture);
@@ -161,17 +135,8 @@ public class TextureExporter
                                 byte[] bytes = mat_texture.EncodeToPNG();
                                 File.WriteAllBytes(tex_path, bytes);
                             }
-                            // A multiply decal (the cheek) needs no baked copy any more: the game's own map is written
-                            // as it is, and the addon derives the alpha from it at shade time with the multiply node and
-                            // luminance ramp its "Fix mini umamusume model" operator already uses. lend=multiply says so.
-                            // **The highlight mask bake is gone** (2.34), after measuring what wanted it. It wrote
-                            // `eyehi00_mask.png` and its siblings for a consumer that thresholds *outside* a shader,
-                            // so a plain MMD material could draw the game's colour-masked highlights without painting
-                            // black over the eye. On an export of 1001: no material names any `_mask` file in any
-                            // slot (`tex` = 10 = `eye0`, `sphere` -1, `toon` -1), and the add-on does not want them
-                            // either - it binds the raw `eyehi00`/`01`/`02` and thresholds in `Uma Eyes` with its two
-                            // `SmoothThreshold` groups. They were in the pmx's texture table only because this block
-                            // registered them as dependencies. A dead end: kept in history, not in every user's folder.
+                            // a multiply decal (the cheek) needs no baked copy: the game's own map is written as it is, and the addon derives the
+                            // alpha at shade time with a multiply node and luminance ramp - blend=multiply says so. No `_mask` bake: no material names one.
                         }
                     }
                 }
@@ -189,8 +154,7 @@ public class TextureExporter
                 AddRenderer(renderer);
             }
         }
-        // textures a morph binds but no material uses: the second cheek map is one, and without it in the folder
-        // the addon cannot swap to it when the locator raises that axis
+        // textures a morph binds but no material uses: the second cheek map, without which the addon cannot swap to it
         if (extraTextures != null)
         {
             foreach (Texture2D texture in extraTextures)
@@ -206,8 +170,7 @@ public class TextureExporter
                     var copy = duplicateTexture(texture);
                     File.WriteAllBytes(tex_path, copy.EncodeToPNG());
                 }
-                // the cheek pair is a multiply map either way, and both are written as the game ships them:
-                // no alpha-only bake of either (see the note beside the decal material in ModelExporter)
+                // the cheek pair is a multiply map either way, both written as the game ships them - no alpha-only bake of either
             }
         }
         Debug.Log($"Exported textures: {textureNames.ToArray()}");
@@ -226,9 +189,8 @@ public class TextureExporter
     }
 
     /// <summary>
-    /// Every character texture asset, by name. The dry maps are not in here: they live inside the part
-    /// prefabs, and only the variants the game ships beside them are assets of their own - which is why this
-    /// list is exactly what a variant lookup needs and a dry-map lookup would not.
+    /// Every character texture asset, by name. The dry maps are not here - they live inside the part prefabs, and only the
+    /// variants shipped beside them are assets of their own, which is what a variant lookup needs.
     /// </summary>
     static private Dictionary<string, UmaDatabaseEntry> CharacterTextureAssets()
     {
@@ -245,9 +207,8 @@ public class TextureExporter
     }
 
     /// <summary>
-    /// Writes the twins a dry map has, if the game ships any, and records them for the material comment.
-    /// The names come from the game's own convention - the rain set appends "_wet", the dirt map replaces
-    /// the albedo token ("..._diff" -> "..._dirt") - so nothing here needs a table of its own.
+    /// Writes the twins a dry map has and records them for the material comment. The names come from the game's own
+    /// convention - rain appends "_wet", the dirt map replaces the albedo token ("..._diff" -> "..._dirt") - no table.
     /// </summary>
     static private void WriteVariants(string savePath, string texName, Dictionary<string, UmaDatabaseEntry> assets)
     {
@@ -257,8 +218,7 @@ public class TextureExporter
         files.Wet = WriteVariantFile(savePath, texName + WetSuffix, assets);
         if (texName.EndsWith(AlbedoSuffix, StringComparison.Ordinal))
         {
-            // the dirt map is the one coarse asset in the set (256x256 on the body, 128x128 on the face), so it is
-            // resampled on the way out - see UpscaleBicubic for why nothing is lost by doing it
+            // the dirt map is the coarse asset (256x256 body, 128x128 face), so it is resampled on the way out; see UpscaleBicubic
             files.Dirt = WriteVariantFile(savePath, texName.Substring(0, texName.Length - AlbedoSuffix.Length) + DirtSuffix,
                                           assets, upscale: DirtUpscaleFactor);
         }
@@ -268,8 +228,8 @@ public class TextureExporter
     }
 
     /// <summary>
-    /// One variant file, under the game's own name, and only when that asset exists. Returns the name it
-    /// was written as, or null - which is how a material with no twin is told apart from one with a twin.
+    /// One variant file, under the game's own name, and only when that asset exists. Returns the name written, or null - which
+    /// is how a material with no twin is told apart from one with a twin.
     /// </summary>
     static private string WriteVariantFile(string savePath, string name, Dictionary<string, UmaDatabaseEntry> assets,
                                           int upscale = 1)
@@ -293,16 +253,9 @@ public class TextureExporter
     }
 
     /// <summary>
-    /// How far the dirt maps are resampled on the way out, 1 meaning "as the game ships it".
-    ///
-    /// Measured, the dirt set is the coarse one: `tex_bdy1001_00_dirt` is 256x256 and `tex_chr1001_00_face_dirt`
-    /// 128x128, against 1024-2048 for the maps around them, and 981 such maps ship for the cast - one per body and
-    /// attachment part. Four times is where the resample stops helping at normal viewing distance and starts to
-    /// cost: 256 -> 1024 and 128 -> 512, and because the maps are sparse masks the PNG stays small.
-    ///
-    /// This adds no detail it does not have - nothing can. What it removes is the *nearest-neighbour blockiness*
-    /// a consumer sees when the map is magnified past its resolution, which is the whole of the complaint.
-    /// Each channel is resampled on its own, so the three independent masks stay independent.
+    /// How far the dirt maps are resampled on the way out, 1 meaning "as the game ships it". The dirt set is the coarse one
+    /// (256x256 body, 128x128 face, against 1024-2048 around them) and four is where the resample stops helping at normal
+    /// viewing distance: 256 -> 1024, 128 -> 512. It cannot add detail; it removes the blockiness of a magnified map.
     /// </summary>
     public const int DirtUpscaleFactor = 4;
 
@@ -310,12 +263,8 @@ public class TextureExporter
     const int DirtUpscaleLimit = 2048;
 
     /// <summary>
-    /// A texture resampled by a whole factor with Catmull-Rom (bicubic) weights, one horizontal pass and one
-    /// vertical, edges clamped.
-    ///
-    /// Catmull-Rom rather than bilinear because the maps are near-binary masks: bilinear turns every edge into a
-    /// two-pixel ramp, and Catmull-Rom keeps the edge where it is with a tighter transition. Not Lanczos: the
-    /// masks are sparse dots and splatter, and Lanczos ringing puts pale halos around each one.
+    /// A texture resampled by a whole factor with Catmull-Rom weights, one horizontal pass and one vertical, edges clamped.
+    /// Catmull-Rom rather than bilinear because the maps are near-binary masks, and not Lanczos because its ringing halos dots.
     /// </summary>
     static private Texture2D UpscaleBicubic(Texture2D source, int factor)
     {

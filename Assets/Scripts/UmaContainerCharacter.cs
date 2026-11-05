@@ -33,14 +33,9 @@ public class UmaContainerCharacter : UmaContainer
     public Vector3 UpBodyPosition;
     public Quaternion UpBodyRotation;
     public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneTransform;
-    /// <summary>
-    /// The same rest pose as <see cref="InitBoneTransform"/>, in local space, for putting bones back.
-    ///
-    /// The world table cannot be restored, only compared: it is captured before <see cref="UmaViewerBuilder"/> scales
-    /// the character to their height, so writing those world values back afterwards puts every bone at its unscaled
-    /// position. Local values are immune to that, because an ancestor's scale does not change a child's local
-    /// transform.
-    /// </summary>
+    /// <summary>The same rest pose as <see cref="InitBoneTransform"/>, in local space, for putting bones back. The
+    /// world table cannot be written back: it is captured before <see cref="UmaViewerBuilder"/> scales the character
+    /// to their height, so restoring it puts every bone at its unscaled position. A local transform is immune to that.</summary>
     public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneLocal;
 
     [Header("Face")]
@@ -266,10 +261,8 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         InitBoneTransform = new Dictionary<Transform, (Vector3 pos, Quaternion rot)>();
-        // The same pose in *local* space, which is the form a restore has to use. The world table is compared against
-        // (see UnityHumanoidVMDRecorder) and stays as it is; this one exists because this capture runs before
-        // SetHeight() scales the "Position" node, and a world transform written back afterwards ignores that scale:
-        // see UpBodyReset(). A local transform is unaffected by an ancestor's scale, so capturing it early is safe.
+        // The same pose in *local* space, which is the form a restore has to use: this capture runs before SetHeight()
+        // scales the "Position" node, and a world transform written back afterwards ignores that scale. See UpBodyReset().
         InitBoneLocal = new Dictionary<Transform, (Vector3 pos, Quaternion rot)>();
         foreach (var bone in bodySkinnedMeshRenderer.bones)
         {
@@ -277,13 +270,11 @@ public class UmaContainerCharacter : UmaContainer
             InitBoneLocal[bone] = (bone.localPosition, bone.localRotation);
         }
 
-        // ... and the bones the rig puts *between* a skinned bone and the character root. They are the control
-        // bones - UpBody_Ctrl, Waist, the IK targets - and they are not skinned, so nothing above captured them,
-        // and ResetBodyPose() restores this table and nothing else. Measured in the headless harness on a dance
-        // clip: at the moment the recorder captures its reference, the hip's world yaw was 0.0 degrees and the
-        // spine's was 93.9 - the turn sits on a control bone between them, so it went into every recorded key as a
-        // constant yaw of the upper body with the legs untouched, varying with whatever pose the session had left
-        // on it. ResetBodyPose applies these parents-first (see there), which is what makes capturing them safe.
+        // ... and the bones the rig puts *between* a skinned bone and the character root: the control bones
+        // (UpBody_Ctrl, Waist, the IK targets), which are not skinned so nothing above captured them, and
+        // ResetBodyPose() restores this table and nothing else. Measured on a dance clip: the hip's world yaw was
+        // 0.0 degrees while the spine's was 93.9 - the turn sits on a control bone between them, so it went into
+        // every recorded key as a constant yaw of the upper body.
         foreach (var bone in bodySkinnedMeshRenderer.bones)
         {
             for (var node = bone.parent; node != null && node != transform; node = node.parent)
@@ -370,17 +361,11 @@ public class UmaContainerCharacter : UmaContainer
     public IReadOnlyList<GameObject> Accessories => accessories;
 
     /// <summary>
-    /// Wears one of the game's `3d/chara/attach/...` prefabs: nail polish, bandages, that kind of thing.
-    ///
-    /// An attach prefab is not a prop with a placement to dial in. Its bone list is a **copy of the character
-    /// rig** - `Hip`, `Spine`, both arms with every finger, `Hand_Attach_L/R` - sitting at that character's
-    /// rest pose, with the accessory geometry skinned to it. The game's job when spawning one is therefore a
-    /// retarget onto the character's own bones, by name, which is exactly what <see cref="MergeBone"/> already
-    /// does for hair; the accessory then follows the animation instead of floating where it was authored.
-    ///
-    /// Bones the character does not have keep their own position: the bust chains (`Sp_Ch_Bust0_*`) and the
-    /// animator's `Wrist_*_Pole`/`Wrist_*_Target` nodes are in the prefab but not on every character, so those
-    /// few weights stay where the prefab put them.
+    /// Wears one of the game's `3d/chara/attach/...` prefabs: nail polish, bandages, that kind of thing. Its bone list is
+    /// a **copy of the character rig** at that character's rest pose with the accessory geometry skinned to it, so the job
+    /// is a retarget onto the character's own bones by name - what <see cref="MergeBone"/> does for hair - and the
+    /// accessory then follows the animation. Bones the character does not have (the bust chains, the `Wrist_*_Pole` and
+    /// `Wrist_*_Target` nodes) keep their own position.
     /// </summary>
     public GameObject AttachAccessory(GameObject accessory)
     {
@@ -395,9 +380,9 @@ public class UmaContainerCharacter : UmaContainer
         var emptyBones = new List<Transform>();
         var skins = accessory.GetComponentsInChildren<SkinnedMeshRenderer>(true);
 
-        // Captured before the retarget, because the retarget reparents the prefab's own bones onto this character's
-        // and afterwards there is no way to tell which nodes came from the prefab. `keeps` is the closure of what
-        // has to survive whatever the bones do: renderer and collider nodes and everything above them.
+        // Captured before the retarget, because afterwards there is no way to tell which nodes came from the prefab.
+        // `keeps` is the closure of what has to survive whatever the bones do: renderer and collider nodes, and every
+        // ancestor of one.
         var prefabNodes = new List<Transform>(accessory.GetComponentsInChildren<Transform>(true));
         var keeps = new HashSet<Transform>();
         MarkKeptNodes(accessory.transform, keeps);
@@ -405,8 +390,8 @@ public class UmaContainerCharacter : UmaContainer
         int merged = 0;
         // every name the skins deform with, before the retarget replaces them
         var skinBoneNames = new List<string>();
-        // names the character has no bone for: those weights keep the prefab's own rest position, which is
-        // worth saying out loud because it is the one way an attachment can look half attached
+        // names the character has no bone for: those weights keep the prefab's own rest position, which is the one
+        // way an attachment can look half attached
         var unmatched = new List<string>();
         foreach (var skin in skins)
         {
@@ -419,12 +404,10 @@ public class UmaContainerCharacter : UmaContainer
             }
         }
 
-        // Retarget by bone name, always. Anything that tries to decide *first* has to measure the prefab's rig
-        // against this character's, and every such measurement is pose-dependent: this character is animated, so
-        // its bones are wherever the clip put them, while the prefab's are at rest. A rule built on that misreads a
-        // plain attach prefab as "its own space" as soon as the idle moves an arm (measured: it anchored the whole
-        // attach set to a hand, which put it far off to the side). A prefab whose bones genuinely do not match
-        // simply matches nothing, and that is reported below.
+        // Retarget by bone name, always. Deciding otherwise first means measuring the prefab's rig against this
+        // character's, and every such measurement is pose-dependent: this character is animated, so its bones are
+        // wherever the clip put them while the prefab's are at rest. A plain attach prefab then reads as "its own
+        // space" as soon as the idle moves an arm. A prefab whose bones do not match matches nothing, and is reported.
         foreach (var skin in skins)
         {
             int matchedHere = RetargetBones(skin, targetBones, ref emptyBones);
@@ -433,10 +416,9 @@ public class UmaContainerCharacter : UmaContainer
                                   + $"(skin rooted at '{(skin.rootBone ? skin.rootBone.name : "")}'); it keeps its own rig");
         }
 
-        // What the prefab carries but nothing points at once its skins follow this character: its copies of the
-        // bust chains, the animator's IK pole/target nodes, the leftover chain roots. Left in, the retarget has
-        // already reparented them onto the character and the exporter reports them as extra bones - measured,
-        // nine of them on 1048, and pruning the prefab's tree at this point missed exactly those.
+        // What the prefab carries but nothing points at once its skins follow this character: its copies of the bust
+        // chains, the animator's IK pole/target nodes, the leftover chain roots. Left in, the exporter reports them as
+        // extra bones - nine of them on attach 1048.
         var stillUsed = new HashSet<Transform>();
         foreach (var skin in skins)
         {
@@ -445,10 +427,9 @@ public class UmaContainerCharacter : UmaContainer
         }
         var dead = prefabNodes.Where(node => node && !keeps.Contains(node) && !stillUsed.Contains(node)).ToList();
 
-        // Where it hangs. An attach prefab retargets onto this character and follows from there; anything whose
-        // skins could not be retargeted (a toonprop's rig is a *flattened* copy of the right arm rooted at its own
-        // `Root`, not a character rig, so retargeting is refused above) is a held object and hangs off the hand
-        // joint the game names for exactly that - Hand_Attach_R/L.
+        // Where it hangs. A retargeted attach follows the character from here; anything whose skins could not be
+        // retargeted (a toonprop's rig is a *flattened* copy of the right arm rooted at its own `Root`, not a character
+        // rig) is a held object and hangs off the joint the game names for exactly that - Hand_Attach_R/L.
         Transform anchor = null;
         if (merged == 0)
         {
@@ -468,10 +449,9 @@ public class UmaContainerCharacter : UmaContainer
         accessory.transform.localPosition = Vector3.zero;
         accessory.transform.localRotation = Quaternion.identity;
 
-        // DestroyImmediate, not Destroy: the released bones have to be gone before anything measures this
-        // character. A deferred Destroy leaves them alive until the end of the frame, and the exporter counts
-        // every transform under "Position" - measured, an attach exported 500 bones instead of 425, i.e. the
-        // prefab's whole rig came along as duplicate names.
+        // DestroyImmediate, not Destroy: the released bones have to be gone before anything measures this character,
+        // and a deferred Destroy leaves them alive until the end of the frame. An attach exported 500 bones instead of
+        // 425 - the prefab's whole rig came along as duplicate names.
         foreach (var bone in emptyBones) if (bone) DestroyImmediate(bone.gameObject);
         foreach (var node in dead)
         {
@@ -482,8 +462,8 @@ public class UmaContainerCharacter : UmaContainer
             DestroyImmediate(node.gameObject);
         }
         accessories.Add(accessory);
-        // where it ended up, in the same world units the export uses: the one thing a retarget can get wrong
-        // without failing is placing the geometry somewhere plausible-looking and wrong
+        // where it ended up, in the world units the export uses: a retarget can plausibly place the geometry in the
+        // wrong spot without failing
         Bounds? placed = null;
         foreach (var renderer in accessory.GetComponentsInChildren<Renderer>(true))
         {
@@ -535,13 +515,9 @@ public class UmaContainerCharacter : UmaContainer
     }
 
     /// <summary>
-    /// Retargets one skin's deform bones onto this character by name, and reports how many matched.
-    ///
-    /// <see cref="MergeBone"/> is the same operation but refuses when the skin's root bone is not one this
-    /// character has - right for hair, whose root must be the head, wrong for a toon prop: its own `Root` is just
-    /// the prefab's container, and both shapes the family ships (a hand object weighted to `Wrist_R` and fingers,
-    /// a whole-body costume weighted to `Waist`/`Chest`/`Thighs`) have to bind without ever mentioning `Root`.
-    /// Bones with no counterpart are left alone and reported, so a partly matched prop still says so.
+    /// Retargets one skin's deform bones onto this character by name, and reports how many matched. <see cref="MergeBone"/>
+    /// is the same operation but refuses when the skin's root bone is not one this character has - right for hair, wrong
+    /// for a toon prop, whose own `Root` is just the prefab's container. Bones with no counterpart are left alone.
     /// </summary>
     private static int RetargetBones(SkinnedMeshRenderer skin, Dictionary<string, Transform> targetBones,
                                      ref List<Transform> emptyBones)
@@ -572,11 +548,8 @@ public class UmaContainerCharacter : UmaContainer
         return matched;
     }
 
-    /// <summary>
-    /// Marks the nodes of a prefab that must survive a retarget: those carrying a renderer or a collider, and
-    /// every ancestor of one. Everything else in the prefab is the rig, which the retarget either takes over or
-    /// leaves behind, and what it leaves behind is dead weight in an export.
-    /// </summary>
+    /// <summary>The nodes of a prefab that must survive a retarget: those carrying a renderer or a collider, and every
+    /// ancestor of one. The rest is rig, which the retarget takes over or leaves behind as dead weight in an export.</summary>
     private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)
     {
         bool keepsSomething = node.GetComponent<Renderer>() != null || node.GetComponent<Collider>() != null;
@@ -634,13 +607,10 @@ public class UmaContainerCharacter : UmaContainer
 
     /// <summary>
     /// The look-at solve, switched off for the duration of a caller's sampling and put back afterwards.
-    ///
-    /// <see cref="EnableEyeTracking"/> is what gates the solve, but by itself it only takes effect on this
-    /// component's next <c>FixedUpdate</c>. A caller that samples the pose it is looking at *now* - the vmd
-    /// recorder does exactly that - would therefore capture the solved pose on its first frame, and since
-    /// <c>CloseRecordedLoop</c> copies that frame onto the last one, at both ends of a loop. So this turns the
-    /// solver off immediately as well. <c>ModelExporter</c> switches the same flag off before it writes a model;
-    /// this is the recorder's half of the same rule.
+    /// <see cref="EnableEyeTracking"/> gates the solve but only takes effect on this component's next <c>FixedUpdate</c>,
+    /// so a caller that samples the pose it is looking at *now* - the vmd recorder - would capture the solved pose on
+    /// its first frame, and <c>CloseRecordedLoop</c> copies that frame onto the last one. ModelExporter switches the same
+    /// flag off before it writes a model; this is the recorder's half of that rule.
     /// </summary>
     public IDisposable SuspendLookAt()
     {
@@ -667,8 +637,8 @@ public class UmaContainerCharacter : UmaContainer
         {
             if (_disposed) return;
             _disposed = true;
-            // the component's own FixedUpdate re-enables the solver once the flag is back, so restoring the
-            // flag is the whole job - and it happens whether or not this container ever had an IK created
+            // the component's own FixedUpdate re-enables the solver once the flag is back, so restoring the flag is
+            // the whole job - whether or not this container ever had an IK created
             if (_container != null) _container.EnableEyeTracking = _eyeTracking;
         }
     }
@@ -692,25 +662,16 @@ public class UmaContainerCharacter : UmaContainer
     public bool IsWetLook { get; private set; }
 
     /// <summary>
-    /// The rain look: the game swaps a character's maps for a separately shipped wet set when a race is
-    /// rained on, and this does the same thing. The wet textures are assets of their own named after the
-    /// dry map ("tex_bdy1001_00_diff" -> "tex_bdy1001_00_diff_wet") while the dry ones live inside the
-    /// part prefabs, so every texture slot of every material is asked whether a wet twin of what it holds
-    /// exists - which ones a given shader takes is the shader's business, not this method's.
+    /// The rain look: the game swaps a character's maps for a separately shipped wet set when a race is rained on. The
+    /// wet textures are assets named after the dry map ("tex_bdy1001_00_diff" -> "tex_bdy1001_00_diff_wet") while the dry
+    /// ones live inside the part prefabs, so every texture slot of every material is asked whether a wet twin exists.
+    /// Minis and the few costumes without a wet set stay dry.
     ///
-    /// Returns whether the character is wet afterwards: minis and the few costumes without a wet set
-    /// simply stay dry.
-    ///
-    /// <para><b>While wet, this character owns private copies of its materials.</b> The swap walks
-    /// <c>renderer.materials</c>, which instantiates copies on first touch, so everything that holds the
-    /// <i>shared</i> materials is no longer looking at what renders: the facial driven keys captured their
-    /// <c>BindProperty.BindMaterial</c> when the model loaded and set textures on those, and the material
-    /// panels read <c>sharedMaterials</c> too. A morph that swaps a face texture therefore does nothing
-    /// visible until the rain look is switched off, which puts the originals back. The copies also stay
-    /// when nothing was swapped - a character whose own parts ship no wet maps still owns them after one
-    /// call - so "asked once" is the trigger, not "is wet". Swapping the shared materials instead is not
-    /// the fix - it would repaint every character that shares them - so anything new that edits a material
-    /// has to tolerate a character having been asked.</para>
+    /// <para><b>Once asked, this character owns private copies of its materials.</b> The swap walks <c>renderer.materials</c>,
+    /// which instantiates copies on first touch, so the facial driven keys (bound to the <i>shared</i> material when the
+    /// model loaded) and the material panels no longer see what renders: a morph that swaps a face texture does nothing
+    /// visible until the rain look is switched off. The copies stay even when nothing was swapped, so "asked once" is the
+    /// trigger, not "is wet"; editing the shared materials instead would repaint every character that shares them.</para>
     /// </summary>
     public bool SetWetLook(bool wet)
     {
@@ -731,8 +692,8 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         var wetTextures = WetTextureEntries();
-        // Ask before touching a renderer: reading renderer.materials below instantiates private copies, and
-        // a mini or a costume with no wet set would pay that for every material to learn it had no work to do.
+        // Ask before touching a renderer: reading renderer.materials below instantiates private copies, and a mini or a
+        // costume with no wet set would pay that for every material to learn it had no work to do.
         if (wetTextures.Count == 0)
         {
             Debug.Log("[Wet] the database carries no wet textures at all, staying dry");
@@ -857,17 +818,13 @@ public class UmaContainerCharacter : UmaContainer
     public void UpBodyReset()
     {
         if (!UpBodyBone) return;
-        // Prefer the rest table, which now holds this bone: UpBodyPosition/UpBodyRotation are read in Initialize()
-        // and so record whatever pose the rig was already in - the default idle starts as soon as a character
-        // loads, and the look-at solve moves this very bone. Restoring a pose instead of the rest pose is what put
-        // a session-dependent turn into anything that samples the rig.
+        // Prefer the rest table, which now holds this bone: UpBodyPosition/UpBodyRotation are read in Initialize() and
+        // so record whatever pose the rig was already in - the idle starts as soon as a character loads and the look-at
+        // solve moves this very bone - which puts a session-dependent turn into anything that samples the rig.
         //
-        // The table is applied as a *local* transform. It used to be applied with SetPositionAndRotation, i.e. in
-        // world space, and because the table is captured before SetHeight() scales the rig to the character's
-        // height, that snapped this bone back to its unscaled world position - raising the whole upper body by
-        // P0 * (1 - BodyScale). On a 140 cm character that was 12.9 cm of extra torso (character 1021, "stretched"),
-        // on a 158 cm one 1.7 cm, and it was identically 12.5143 units in every exported model regardless of height,
-        // which is how it was found. v3.1 wrote localPosition here and had neither symptom.
+        // Applied as a *local* transform: in world space (SetPositionAndRotation) it snapped the bone back to its
+        // unscaled position, since the table is captured before SetHeight() scales the rig - the upper body rose by
+        // P0 * (1 - BodyScale).
         if (InitBoneLocal != null && InitBoneLocal.TryGetValue(UpBodyBone.transform, out var rest))
         {
             UpBodyBone.transform.localPosition = rest.pos;
@@ -1165,9 +1122,9 @@ public class UmaContainerCharacter : UmaContainer
 
         //Some setting for Head
         EnableEyeTracking = UI.ModelSettings.EnableEyeTracking;
-        // Said out loud, because this is the state a recording's reference pose is built in and it decides whether a
-        // take comes out right: with it on, a recorded motion can carry the solve (see docs/CLI.md). One line per
-        // model load, so a session's log states which build and which setting a take was made under.
+        // Said out loud, because this is the state a recording's reference pose is built in: with it on, a recorded
+        // motion can carry the look-at solve (see docs/CLI.md). One line per model load, so the log states which
+        // build and which setting a take was made under.
         Debug.Log($"[Uma] look-at at load: {(EnableEyeTracking ? "on" : "off")} "
                   + $"(setting {UI.ModelSettings.EnableEyeTracking}, IK {(IK != null ? "present" : "not built yet")})");
 
@@ -1278,14 +1235,11 @@ public class UmaContainerCharacter : UmaContainer
                             break;
                         case "Gallop/3D/Chara/ToonFace/TSER":
                             m.shader = UmaAssetManager.FaceShader;
-                            // `_CylinderBlend` is deliberately *not* overridden here. The game sets the rim,
-                            // toon and saturation values at runtime (Gallop/Live/Director.cs:215-258) and never
-                            // sets this one, so the material asset's own value - 0 on the face - is what the
-                            // game renders with, and it is what the exporter has to carry: it reads this live
-                            // material, so an override here would end up in the exported material comment and
-                            // the Blender port would shade with a value the game never uses. Measured, the
-                            // override was worth 0.04 of a level on the face crop's mean luminance, so the
-                            // change is a correctness one rather than a visible one.
+                            // `_CylinderBlend` is deliberately *not* overridden here: the game sets the rim, toon and
+                            // saturation values at runtime (Gallop/Live/Director.cs:215-258) and never this one, so the
+                            // material asset's own value - 0 on the face - is what the game renders with, and what the
+                            // exporter has to carry: it reads this live material, so an override would reach the exported
+                            // material comment and the Blender port would shade with a value the game never uses.
                             m.SetColor("_RimColor", new Color(0, 0, 0, 0));
                             break;
                         case "Gallop/3D/Chara/ToonEye/T":
@@ -1300,7 +1254,6 @@ public class UmaContainerCharacter : UmaContainer
                             break;
                         default:
                             Debug.Log(m.shader.name);
-                            // m.shader = Shader.Find("Nars/UmaMusume/Body");
                             break;
                     }
                 }
@@ -1360,12 +1313,11 @@ public class UmaContainerCharacter : UmaContainer
                 {
                     case "Gallop/3D/Chara/ToonHair/TSER":
                         m.shader = UmaAssetManager.HairShader;
-                        // see the face case above: the game does not set `_CylinderBlend` at runtime, so the
-                        // asset's value is the one the exporter has to carry
+                        // see the face case above: the game does not set `_CylinderBlend` at runtime, so the asset's
+                        // value is the one the exporter has to carry
                         break;
                     default:
                         Debug.Log(m.shader.name);
-                        // m.shader = Shader.Find("Nars/UmaMusume/Body");
                         break;
                 }
             }
@@ -1611,7 +1563,6 @@ public class UmaContainerCharacter : UmaContainer
 
         if (UmaAnimator)
         {
-            //Debug.Log("LiveTime" + UI.LiveTime.ToString());
             aClip.name = entry.Name; // Need a complete path to find dependencies
             LoadAnimation(aClip);
             return;
@@ -1976,7 +1927,6 @@ public class UmaContainerCharacter : UmaContainer
         var firsehead = Head;
         var faceDriven = Instantiate(firsehead.GetComponent<AssetHolder>()._assetTable["facial_target"]) as FaceDrivenKeyTarget;
 
-        //Need Instantiate or not?
         var earDriven = firsehead.GetComponent<AssetHolder>()._assetTable["ear_target"] as DrivenKeyTarget;
         var faceOverride = firsehead.GetComponent<AssetHolder>()._assetTable["face_override"] as FaceOverrideData;
 
@@ -2082,9 +2032,6 @@ public class UmaContainerCharacter : UmaContainer
             GatherSerializableBonesRecursive(current.GetChild(i), bones, depth + 1);
         }
 
-        //this can be optimized by keeping track if the bone is dynamic
-        //and generating a list of tags beforehand
-        //otherwise getComponentInParent() is called for every bone
         var bone = new SerializableBone(current, true);
         
         if(depth == 0)
@@ -2117,7 +2064,6 @@ public class UmaContainerCharacter : UmaContainer
             savedBone.Transform.ApplyTo(bone.Bone, options);
         }
 
-        //could add a 'bone not found' threshold for returning false
         return true;
     }
 
@@ -2208,11 +2154,10 @@ public class UmaContainerCharacter : UmaContainer
         {
             return;
         }
-        // Restored as *local* transforms, parents-first. Local, because the table is captured before SetHeight()
-        // applies the character's height scale and a world restore would undo that scale for every bone in the table
-        // (the control bones now in it sit exactly between the hips and the spine, so the upper body rose and the
-        // model came out stretched). Parents-first is kept because it makes the order explicit and cannot hurt: a
-        // local value does not depend on whether its parent has been written yet.
+        // Restored as *local* transforms, parents-first. Local, because the table is captured before SetHeight() applies
+        // the character's height scale, and a world restore would undo that scale for every bone in it (the upper body
+        // rose and the model came out stretched). Parents-first is explicit and cannot hurt: a local value does not
+        // depend on whether its parent has been written yet.
         var table = InitBoneLocal ?? InitBoneTransform;
         foreach (var pair in table
                      .OrderBy(pair => DepthOf(pair.Key))
