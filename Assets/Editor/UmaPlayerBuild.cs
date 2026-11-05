@@ -38,6 +38,11 @@ public static class UmaPlayerBuild
         string output = Path.GetFullPath(Path.Combine(projectRoot, OutputDir, Executable));
         Directory.CreateDirectory(Path.GetDirectoryName(output));
 
+        // A dump is one model at a time, so the way to finish a large one sooner is several instances over slices of
+        // the plan (`--dump-models-skip`). The single-instance lock would refuse the second one with "another instance
+        // is already running", before it ever parses an argument, so the shipped build does not take it.
+        PlayerSettings.forceSingleInstance = false;
+
         var options = new BuildPlayerOptions
         {
             scenes = scenes,

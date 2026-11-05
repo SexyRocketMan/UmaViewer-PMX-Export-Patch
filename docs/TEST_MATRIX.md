@@ -43,8 +43,8 @@ Two characters from the current viewer, six settings each, plus the old viewer's
 | 6 | `-APose` | the A-pose rest pose, which changes bone rolls and nothing the add-on reads |
 | 7 | old viewer export | no metadata tokens; the add-on must still shade, decals included, and report `legacy` |
 
-`Config.PmxTextureVariants` is off by default and `-TextureVariants` only sets it true, so a variant-carrying export
-needs the flag (or the config) on. A costume with no twins should report zeros rather than failures, so one of the
+`Config.PmxTextureVariants` is on by default and `-TextureVariants` only sets it true, so a variant-free export needs
+the key switched off first. A costume with no twins should report zeros rather than failures, so one of the
 six can be that costume.
 
 ## Measured: the old viewer's exports against ours

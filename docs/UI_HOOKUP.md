@@ -32,7 +32,7 @@ no `EnableEnglishVmdBoneNames`, and a recorded vmd carries the rig's own bone na
 | 2 | Advanced morphs (decals as vertex morphs) | `Toggle` | Model tab, beside the naming dropdown | `UISettingsModel.EnablePmxExtraMorphs` | `_extraMorphs` | **on** |
 | 3 | Morph naming mode | `TMP_Dropdown` | Model tab, near the export button | `UISettingsModel.ChangeMorphNameMode` | `_morphNameMode` | Unified (index 2) |
 | 4 | VMD key reduction | `Slider` + label | Animation tab, under the record button | `UISettingsAnimation.ChangeVmdKeyReduction` | `_keyReduction`, `_keyReductionText` | 1 |
-| 5 | Export the game's wet and dirt maps | `Toggle` | Model tab, under "Advanced morphs" | `UISettingsModel.EnablePmxTextureVariants` | `_textureVariants` | off |
+| 5 | Export the game's wet and dirt maps | `Toggle` | Model tab, under "Advanced morphs" | `UISettingsModel.EnablePmxTextureVariants` | `_textureVariants` | on |
 
 Defaults are the `Config.cs` field values, written into the rows by `ApplySettings` at startup. The serialized
 fields are `[SerializeField] private`, i.e. `A Pose Rest Pose`, `Extra Morphs`, `Texture Variants`,

@@ -157,6 +157,7 @@ under one root, one `index.json`, and a shared texture folder per kind.
 ```powershell
 UmaViewer.exe dump models D:/web --packs --thumbs         # everything, with a zip and a preview per model
 UmaViewer.exe dump models D:/web --dump-models-count 8     # try it on a few first
+UmaViewer.exe dump models D:/web --dump-models-skip 600 --dump-models-count 600   # one slice of several viewers
 UmaViewer.exe dump models D:/web --dump-models-props       # props only
 UmaViewer.exe dump models D:/web --dump-props-filter rich_prop   # one prop family at a time
 python Tools/check_dump.py D:/web --packs --thumbs         # then check it

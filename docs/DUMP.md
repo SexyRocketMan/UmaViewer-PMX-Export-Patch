@@ -77,6 +77,38 @@ should, previews that are actually pictures (a sampled preview under 5% drawn is
 what an interrupted run looks like. `dump_report.py` is the reading: models per kind and family with bytes, size ranges
 in centimetres with any implausible model named, costume-name coverage, preview framing, failures.
 
+## Watching it, and making it faster
+
+The index is rewritten after every model, so it is the progress record:
+
+```powershell
+python Tools/dump_status.py D:/web            # "612/1777 written (34.4%), 3.1 s each, 61 min left"
+python Tools/dump_status.py D:/web --follow   # the same line, redrawn until the dump stops changing
+```
+
+A dump is single-threaded, one model at a time, so the way to finish sooner is several viewers over slices of the same
+plan. A **built viewer** is what makes that possible: two editor instances cannot hold one project, while a player has
+no such lock (`UmaPlayerBuild` clears `forceSingleInstance`). Each slice is dumped into its own folder and joined with
+`Tools/merge_dump.py`, which keeps one copy of a model written twice and rewrites the index with its totals:
+
+```powershell
+UmaViewer.exe --dump-models D:/slices/a --dump-models-count 600 --packs --thumbs --texture-variants
+UmaViewer.exe --dump-models D:/slices/b --dump-models-skip 600 --dump-models-count 600 --packs --thumbs --texture-variants
+UmaViewer.exe --dump-models D:/slices/c --dump-models-skip 1200 --packs --thumbs --texture-variants
+python Tools/merge_dump.py --into D:/web --from D:/slices/a D:/slices/b D:/slices/c
+python Tools/check_dump.py D:/web --packs --thumbs
+```
+
+A viewer keeps every costume's textures and meshes in Unity's asset cache until something sweeps, so the runner releases
+unused assets every few models and logs the run's allocation with each model (`mem 2.4 GB`). If memory is still tight,
+run a slice in chunks: rerunning the same `--dump-models-skip` / `--dump-models-count` skips what is already on disk, so
+each chunk starts from a fresh process.
+
+Two things catch people out. A player reads its own `Config.json`, which lives beside the executable, not the one in
+the repository - so settings the editor had do not carry over, and passing `--texture-variants` (or copying the config)
+is how a sliced dump comes out the same as an editor run. And a slice with `--dump-models-count 0` takes everything
+from its `--dump-models-skip` onward, which is the easy way to cover the tail of the plan.
+
 `check_tails.py` is the orientation gate. A PMX stores no bone axis, so the tail *is* the frame a motion rotates around,
 and a wrong one never fails loudly: the file opens, the vertices are right, the bone leans the wrong way once animated.
 It checks each joint against the joint MMD points it at (the thigh at the knee, the elbow at the wrist, the wrist at the

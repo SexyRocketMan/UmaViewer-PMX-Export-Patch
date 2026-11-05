@@ -77,6 +77,8 @@ param(
     # the dump a browser reads: characters and props, one index.json, shared textures
     [string]$DumpModels = "",
     [int]$DumpModelsCount = 0,
+    # start this many models into the plan, so several viewers can split the dump between them
+    [int]$DumpModelsSkip = 0,
     [switch]$DumpModelsChars,
     [switch]$DumpModelsProps,
     [switch]$Packs,
@@ -290,6 +292,7 @@ if ($Json) { $arguments += "--json" }
 if ($DumpModels) {
     $arguments += @("-umaDumpModels", $DumpModels)
     if ($DumpModelsCount -gt 0) { $arguments += @("-umaDumpModelsCount", $DumpModelsCount) }
+    if ($DumpModelsSkip -gt 0) { $arguments += @("-umaDumpModelsSkip", $DumpModelsSkip) }
     if ($DumpModelsChars) { $arguments += "-umaDumpModelsChars" }
     if ($DumpModelsProps) { $arguments += "-umaDumpModelsProps" }
     if ($Packs) { $arguments += "-umaPacks" }

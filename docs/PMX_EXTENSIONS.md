@@ -86,7 +86,7 @@ The first three lines are the old model info. `metadata format:` and `export set
 (a file without the first is version 1; see
 [the metadata format](#the-metadata-format-and-how-it-changes)). `extra morphs:` and `object morphs:` appear only when
 `Config.PmxExtraMorphs` is on (it is on by default) and the character has such morphs. `texture variants:` appears only
-when `Config.PmxTextureVariants` is on (off by default) - see [the texture variants](#the-texture-variants).
+when `Config.PmxTextureVariants` is on (the default) - see [the texture variants](#the-texture-variants).
 
 `object morphs:` is a `;`-separated list of `morph:bind type:locator part:objects`:
 

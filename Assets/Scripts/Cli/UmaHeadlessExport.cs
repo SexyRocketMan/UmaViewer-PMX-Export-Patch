@@ -102,6 +102,33 @@ public static class UmaHeadlessExport
     /// is leaving, so reading "the current clip" records the wrong one.</summary>
     private static AnimationClip _requestedClip;
 
+    /// <summary>
+    /// How often a running dump lets go of the assets it no longer needs. Every costume's textures and meshes stay in
+    /// Unity's cache until something asks it to sweep, and a character dump reached six gigabytes of private memory
+    /// that way; releasing every few models keeps it flat at the cost of one sweep per release.
+    /// </summary>
+    private const int AssetReleaseEvery = 6;
+    private static int _sinceAssetRelease;
+
+    /// <summary>Releases the assets of the models already dumped.</summary>
+    private static void ReleaseAssetsIfDue(Options options)
+    {
+        if (options.DumpModels == "") return;
+        if (++_sinceAssetRelease < AssetReleaseEvery) return;
+        _sinceAssetRelease = 0;
+        Resources.UnloadUnusedAssets();
+        GC.Collect();
+    }
+
+    /// <summary>
+    /// What the run holds: Unity's own count of every allocated byte, which is the number that grows when a dump
+    /// keeps a costume's textures alive. An OS process query reads zero in a player, so it is not used.
+    /// </summary>
+    private static double PrivateMemoryGb()
+    {
+        return UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / (1024.0 * 1024.0 * 1024.0);
+    }
+
     /// <summary>How many times the motion has been re-applied because the idle took the layer back.</summary>
     private static int _recordAttempts;
     private const string KeyScanIndex = "UmaHeadlessExport.ScanIndex";
@@ -204,6 +231,8 @@ public static class UmaHeadlessExport
                    Help = "with --dump-models: props only" },
         new Flag { Long = "--dump-models-count", Internal = "-umaDumpModelsCount", Kind = FlagKind.Value, Group = "scanning",
                    Help = "how many models to dump; 0 is all of them" },
+        new Flag { Long = "--dump-models-skip", Internal = "-umaDumpModelsSkip", Kind = FlagKind.Value, Group = "scanning",
+                   Help = "with --dump-models: start that many models into the plan, so several instances can split it" },
         new Flag { Long = "--packs", Internal = "-umaPacks", Kind = FlagKind.Switch, Group = "scanning",
                    Help = "with --dump-models: also write one .zip per model, for a single-model download" },
         new Flag { Long = "--thumbs", Internal = "-umaThumbs", Kind = FlagKind.Switch, Group = "scanning",
@@ -323,7 +352,7 @@ public static class UmaHeadlessExport
 
         // the run itself
         new Flag { Long = "--timeout", Internal = "-umaTimeout", Kind = FlagKind.Value, Group = "run",
-                   Help = "give up after this many seconds; default 600" },
+                   Help = "give up when one stage takes longer than this; default 600 (a dump resets it per model)" },
         new Flag { Long = "--boot-timeout", Internal = "-umaBootTimeout", Kind = FlagKind.Value, Group = "run",
                    Help = "how long to wait for the viewer to boot; default 120" },
         new Flag { Long = "--json", Internal = "", Kind = FlagKind.Switch, Group = "run",
@@ -946,6 +975,9 @@ public static class UmaHeadlessExport
         /// <summary>`--dump-models-count`: how many models to dump; 0 is all of them.</summary>
         public int DumpModelsCount;
 
+    /// <summary>`--dump-models-skip`: how many models of the plan to pass over, so several instances can share it.</summary>
+    public int DumpModelsSkip;
+
         /// <summary>The command this run was given ("export model"), or "" for the plain-flag form. Set by
         /// <see cref="ApplyVerb"/>; read for validation and the summary line, never for behaviour.</summary>
         public string Verb = "";
@@ -1021,6 +1053,7 @@ public static class UmaHeadlessExport
                 case "-umaDumpModelsChars": options.DumpModelsChars = true; break;
                 case "-umaDumpModelsProps": options.DumpModelsProps = true; break;
                 case "-umaDumpModelsCount": options.DumpModelsCount = int.Parse(Next()); break;
+                case "-umaDumpModelsSkip": options.DumpModelsSkip = int.Parse(Next()); break;
                 case "-umaPacks": options.Packs = true; break;
                 case "-umaThumbs": options.Thumbs = true; break;
                 case "-umaRefresh": options.Refresh = true; break;
@@ -2637,9 +2670,8 @@ public static class UmaHeadlessExport
         var container = CurrentContainer();
         if (container == null) return "no model loaded to screenshot";
 
-        var animationCamera = builder != null ? builder.AnimationCamera : null;
-        Camera camera = animationCamera != null && animationCamera.isActiveAndEnabled ? animationCamera : Camera.main;
-        if (camera == null) return "the viewer scene has no active camera";
+        Camera camera = ShotCamera();
+        if (camera == null) return "the viewer scene has no camera";
 
         Bounds bounds = new Bounds(container.transform.position, Vector3.zero);
         bool any = false;
@@ -4077,6 +4109,7 @@ public static class UmaHeadlessExport
 
     private const string KeyModelDumpPlanned = "UmaHeadlessExport.ModelDumpPlanned";
     private const string KeyModelDumpIndex = "UmaHeadlessExport.ModelDumpIndex";
+    private const string KeyModelDumpTotal = "UmaHeadlessExport.ModelDumpTotal";
 
     /// <summary>
     /// The dump a browser reads: characters and props under one root, one index.json, and one shared `Texture2D/`
@@ -4093,7 +4126,7 @@ public static class UmaHeadlessExport
     private static List<ModelDumpJob> CachedModelDumpPlan(Options options, out string failure)
     {
         string key = $"{options.DumpModels}|{options.DumpModelsChars}|{options.DumpModelsProps}"
-                   + $"|{options.DumpPropsFilter}|{options.DumpModelsCount}";
+                   + $"|{options.DumpPropsFilter}|{options.DumpModelsCount}|{options.DumpModelsSkip}";
         int manifest = UmaViewerMain.Instance != null && UmaViewerMain.Instance.AbList != null
             ? UmaViewerMain.Instance.AbList.Count
             : 0;
@@ -4135,6 +4168,7 @@ public static class UmaHeadlessExport
             return;
         }
         Lap("index");
+        CliState.SetInt(KeyModelDumpTotal, plan.Count);       // so the index can report progress, not just totals
         if (plan.Count == 0)
         {
             Fail("nothing to dump: no characters or props matched");
@@ -4196,6 +4230,8 @@ public static class UmaHeadlessExport
         CliState.SetString(KeyPropName, job.kind == "prop" ? job.key : "");
         CliState.SetInt(KeyIsProp, job.kind == "prop" ? 1 : 0);
         Debug.Log($"{Tag} [{index + 1}/{plan.Count}] dumping {job.model}");
+        // one deadline for the whole run would kill any dump longer than --timeout; per model it still catches a hang
+        CliState.SetString(KeyDeadline, DateTime.UtcNow.AddSeconds(options.TimeoutSeconds).Ticks.ToString());
         if (index == 0) ResetLaps();          // the first model has no idle lap to close
         Lap("load");
 
@@ -4418,6 +4454,10 @@ public static class UmaHeadlessExport
             }
         }
 
+        if (options.DumpModelsSkip > 0 && plan.Count > options.DumpModelsSkip)
+        {
+            plan = plan.Skip(options.DumpModelsSkip).ToList();
+        }
         if (options.DumpModelsCount > 0 && plan.Count > options.DumpModelsCount)
         {
             plan = plan.Take(options.DumpModelsCount).ToList();
@@ -4532,7 +4572,7 @@ public static class UmaHeadlessExport
 
         entries.RemoveAll(existing => existing.model == key);
         entries.Add(record);
-        WriteModelDumpIndex(root, CliState.GetInt(KeyScanFailures, 0) > -1 ? 0 : 0, entries);
+        WriteModelDumpIndex(root, CliState.GetInt(KeyModelDumpTotal, 0), entries);
 
         if (failure != null)
         {
@@ -4550,11 +4590,19 @@ public static class UmaHeadlessExport
                           : $", preview {record.thumb}"));
         }
 
-        if (options.DumpModels != "") Debug.Log($"{Tag} {job.model}: {TakeLaps()}");
+        if (options.DumpModels != "")
+        {
+            Debug.Log($"{Tag} {job.model}: {TakeLaps()}, mem {PrivateMemoryGb():0.0} GB");
+        }
 
         // the time between one model finishing and the next one starting - the unload and the index rewrite - is
         // measured as the next model's first lap
-        if (options.DumpModels != "") { ResetLaps(); Lap("idle"); }
+        if (options.DumpModels != "")
+        {
+            ReleaseAssetsIfDue(options);
+            ResetLaps();
+            Lap("idle");
+        }
 
         CliState.SetInt(KeyModelDumpIndex, CliState.GetInt(KeyModelDumpIndex, 0) + 1);
         CliState.SetString(KeyOutPath, "");
@@ -4614,10 +4662,10 @@ public static class UmaHeadlessExport
         written = "";
         if (container == null) return "nothing was loaded to render";
 
-        var builder = UmaViewerBuilder.Instance;
-        var animationCamera = builder != null ? builder.AnimationCamera : null;
-        Camera camera = animationCamera != null && animationCamera.isActiveAndEnabled ? animationCamera : Camera.main;
-        if (camera == null) return "the viewer scene has no active camera";
+        Camera camera = ShotCamera();
+        if (camera == null) return "the viewer scene has no camera";
+        bool wasEnabled = camera.enabled;
+        camera.enabled = true;              // a player run turns the scene cameras off; a target render still needs one on
 
         Bounds bounds = new Bounds(container.transform.position, Vector3.zero);
         bool any = false;
@@ -4627,7 +4675,7 @@ public static class UmaHeadlessExport
             if (!any) { bounds = renderer.bounds; any = true; }
             else bounds.Encapsulate(renderer.bounds);
         }
-        if (!any) return "the loaded model has no renderers";
+        if (!any) { camera.enabled = wasEnabled; return "the loaded model has no renderers"; }
 
         var character = container as UmaContainerCharacter;
         Transform head = character != null && character.HeadBone != null ? character.HeadBone.transform : null;
@@ -4713,7 +4761,26 @@ public static class UmaHeadlessExport
             camTransform.rotation = oldRotation;
             camera.fieldOfView = oldFov;
             camera.ResetProjectionMatrix();
+            camera.enabled = wasEnabled;
         }
+    }
+
+    /// <summary>
+    /// The camera a shot renders with: the animation camera when it is on, else the main one, else any camera the
+    /// scene holds - a player run switches every camera off (<c>UmaCliBootstrap.MakeHeadless</c>) and a render into
+    /// a target texture does not need one that is drawing to the screen.
+    /// </summary>
+    private static Camera ShotCamera()
+    {
+        var builder = UmaViewerBuilder.Instance;
+        var animationCamera = builder != null ? builder.AnimationCamera : null;
+        if (animationCamera != null && animationCamera.isActiveAndEnabled) return animationCamera;
+        if (Camera.main != null) return Camera.main;
+        foreach (var candidate in UnityEngine.Object.FindObjectsOfType<Camera>(true))
+        {
+            if (candidate != null && candidate.targetTexture == null) return candidate;
+        }
+        return null;
     }
 
     /// <summary>
