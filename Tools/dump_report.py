@@ -17,6 +17,12 @@ what it should. This answers the questions that come after a long run, where the
     python Tools/dump_report.py C:/tmp/dump/full
     python Tools/dump_report.py C:/tmp/dump/full --sample 60
 
+It also asks one question about the *rig* that a dump can answer and a single model cannot: whether the control bone
+between the hips and the spine sits at the same height in every model. Characters are scaled to their own height, so
+that bone must scale with them; if it is identical across models it is being restored from a table captured before
+the scaling, which lifts the whole upper body and makes every model look stretched - the regression of 2026-11-02,
+described in the note by `UpBodyReset` in Assets/Scripts/UmaContainerCharacter.cs.
+
 Pillow is used for the preview numbers when it is installed and those lines are skipped when it is not.
 """
 
@@ -32,6 +38,14 @@ try:
     HAVE_PIL = True
 except ImportError:                     # the preview section is skipped rather than the report failing
     HAVE_PIL = False
+
+# reading a pmx needs the project's own reader, which sits beside this script
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from pmx_inspect import read_model
+    HAVE_READER = True
+except ImportError:
+    HAVE_READER = False
 
 
 def size_of(root, relative):
@@ -161,6 +175,40 @@ def main(argv):
     elif not HAVE_PIL:
         print("  (Pillow is not installed, so the previews were not measured)")
 
+    # ---------------------------------------------------------------- the rest pose, across models
+    rest_pose_problem = None
+    if HAVE_READER and args.sample > 0:
+        picks = models[: args.sample] if args.sample < len(models) else models
+        heights, upbodies, hips = [], [], []
+        for model in picks:
+            path = os.path.join(args.root, model["model"].replace("/", os.sep))
+            if not os.path.isfile(path):
+                continue
+            try:
+                pmx = read_model(path)
+            except Exception:
+                continue
+            bones = {bone.name: bone for bone in pmx.bones}
+            if "UpBody_Ctrl" not in bones or "Hip" not in bones:
+                continue
+            upbodies.append(bones["UpBody_Ctrl"].pos[1])
+            hips.append(bones["Hip"].pos[1])
+        if len(upbodies) >= 3:
+            spread = max(upbodies) - min(upbodies)
+            hip_spread = max(hips) - min(hips)
+            print(f"  rest pose: UpBody_Ctrl {min(upbodies):.4f}..{max(upbodies):.4f} units over "
+                  f"{len(upbodies)} model(s) (hips {min(hips):.4f}..{max(hips):.4f})")
+            # Only meaningful when the sample holds more than one character: costumes of the same uma share a height,
+            # so identical values there are correct. The signature of the bug needs both - hips that differ and an
+            # upper body that does not.
+            if spread < 0.01 and hip_spread > 0.05:
+                rest_pose_problem = (
+                    f"UpBody_Ctrl sits at the same height ({min(upbodies):.4f} units) in every model while the hips "
+                    f"range over {hip_spread:.2f} units - the upper body is being restored before the "
+                    f"character height scale, so every model is stretched. See UpBodyReset in "
+                    f"Assets/Scripts/UmaContainerCharacter.cs")
+                print("  -> character-independent: the rest pose is being applied before the height scale")
+
     if failed:
         print(f"\n  {len(failed)} failure(s):")
         for model in failed[:10]:
@@ -169,9 +217,13 @@ def main(argv):
             print(f"    ... and {len(failed) - 10} more")
         summary["failures"] = [{"name": model["name"], "failure": model["failure"]} for model in failed]
 
+    if rest_pose_problem:
+        print(f"\n  REST POSE: {rest_pose_problem}")
+        summary["restPose"] = rest_pose_problem
+
     if args.json:
         print(json.dumps(summary, indent=2))
-    return 1 if failed else 0
+    return 1 if (failed or rest_pose_problem) else 0
 
 
 if __name__ == "__main__":

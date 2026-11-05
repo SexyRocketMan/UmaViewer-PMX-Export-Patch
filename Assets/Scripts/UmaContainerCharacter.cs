@@ -1,4 +1,4 @@
-using Gallop;
+﻿using Gallop;
 using RootMotion;
 using RootMotion.Dynamics;
 using RootMotion.FinalIK;
@@ -33,6 +33,15 @@ public class UmaContainerCharacter : UmaContainer
     public Vector3 UpBodyPosition;
     public Quaternion UpBodyRotation;
     public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneTransform;
+    /// <summary>
+    /// The same rest pose as <see cref="InitBoneTransform"/>, in local space, for putting bones back.
+    ///
+    /// The world table cannot be restored, only compared: it is captured before <see cref="UmaViewerBuilder"/> scales
+    /// the character to their height, so writing those world values back afterwards puts every bone at its unscaled
+    /// position. Local values are immune to that, because an ancestor's scale does not change a child's local
+    /// transform.
+    /// </summary>
+    public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneLocal;
 
     [Header("Face")]
     public FaceDrivenKeyTarget FaceDrivenKeyTarget;
@@ -257,9 +266,15 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         InitBoneTransform = new Dictionary<Transform, (Vector3 pos, Quaternion rot)>();
+        // The same pose in *local* space, which is the form a restore has to use. The world table is compared against
+        // (see UnityHumanoidVMDRecorder) and stays as it is; this one exists because this capture runs before
+        // SetHeight() scales the "Position" node, and a world transform written back afterwards ignores that scale:
+        // see UpBodyReset(). A local transform is unaffected by an ancestor's scale, so capturing it early is safe.
+        InitBoneLocal = new Dictionary<Transform, (Vector3 pos, Quaternion rot)>();
         foreach (var bone in bodySkinnedMeshRenderer.bones)
         {
             InitBoneTransform[bone] = (bone.position, bone.rotation);
+            InitBoneLocal[bone] = (bone.localPosition, bone.localRotation);
         }
 
         // ... and the bones the rig puts *between* a skinned bone and the character root. They are the control
@@ -275,6 +290,7 @@ public class UmaContainerCharacter : UmaContainer
             {
                 if (InitBoneTransform.ContainsKey(node)) continue;
                 InitBoneTransform[node] = (node.position, node.rotation);
+                InitBoneLocal[node] = (node.localPosition, node.localRotation);
             }
         }
     }
@@ -845,9 +861,17 @@ public class UmaContainerCharacter : UmaContainer
         // and so record whatever pose the rig was already in - the default idle starts as soon as a character
         // loads, and the look-at solve moves this very bone. Restoring a pose instead of the rest pose is what put
         // a session-dependent turn into anything that samples the rig.
-        if (InitBoneTransform != null && InitBoneTransform.TryGetValue(UpBodyBone.transform, out var rest))
+        //
+        // The table is applied as a *local* transform. It used to be applied with SetPositionAndRotation, i.e. in
+        // world space, and because the table is captured before SetHeight() scales the rig to the character's
+        // height, that snapped this bone back to its unscaled world position - raising the whole upper body by
+        // P0 * (1 - BodyScale). On a 140 cm character that was 12.9 cm of extra torso (character 1021, "stretched"),
+        // on a 158 cm one 1.7 cm, and it was identically 12.5143 units in every exported model regardless of height,
+        // which is how it was found. v3.1 wrote localPosition here and had neither symptom.
+        if (InitBoneLocal != null && InitBoneLocal.TryGetValue(UpBodyBone.transform, out var rest))
         {
-            UpBodyBone.transform.SetPositionAndRotation(rest.pos, rest.rot);
+            UpBodyBone.transform.localPosition = rest.pos;
+            UpBodyBone.transform.localRotation = rest.rot;
             return;
         }
         UpBodyBone.transform.localPosition = UpBodyPosition;
@@ -2184,17 +2208,18 @@ public class UmaContainerCharacter : UmaContainer
         {
             return;
         }
-        // Parents before children. The table stores *world* transforms, so applying a parent after its own
-        // descendant drags that descendant off the value it was just given - and with the control bones now in the
-        // table (UpBody_Ctrl, Waist, ...) they sit exactly between the hips and the spine, so the wrong order
-        // re-creates the very offset this is meant to remove. Measured when the ancestors were appended last
-        // instead: the already-restored spine, chest, neck, head and arms were all dragged by the control bone's
-        // full session deviation.
-        foreach (var pair in InitBoneTransform
+        // Restored as *local* transforms, parents-first. Local, because the table is captured before SetHeight()
+        // applies the character's height scale and a world restore would undo that scale for every bone in the table
+        // (the control bones now in it sit exactly between the hips and the spine, so the upper body rose and the
+        // model came out stretched). Parents-first is kept because it makes the order explicit and cannot hurt: a
+        // local value does not depend on whether its parent has been written yet.
+        var table = InitBoneLocal ?? InitBoneTransform;
+        foreach (var pair in table
                      .OrderBy(pair => DepthOf(pair.Key))
                      .ToList())
         {
-            pair.Key.SetPositionAndRotation(pair.Value.pos, pair.Value.rot);
+            pair.Key.localPosition = pair.Value.pos;
+            pair.Key.localRotation = pair.Value.rot;
         }
     }
 
