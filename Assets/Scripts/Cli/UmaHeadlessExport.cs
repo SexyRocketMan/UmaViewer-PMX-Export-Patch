@@ -4691,8 +4691,14 @@ public static class UmaHeadlessExport
         if (reach <= 0f) reach = 1.75f;                                         // a person, if the box says nothing
         float distance = Mathf.Max(reach / Mathf.Tan(halfFov), 0.2f);
 
+        // a flat object - a book, a plate, a sign lying down - is a thin band seen from eight degrees up, so the more
+        // the box is flattened vertically the higher the camera rises. A character is tall, so it keeps the low angle.
+        float width = Mathf.Max(bounds.size.x, bounds.size.z);
+        float flatness = 1f - Mathf.Clamp01(bounds.size.y / Mathf.Max(1e-4f, width));
+        float elevation = Mathf.Lerp(0.14f, 0.95f, flatness * flatness);
+
         Vector3 direction = Quaternion.AngleAxis(-32f, Vector3.up) * facing;    // a third of the way round, from the left
-        direction = (direction + Vector3.up * 0.14f).normalized;                // and a little from above
+        direction = (direction + Vector3.up * elevation).normalized;            // from above, by as much as the shape needs
         Vector3 target = bounds.center;
 
         // the camera looks along -direction, so its own right is cross(world up, forward), not cross(up, direction), which turns every centring step the wrong way
@@ -4704,14 +4710,19 @@ public static class UmaHeadlessExport
         Vector3 oldPosition = camTransform.position;
         Quaternion oldRotation = camTransform.rotation;
         float oldFov = camera.fieldOfView;
+        float oldNear = camera.nearClipPlane;
         Texture2D image = null;
         Texture2D previous = null;
         try
         {
             camera.fieldOfView = fov;
+            // a prop can be five centimetres across, which the game camera's near plane cuts straight through
+            camera.nearClipPlane = Mathf.Min(oldNear, Mathf.Max(0.001f, reach * 0.02f));
             camera.ResetProjectionMatrix();
 
             const float want = 0.84f;       // how much of the square the model should span
+            bool drewAnything = false;
+            bool flipped = false;
             for (int pass = 0; pass < 4; pass++)
             {
                 camTransform.position = target + direction * distance;
@@ -4723,8 +4734,25 @@ public static class UmaHeadlessExport
 
                 if (!AlphaFrame(image, out RectInt drawn) || drawn.width <= 1 || drawn.height <= 1)
                 {
-                    return "the render came out empty";
+                    // A flat one-sided prop - a banner, a sign - is invisible from behind, so the other side is
+                    // tried first; failing that the camera backs off, which is what a model smaller than its
+                    // renderer's box needs, rather than failing the preview outright.
+                    if (!flipped)
+                    {
+                        flipped = true;
+                        direction = -direction;
+                        forward = -direction;
+                        right = Vector3.Cross(Vector3.up, forward).normalized;
+                        up = Vector3.Cross(forward, right).normalized;
+                    }
+                    else
+                    {
+                        // an empty frame is usually a model far smaller than its renderer's box, so come closer
+                        distance = Mathf.Clamp(distance * 0.25f, 0.01f, 1000f);
+                    }
+                    continue;
                 }
+                drewAnything = true;
 
                 float fill = Mathf.Max(drawn.width, drawn.height) / (float)size;
                 Debug.Log($"{Tag}   preview pass {pass + 1}: {drawn.width}x{drawn.height} px of {size} "
@@ -4740,8 +4768,12 @@ public static class UmaHeadlessExport
                 bool sized = Mathf.Abs(fill - want) <= 0.03f;
                 bool centred = Mathf.Max(Mathf.Abs(offsetX), Mathf.Abs(offsetY)) * size <= 3f;
                 if (sized && centred) break;
-                distance = Mathf.Clamp(distance * (fill / want), 0.05f * reach, 60f * reach);
+                // absolute limits, not a multiple of `reach`: a renderer's box can be the box of its bones, which
+                // for a rigged prop is far larger than what is drawn, and clamping to it kept the model a speck
+                distance = Mathf.Clamp(distance * (fill / want), 0.01f, 1000f);
             }
+
+            if (!drewAnything) return "the render came out empty";
 
             string path = ThumbnailPath(root, job);
             Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -4760,6 +4792,7 @@ public static class UmaHeadlessExport
             camTransform.position = oldPosition;
             camTransform.rotation = oldRotation;
             camera.fieldOfView = oldFov;
+            camera.nearClipPlane = oldNear;
             camera.ResetProjectionMatrix();
             camera.enabled = wasEnabled;
         }

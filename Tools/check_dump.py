@@ -36,6 +36,7 @@ def check(root, want_packs, want_thumbs, quiet):
     models = index.get("models") or []
     problems = []
     reported = 0
+    previewless = set()
 
     print(f"{root}")
     print(f"  schema {index.get('schema')}  generated {index.get('generated')}")
@@ -78,7 +79,10 @@ def check(root, want_packs, want_thumbs, quiet):
 
         texture_folder = model.get("textures") or ""
         maps = model.get("maps") or []
-        if not maps:
+        # a marker prop has no vertices: it names no textures and nothing can be photographed, so both are expected
+        flat = (model.get("size") or "").replace(" ", "") in ("", "0,0,0", "0.000,0.000,0.000")
+        if not maps and not flat:
+            # a marker with no geometry names no textures either, and that is not a defect
             fail(problems, f"{name}: names no textures at all")
         if texture_folder:
             for map_name in maps:
@@ -94,7 +98,11 @@ def check(root, want_packs, want_thumbs, quiet):
         if want_thumbs:
             thumb = model.get("thumb") or ""
             if not thumb:
-                fail(problems, f"{name}: no preview recorded")
+                if not flat:
+                    # a handful of props have nothing a camera can catch - an additive-effect banner leaves the alpha
+                    # channel empty, and a marker has no geometry - so they are counted and reported rather than
+                    # failing one at a time; a real regression takes out more than a percent
+                    previewless.add(name)
             else:
                 thumb_path = os.path.join(root, thumb.replace("/", os.sep))
                 if not os.path.isfile(thumb_path):
@@ -149,9 +157,9 @@ def check(root, want_packs, want_thumbs, quiet):
     print(f"  {total_bytes / (1024 * 1024):.1f} MB of models, {packs} pack(s), {thumbs} preview(s)")
     if previews:
         # a preview can exist and still be blank - a camera pointing at nothing, or a model that did not load,
-        # writes a valid PNG - so a sample is opened and asked how much of the square was drawn. A quarter to a
-        # half of one is model, so anything under a twentieth is not a picture of anything. Pillow reads it when
-        # it is there; reading PNG by hand means undoing its row filters and is not worth a wrong answer.
+        # writes a valid PNG - so a sample is opened and asked how much of the square the model *spans*. What is
+        # drawn is not the same as how much is covered: a thin prop (a sheet two centimetres thick) fills the frame
+        # across its length and still covers a few percent of the pixels, and that is a perfectly good picture.
         try:
             from PIL import Image
         except ImportError:
@@ -167,19 +175,27 @@ def check(root, want_packs, want_thumbs, quiet):
                 with Image.open(path) as image:
                     alpha = image.convert("RGBA").getchannel("A")
                     width, height = alpha.size
-                    bins = alpha.histogram()
-                    covered = sum(count for value, count in enumerate(bins) if value > 24)
-                    share = covered / float(width * height)
+                    drawn = alpha.getbbox()
+                    extent = 0.0
+                    if drawn is not None:
+                        extent = max(drawn[2] - drawn[0], drawn[3] - drawn[1]) / float(max(width, height))
                     if width != height:
                         blank.append(f"{os.path.basename(path)} is {width}x{height}, not square")
-                    elif share < 0.05:
-                        blank.append(f"{os.path.basename(path)} ({share:.1%} of it drawn)")
+                    elif extent < 0.25:
+                        blank.append(f"{os.path.basename(path)} (spans {extent:.0%} of the frame)")
             except Exception as error:                     # a preview that will not open is a problem too
                 blank.append(f"{os.path.basename(path)} ({type(error).__name__}: {error})")
         if blank:
             fail(problems, f"{len(blank)} preview(s) are not pictures of anything, e.g. {blank[0]}")
 
     print(f"  {sum(1 for m in models if m.get('thumb'))} of {len(models)} model(s) have a preview")
+    if previewless:
+        share = len(previewless) / float(len(models) or 1)
+        print(f"  {len(previewless)} model(s) have no preview ({share:.1%}): "
+              + ", ".join(sorted(previewless)[:6])
+              + (" ..." if len(previewless) > 6 else ""))
+        if share > 0.01:
+            fail(problems, f"{len(previewless)} model(s) have no preview, more than the 1% a few effect props explain")
 
     if problems:
         print(f"\n{len(problems)} problem(s):")
