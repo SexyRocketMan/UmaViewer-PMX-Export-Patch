@@ -1254,7 +1254,9 @@ public static class UmaHeadlessExport
             return;
         }
 
-        if (!File.Exists(options.ScenePath))
+        // a player has the scene compiled into it and already loaded, so there is no file to look for - checking
+        // for one made a standalone build work only when it was started from the project directory
+        if (CliHost.IsEditor && !File.Exists(options.ScenePath))
         {
             Debug.LogError($"{Tag} scene not found: {options.ScenePath}");
             CliHost.Exit(2);
