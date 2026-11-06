@@ -85,6 +85,24 @@ Two traps. `scene.render.filepath` is not respected while rendering if a startup
 prefab's frame, not the armature's - applied directly they turn the tail about axes about 87 degrees from the
 solver's, so the demo carries them over per bone (`M @ R @ M^-1`) and verifies every frame against the solver.
 
+## Blender-side eye controls
+
+`Refine Structure` (in the add-on) turns the game's four eye range morphs into eight bone-driven shape keys, and
+these two check and repair the result. `docs/EYE_CONTROLS.md` in the add-on repository is the write-up: what the
+mirror step has to do, the model that exposed it, and the measurement either side of the fix.
+
+| File | What it does |
+|---|---|
+| `verify_eye_structure.py` | Imports a PMX, runs the refine operator, and checks the eight keys: each moves one eye and only one eye, each mirrored key carries exactly the mirrored deformations of its source, the `Eye_L`/`Eye_R` weights are in `Head`, and the eight drivers read their own bone's ROT_X/ROT_Z in local space. It also mirrors a deliberately non-symmetric eye, where `bpy.ops.object.shape_key_mirror` leaves 18 of 21 vertices on the wrong side - the defect it guards. Exit 1 on a failure. |
+| `fix_eye_mirror.py` | Repairs a `.blend` that a pre-2.35.20 add-on already refined: rebuilds the four mirrored keys from the four intact source keys, in place (`--dry-run` only reports). Idempotent - a second run finds nothing to do. |
+
+```powershell
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --factory-startup `
+    -P Tools/verify_eye_structure.py -- eye-report.txt D:/out/1001_00.pmx
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --factory-startup `
+    -P Tools/fix_eye_mirror.py -- "broke.blend" "fixed.blend"
+```
+
 ## Quick start
 
 ```powershell
