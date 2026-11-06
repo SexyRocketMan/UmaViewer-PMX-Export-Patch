@@ -163,3 +163,16 @@ It is static files. Anything that serves a folder with gzip and an `ETag` will d
 `tools/serve.py` is the one written for it (`--compress` is worth it: a PMX is 19% of its size and `index.json` about
 10%). Keep the origin on loopback and put a proxy in front for TLS and access control - `deploy/README.md` in that
 project walks through a Cloudflare Tunnel with Access, which needs nothing installed by the visitor.
+
+## Where the published dump lives
+
+The live gallery is **https://models.umanity.party** - a Cloudflare Pages project holding the built site and this dump
+under `dump/`, behind Cloudflare Access (one-time PIN). Moving the folder is `npm run build`, stage `dist/` plus the
+dump as one directory, `wrangler pages deploy`. The companion project's `deploy/STATE.md` records the ids, the deploy
+command and the traps already hit; it is the file to read before touching the deployment.
+
+Two facts about the served copy that come from this dump's own shape: the page fetches `/dump/index.json` (1.9 MB, the
+map list dominates it), so it wants gzip; and the model paths inside that index are relative to the dump root, so the
+dump must sit at a fixed prefix - moving it means editing nothing, deploying it somewhere else means changing
+`?dump=`.
+
