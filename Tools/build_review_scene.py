@@ -41,7 +41,7 @@ MARK = "uma_review_"
 def parse_args(argv):
     options = {"out": None, "render": None, "refine": False, "shade": False, "normals": False,
                "morphs": False, "spacing": 0.18, "proportion": 0.75, "fixtures": None, "title": None,
-               "opaque": False, "rig": False, "all": False}
+               "opaque": False, "rig": False, "all": False, "shader": None}
     fixtures = []
     index = 0
     while index < len(argv):
@@ -64,6 +64,9 @@ def parse_args(argv):
         elif token == "--title":
             index += 1
             options["title"] = argv[index]
+        elif token == "--shader":
+            index += 1
+            options["shader"] = argv[index]
         elif token == "--rig":
             options["rig"] = True
         elif token == "--all":
@@ -78,7 +81,7 @@ def parse_args(argv):
             label, _, path = token.partition("=")
             if not path:
                 raise SystemExit("fixtures are given as label=path.pmx (got %r)" % token)
-            fixtures.append((label, path))
+            fixtures.append({"label": label, "pmx": path})
         index += 1
 
     if options["all"]:
@@ -88,7 +91,8 @@ def parse_args(argv):
         with open(options["fixtures"], encoding="utf-8") as handle:
             data = json.load(handle)
         for entry in data.get("fixtures", []):
-            fixtures.append((entry.get("label") or os.path.basename(entry["pmx"]), entry["pmx"]))
+            fixtures.append({"label": entry.get("label") or os.path.basename(entry["pmx"]),
+                             "pmx": entry["pmx"], "shader": entry.get("shader")})
         options["title"] = options["title"] or data.get("title")
     if not options["out"]:
         raise SystemExit("--out is required")
@@ -135,7 +139,7 @@ def outcome(result):
     return str(result)
 
 
-def run_steps(label, added, meshes, options):
+def run_steps(label, added, meshes, options, fixture=None):
     """Run the requested pipeline steps on one model and return a list of result strings for the label."""
     results = []
     if not meshes:
@@ -177,11 +181,24 @@ def run_steps(label, added, meshes, options):
     if options["shade"]:
         focus(mesh)
         try:
+            # which shader this model is shaded with: the *scene* decides until Shading runs, so a row can hold
+            # one model per shader as long as the choice is set before each model is shaded
+            wanted = (fixture or {}).get("shader") or options.get("shader")
+            if wanted:
+                scene_props = getattr(bpy.context.scene, "uma_scene", None)
+                if scene_props is not None:
+                    scene_props.shader = wanted
             result = bpy.ops.uma.apply_shader()
-            roles = sorted({material.get("uma_shader_role") for material in bpy.data.materials
+            # only this model's slots: `bpy.data.materials` is the whole file, and a row of models
+            # wearing different shaders would otherwise have every label claim both
+            slots = [slot.material for piece in meshes for slot in piece.material_slots if slot.material]
+            worn = {material.name: material.get("uma_shader_source") for material in slots
+                    if material.get("uma_shader_source")}
+            roles = sorted({material.get("uma_shader_role") for material in slots
                             if material.get("uma_shader_role")})
-            results.append("shade %s (%s)" % (outcome(result),
-                                              ", ".join(str(role) for role in roles) or "no roles"))
+            shaders = sorted({str(source) for source in worn.values()})
+            results.append("shade %s (%s; %s)" % (outcome(result), ", ".join(shaders) or "no shader tag",
+                                                  ", ".join(str(role) for role in roles) or "no roles"))
         except Exception as exc:                 # noqa: BLE001
             results.append("shade FAILED: %s" % exc)
     if options["normals"]:
@@ -235,8 +252,8 @@ def world_bounds(objects):
     high = Vector((-1e9, -1e9, -1e9))
     found = False
     for obj in objects:
-        if obj.type != 'MESH' or obj.hide_render:
-            continue
+        if obj.type not in ('MESH', 'FONT') or obj.hide_render:
+            continue                      # labels are part of what has to be in frame
         evaluated = obj.evaluated_get(depsgraph)
         for corner in evaluated.bound_box:
             point = obj.matrix_world @ Vector(corner)
@@ -248,11 +265,12 @@ def world_bounds(objects):
     return low, high
 
 
-def wrap(text, width=30, max_lines=6):
+def wrap(text, width=30, max_lines=14):
     """Break a label into short lines, so it stays inside its model's slot instead of running into the next.
 
-    A result line like "normals ok, donor keys Eye_22_R(EyeHideA)[M_Face], ..." is 60-odd characters; at the
-    label's size that is metres wide, which is how a review row turns into unreadable overlapping text.
+    A result line like "normals ok, donor keys Eye_22_R(EyeHideA)[M_Face]" is 60-odd characters; at the label's
+    size that is metres wide, which is how a review row turns into unreadable overlapping text. **Nothing is
+    dropped silently**: a label that has to stop says so and how much it left out.
     """
     lines = []
     for paragraph in text.split("\n"):
@@ -268,7 +286,8 @@ def wrap(text, width=30, max_lines=6):
         if current:
             lines.append(current)
     if len(lines) > max_lines:
-        lines = lines[:max_lines - 1] + ["..."]
+        hidden = len(lines) - (max_lines - 1)
+        lines = lines[:max_lines - 1] + ["(+%d more line(s) - see the .txt beside the .blend)" % hidden]
     return "\n".join(lines)
 
 
@@ -351,12 +370,13 @@ def main():
 
     placed = []
     report_lines = ["review scene", ""]
-    for label, path in fixtures:
+    for fixture in fixtures:
+        label, path = fixture["label"], fixture["pmx"]
         if not os.path.exists(path):
             report_lines.append("%s: MISSING %s" % (label, path))
             continue
         added, root, meshes = import_model(path, label)
-        results = run_steps(label, added, meshes, options)
+        results = run_steps(label, added, meshes, options, fixture)
         low, high = world_bounds(meshes)
         if low is None:
             report_lines.append("%s: imported, no geometry" % label)
@@ -398,9 +418,12 @@ def main():
                                                    max(entry["high"].z for entry in placed) + 0.75),
                                 size=0.11))
 
-    low_all = Vector((0.0, min(entry["low"].y for entry in placed), min(entry["low"].z for entry in placed)))
-    high_all = Vector((row_width, max(entry["high"].y for entry in placed),
-                       max(entry["high"].z for entry in placed) + (0.55 if options["title"] else 0.30)))
+    # frame the labels as well as the models: a title that wraps to four lines is taller than any fixed
+    # allowance, and a label outside the camera is a check that fails for the wrong reason
+    framed_low, framed_high = world_bounds([mesh for entry in placed for mesh in entry["meshes"]] + labels)
+    low_all = Vector((0.0, min(framed_low.y, min(entry["low"].y for entry in placed)),
+                      min(framed_low.z, min(entry["low"].z for entry in placed))))
+    high_all = framed_high
     camera = lights_and_camera(low_all, high_all, options)
 
     # --- the run's own log, inside the file --------------------------------------------------------------
@@ -442,6 +465,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
 
 
