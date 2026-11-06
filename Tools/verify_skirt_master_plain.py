@@ -97,6 +97,24 @@ master = arm.pose.bones.get("UMA_skirt_master")
 travel = master.constraints.get(P.NUMBERS.SKIRT_TRAVEL_CONSTRAINT) if master else None
 check("the master carries the travel limit", travel is not None and travel.type == 'LIMIT_LOCATION',
       travel.type if travel else "missing")
+check("the master is locked in X and Y", master is not None and tuple(master.lock_location)[:2] == (True, True),
+      str(tuple(master.lock_location)) if master else "no master")
+check("the travel window is the reference's: -5 mm..+5 cm",
+      travel is not None and abs(travel.min_z + 0.005) < 1e-6 and abs(travel.max_z - 0.05) < 1e-6,
+      "z %.4f..%.4f" % (travel.min_z, travel.max_z) if travel else "missing")
+
+say("")
+say("the cascade: every link of every panel follows the one above it")
+links = P.skirt_links(arm)
+uncovered = [(child, parent) for child, parent in links
+             if arm.pose.bones[child].constraints.get(P.CHAIN_CONSTRAINT) is None]
+check("every parent/child link inside the skirt carries a chain constraint", not uncovered,
+      "%d links, %d without: %s" % (len(links), len(uncovered), uncovered[:3]))
+roots = {root for root, _hem, _chain in panels}
+check("and no panel root is driven twice", all(
+    all(c.subtarget == "UMA_skirt_master" for c in arm.pose.bones[root].constraints
+        if c.name == P.CHAIN_CONSTRAINT) for root in roots),
+      "roots carry the master link only")
 
 say("")
 say("the mechanism: the master has to move the panels")
@@ -141,3 +159,4 @@ say("FAILURES: " + (", ".join(failures) if failures else "none"))
 with open(out_path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
 sys.exit(1 if failures else 0)
+
