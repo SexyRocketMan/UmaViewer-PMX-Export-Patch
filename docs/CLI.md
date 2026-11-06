@@ -569,6 +569,7 @@ Nothing here needs Unity, Blender or the game:
 ```powershell
 uv run Tools/pmx_inspect.py summary   D:/out/m.pmx        # counts, bounding box, what is in the file
 uv run Tools/pmx_inspect.py check     D:/out/m.pmx        # the eye-morph / eye-skinning contract
+uv run Tools/pmx_inspect.py eyes      D:/out/m.pmx        # are the two eyes vertex-symmetric (the add-on's mirror needs it)
 uv run Tools/pmx_inspect.py names     D:/out/m.pmx        # morph names unique and within a vmd's 15 bytes
 uv run Tools/pmx_inspect.py integrity D:/out/m.pmx        # declared index sizes vs the counts they hold
 uv run Tools/pmx_inspect.py tails     D:/out/m.pmx --pairs   # where the bones point, left/right mirroring

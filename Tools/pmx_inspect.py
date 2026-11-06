@@ -13,11 +13,14 @@
   uv run pmx_inspect.py names     <file.pmx> [--require Name1,Name2]  # vmd byte limit + duplicates
   uv run pmx_inspect.py integrity <file.pmx>                          # declared index sizes vs counts
   uv run pmx_inspect.py check     <file.pmx>        # the uma_addon eye contract + eye skinning
+  uv run pmx_inspect.py eyes      <file.pmx>        # are the two eyes vertex-symmetric?
   uv run pmx_inspect.py diff      <a.pmx> <b.pmx>
 
 `check` verifies what the Blender uma_addon relies on once "Refine Structure" runs: the four eye-range morphs are
-present in a spelling the exporter can write, and the eyeball is skinned to Eye_L / Eye_R. `check`, `integrity`,
-`names` and `tails` exit 1 when a check fails; the other subcommands exit 0.
+present in a spelling the exporter can write, and the eyeball is skinned to Eye_L / Eye_R. `eyes` answers whether
+the model could ever have shown the add-on's pre-2.35.20 eye defect: the mirror step paired one eye's vertices
+with the other's by exact position, so a vertex with no twin kept the *source* eye's motion. `check`, `integrity`,
+`names`, `tails` and `eyes` exit 1 when a check fails; the other subcommands exit 0.
 """
 
 from __future__ import annotations
@@ -939,6 +942,73 @@ def cmd_orient(paths: list[str], args) -> int:
     return 0
 
 
+def eye_symmetry(model: "Model", tolerance: float, weight: float):
+    """`(counts, points, unpaired_distances)` - the eye vertices and how far their twins are.
+
+    Kept separate from the printing so the numbers can be checked against a model that has been
+    mutated in memory, without writing a file.
+    """
+    bone_index = {b.name: b.index for b in model.bones}
+    points: list[tuple[float, float, float]] = []
+    counts = {}
+    for side in ("Eye_L", "Eye_R"):
+        index = bone_index.get(side)
+        if index is None:
+            counts[side] = 0
+            continue
+        verts = [v for v in model.vertices
+                 if any(b == index and w >= weight for b, w in zip(v.bones, v.weights))]
+        counts[side] = len(verts)
+        points.extend((v.pos[0], v.pos[1], v.pos[2]) for v in verts)
+    unpaired = []
+    for pos in points:
+        target = (-pos[0], pos[1], pos[2])
+        best = min((math.dist(target, other) for other in points), default=0.0)
+        if best > tolerance:
+            unpaired.append(best)
+    return counts, points, sorted(unpaired)
+
+
+def cmd_eyes(paths: list[str], args) -> int:
+    """Whether the two eyes are vertex-symmetric - what the add-on's mirror step depends on.
+
+    `Refine Structure` builds each eye control by pairing one eye's vertices with the other eye's, and the
+    pairing it used until 2.35.20 wanted an *exact* mirrored twin: a vertex without one kept the source
+    eye's motion, so a model that is not exactly symmetric put a few vertices of the wrong eye into each
+    mirrored key and rotating one eye bone dragged part of the other.
+
+    Models exported by this viewer measure every vertex paired to 0.000000 m, so they cannot show it -
+    which is why the defect was not reproducible on them. Anything less is a model that could, and the
+    exit code says so.
+    """
+    tolerance = args.tolerance / 1000.0          # mm on the command line
+    worst_exit = 0
+    for path in paths:
+        m = read_model(path)
+        print(f"== {path}")
+        counts, points, unpaired = eye_symmetry(m, tolerance, args.weight)
+        for side, count in counts.items():
+            if count:
+                print(f"   {side}: {count} vertices skinned to it")
+            else:
+                print(f"   {side}: nothing (this model has no eye controls to build)")
+        if not points:
+            worst_exit = 1
+            continue
+        paired = len(points) - len(unpaired)
+        print(f"   {paired}/{len(points)} vertices have an exact mirror twin within {args.tolerance:g} mm"
+              + (f"; the other {len(unpaired)} are up to {unpaired[-1]*1000:.2f} mm off" if unpaired else
+                 "; worst distance 0.0000 mm"))
+        if unpaired:
+            print("   verdict: NOT symmetric - a build <= 2.35.19 mirrored this eye with vertices left on the")
+            print("            wrong side; 2.35.20 pairs every vertex instead. A fresh export from this viewer")
+            print("            is symmetric, which is why the defect can seem to come and go.")
+            worst_exit = 1
+        else:
+            print("   verdict: exactly symmetric - this model cannot show the pre-2.35.20 eye defect")
+    return worst_exit
+
+
 def cmd_bounds(paths: list[str], args) -> int:
     """Where each material's geometry ended up, as a world-space box.
 
@@ -983,6 +1053,12 @@ def main() -> int:
     p = sub.add_parser("names")
     p.add_argument("paths", nargs="+")
     p.add_argument("--require", help="comma separated morph names that must exist")
+    p = sub.add_parser("eyes")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("--tolerance", type=float, default=0.1,
+                   help="how close a mirrored pair has to be to count as a twin, in mm (default 0.1)")
+    p.add_argument("--weight", type=float, default=0.5,
+                   help="how much weight a vertex needs on Eye_L/Eye_R to belong to that eye (default 0.5)")
     p = sub.add_parser("integrity")
     p.add_argument("paths", nargs="+")
     p = sub.add_parser("diff")
@@ -1009,7 +1085,7 @@ def main() -> int:
     return {"summary": cmd_summary, "bones": cmd_bones, "weights": cmd_weights,
             "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check, "bounds": cmd_bounds,
             "names": cmd_names, "tails": cmd_tails, "integrity": cmd_integrity,
-            "orient": cmd_orient}[args.cmd](args.paths, args)
+            "eyes": cmd_eyes, "orient": cmd_orient}[args.cmd](args.paths, args)
 
 
 if __name__ == "__main__":

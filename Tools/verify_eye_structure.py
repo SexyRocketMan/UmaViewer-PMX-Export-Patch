@@ -37,8 +37,12 @@ argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
 out = argv[0]
 pmx = argv[1] if len(argv) > 1 else r"C:\Users\user\Documents\umaviewer_exports\morphs\1001_nostream.pmx"
 
+from bl_ext.user_default.uma_addon.uma_addon.addons.uma_addon.utils import naming  # noqa: E402
+
 lines = []
 failures = []
+keys_before = 0
+eye_symmetry = ({}, [], [])
 
 
 def say(text=""):
@@ -58,12 +62,46 @@ def run_refine():
     bpy.ops.preferences.addon_enable(module=ADDON)
     bpy.ops.mmd_tools.import_model(filepath=pmx, scale=0.08, types={'MESH', 'ARMATURE', 'MORPHS'})
     arm = next(o for o in bpy.context.scene.objects if o.type == 'ARMATURE')
+    mesh = next(o for o in bpy.context.scene.objects
+                if o.type == 'MESH' and any(m.type == 'ARMATURE' and m.object == arm for m in o.modifiers))
+    global keys_before, eye_symmetry
+    keys_before = len(mesh.data.shape_keys.key_blocks)
+    eye_symmetry = measure_eye_symmetry(mesh)
     bpy.context.view_layer.objects.active = arm
     arm.select_set(True)
     result = bpy.ops.uma.refine_bone_structure()
     mesh = next(o for o in bpy.context.scene.objects
                 if o.type == 'MESH' and any(m.type == 'ARMATURE' and m.object == arm for m in o.modifiers))
     return arm, mesh, result
+
+
+def measure_eye_symmetry(mesh):
+    """How well the imported eye region mirrors: `(points, twin distances, per-eye counts)`.
+
+    The mirrored control keys are built by pairing one eye's vertices with the other's. Once the
+    region is 100% paired (every eye vertex has a twin at 0.000000 m) the old failure mode cannot
+    reach the model at all; anything less was exposed to it before 2.35.20.
+    """
+    from mathutils import kdtree
+    points = []
+    counts = {}
+    for group in ("Eye_L", "Eye_R"):
+        entry = mesh.vertex_groups.get(group)
+        if entry is None:
+            counts[group] = 0
+            continue
+        verts = [v.index for v in mesh.data.vertices
+                 if any(g.group == entry.index and g.weight > 0.5 for g in v.groups)]
+        counts[group] = len(verts)
+        points.extend(mesh.data.shape_keys.key_blocks[0].data[i].co.copy() for i in verts)
+    if not points:
+        return counts, [], []
+    tree = kdtree.KDTree(len(points))
+    for i, p in enumerate(points):
+        tree.insert(p, i)
+    tree.balance()
+    distances = sorted(tree.find(Vector((-p.x, p.y, p.z)))[2] for p in points)
+    return counts, distances, points
 
 
 def deltas(mesh, name):
@@ -83,16 +121,38 @@ arm, mesh, result = run_refine()
 say(f"refine: {result}   mesh={mesh.name!r} bones={len(arm.data.bones)} verts={len(mesh.data.vertices)}")
 say("")
 
+say("0. this model's eye geometry, i.e. whether the pre-2.35.20 defect could reach it")
+counts, twins, _points = eye_symmetry
+paired = sum(1 for d in twins if d < 1e-4)
+say(f"  eyes: {counts.get('Eye_L', 0)} left / {counts.get('Eye_R', 0)} right vertices; "
+    f"{paired}/{len(twins)} have an exact mirror twin"
+    + (f", the rest are up to {twins[-1]*1000:.2f} mm off" if twins and twins[-1] >= 1e-4 else ""))
+if not twins:
+    say("  (no eye vertex groups: this model has no eye bones to build controls for)")
+elif paired == len(twins):
+    say("  verdict: exactly symmetric - the old mirror had an exact twin for every vertex, which is")
+    say("           why this model could never show the defect (and why it was not reproducible)")
+else:
+    say(f"  verdict: {len(twins) - paired} of {len(twins)} vertices have no exact twin - this model is "
+        f"the exposed kind;")
+    say("           a pre-2.35.20 build put their motion on the wrong eye, 2.35.20 pairs them instead")
+say("")
+
 say("1. the eight control keys, and the four source morphs consumed")
 kb = mesh.data.shape_keys.key_blocks
 check("refine finished", result == {'FINISHED'}, str(result))
 check("all eight control keys exist", all(n in kb for n in KEYS),
       ", ".join(n for n in KEYS if n not in kb) or "8/8")
-check("source eye range morphs were renamed, not duplicated",
-      not any(n in kb for n in SOURCE_MORPHS),
-      ", ".join(n for n in SOURCE_MORPHS if n in kb) or "none left")
-check("the eye range morphs drove every control key", len(kb) == 202 + 8 or len(kb) == 198 + 8,
-      f"{len(kb)} keys in total")
+# Asked by meaning, not by spelling: the four source morphs are renamed to `Eye_R(R)` and friends, so
+# nothing should still parse as an eye range morph - whichever naming mode the export used. (Mode 0
+# spells them `Eye_20_R(XRange)[M_Face]`, mode 1 `Eye_20_R`, mode 2 `Eye_XRange_R`.)
+left_over = [k for k in kb.keys() if naming.parse(k) and
+             (naming.parse(k)["group"] == "Eye" and
+              naming.parse(k)["tag"] in ("XRange", "YRange"))]
+check("the four source eye range morphs were consumed", not left_over,
+      ", ".join(left_over) or "none left")
+check("refine added exactly the four mirrored keys", len(kb) == keys_before + 4,
+      f"{keys_before} imported -> {len(kb)} (the four sources are renamed in place, not duplicated)")
 
 say("")
 say("2. every key moves one eye, and only one eye")
