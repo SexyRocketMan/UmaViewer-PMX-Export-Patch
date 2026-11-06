@@ -20,6 +20,7 @@ Run these before shipping anything that touches the exporter, the add-on's opera
 | **a review render that proves nothing** | the first row ran refine + normals only, so nothing looked shaded | the verifier's per-model opaque coverage in its own projected box |
 | **eye control keys "missing" after shading** | the face split moves the frame morphs onto the face piece; a check on the body finds none | the verifier checks every piece of the model |
 | **a damped-track toggle that reads off when it is on** | the getter returned from inside its `for bone_name` loop, so only the first bone in the list was ever looked at, and a second press stacked a second constraint | `Tools/verify_physics_panel.py` (both directions, no stacking, missing-first-bone case) |
+| **a pinned family that cannot be set to plain bones** | the ears are pinned to `spines.basic_tail` and their row was a locked label, so `none` (the answer a damped track needs) was unreachable for the one family that needs it | `Tools/verify_rig_plain_bones.py` (default unchanged; `none` really leaves the bones plain; the pin still types them) |
 | **an operator no panel draws** | `uma.build_morph_drivers` was reachable only from F3 while the Morphs panel told the user to run it | the same script records the panel's layout calls and requires the row |
 
 ## Open (no automated guard yet)
@@ -56,4 +57,5 @@ Ordered by what has actually broken, not by what is easy:
 
 Not yet in a runner: only the fixture list exists (`--fixtures manifest.json`), because the automated assertions
 want the same fixtures the review scene uses.
+
 

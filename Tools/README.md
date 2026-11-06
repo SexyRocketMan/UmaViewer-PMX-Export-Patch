@@ -113,6 +113,7 @@ take: `{"title": ..., "fixtures": [{"label": ..., "pmx": ...}]}`.
 
 | File | What it does |
 |---|---|
+| `verify_rig_plain_bones.py` | Does choosing `none` for a pinned family really leave its bones plain? Checks that the dialog starts such a row at the pin's own mode (so nothing changes by default), that with `none` the first rule deciding an ear bone has no rig type (the resolved answer sits ahead of the rules table, first match wins), and that choosing the pin still types them `spines.basic_tail` and reports it as `fixed`. Exit 1 on a failure. |
 | `verify_physics_panel.py` | The damped-track toggles and the Morphs panel, which had two silent defects: the toggle getter returned from inside its `for bone_name` loop (so it only ever looked at the first bone), and `uma.build_morph_drivers` was drawn by no panel while the Morphs panel told the user to run it. Checks every toggle on both directions, that a second press stacks nothing, that a bone list whose first entry is missing still finds a constraint further down, and records the Morphs panel's layout calls to prove the operator row is drawn. Exit 1 on a failure. |
 
 ## Blender-side eye controls
@@ -167,6 +168,7 @@ The verification, rendering and game-data-research scripts this fork was built w
 shading A/B renders, the end-to-end workflow script, the game's-own-shader workbench - live outside the project, in
 the companion `UmaViewer-DevTools` directory, so a shipped checkout does not carry them. Its `README.md` holds the
 measurements behind the claims in [`../README.md`](../README.md) and [`../docs`](../docs).
+
 
 
 
