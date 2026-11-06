@@ -7,7 +7,7 @@ baked into them. This measures the *result*, on the hem's world position, not th
 
     Amount 1.0 / 0.5 / 0.0 with the master turned    full bend, about half, and nothing at all
     Amount 0.0 with the master lifted                the lift channel silenced too
-    Offset +45 / -45 / 0 with the master at rest     the ring flares out, tucks in, and does nothing
+    the offset bone dragged -5 / 0 / +2 / +5 cm     the ring tucks in, is untouched, and flares out
 
 The flare direction is measured as the hem's horizontal radius from the master, which is the one number that
 distinguishes "flares" from "tucks" - displacement magnitude alone cannot.
@@ -61,7 +61,11 @@ say("=" * 100)
 say(f"skirt controls - {pmx_path}")
 say(f"  operator {result}; {len(panels)} panel(s); controls {[k for k in master.keys() if k.startswith('Skirt_')]}; "
     f"{drivers} driver(s)")
-check("both controls are declared", P.AMOUNT_PROP in master.keys() and P.OFFSET_PROP in master.keys())
+check("the amount control is declared", P.AMOUNT_PROP in master.keys(), P.AMOUNT_PROP)
+offset_bone = arm.pose.bones.get(P.OFFSET_BONE)
+check("the offset is a bone you can drag", offset_bone is not None
+      and not tuple(offset_bone.lock_location)[2],
+      str(tuple(offset_bone.lock_location)) if offset_bone else "no bone")
 check("the offset bone adds no deform", P.OFFSET_BONE in arm.data.bones
       and not arm.data.bones[P.OFFSET_BONE].use_deform, P.OFFSET_BONE)
 check("the channels are driven, not baked", drivers >= 2 * len(panels), f"{drivers} drivers for {len(panels)} panels")
@@ -69,7 +73,7 @@ check("the channels are driven, not baked", drivers >= 2 * len(panels), f"{drive
 
 def pose(amount=1.0, offset=0.0, turn=0.0, lift=0.0):
     master[P.AMOUNT_PROP] = float(amount)
-    master[P.OFFSET_PROP] = float(offset)
+    offset_bone.location = (0.0, 0.0, float(offset))
     master.rotation_mode = 'XYZ'
     master.rotation_euler = (0.0, 0.0, math.radians(turn))
     master.location = (0.0, 0.0, lift)
@@ -85,7 +89,8 @@ def radius(bone_name, offset):
     master.rotation_mode = 'XYZ'
     master.rotation_euler = (0.0, 0.0, 0.0)
     master.location = (0.0, 0.0, 0.0)
-    master[P.OFFSET_PROP] = float(offset)
+    # the offset is the bone's own vertical travel now, dragged exactly as an animator would
+    offset_bone.location = (0.0, 0.0, float(offset))
     arm.update_tag()
     bpy.context.view_layer.update()
     delta = arm.pose.bones[bone_name].tail - centre
@@ -113,25 +118,29 @@ check("Amount 2.0 goes past the 0..1 cap (the extra copy slot)", doubled > 1.4 *
 
 say("")
 say("Offset - the hem's horizontal radius from the master, master at rest")
-radii = {value: radius(hem, value) * 1000 for value in (-45.0, 0.0, 45.0)}
-say("  -45: %6.1f mm   0: %6.1f mm   +45: %6.1f mm" % (radii[-45.0], radii[0.0], radii[45.0]))
-check("Offset 0 leaves the panel alone", abs(radii[0.0] - radius(hem, 0.0) * 1000) < 0.5)
-outward = [radius(entry[1], 45.0) * 1000 - radii[0.0] for entry in panels]
-inward = [radius(entry[1], -45.0) * 1000 - radii[0.0] for entry in panels]
+radii = {value: radius(hem, value) * 1000 for value in (-0.005, 0.0, 0.02, 0.05)}
+say("  -5 mm: %6.1f mm   0: %6.1f mm   +2 cm: %6.1f mm   +5 cm: %6.1f mm"
+    % (radii[-0.005], radii[0.0], radii[0.02], radii[0.05]))
+check("an undragged offset leaves the panel alone", abs(radii[0.0] - radius(hem, 0.0) * 1000) < 0.5)
+check("dragging it up flares the panel", radii[0.05] > radii[0.0] + 20.0,
+      "%.1f against %.1f" % (radii[0.05], radii[0.0]))
+check("dragging it down tucks the panel in", radii[-0.005] < radii[0.0] - 10.0,
+      "%.1f against %.1f" % (radii[-0.005], radii[0.0]))
+outward = [radius(entry[1], 0.05) * 1000 - radii[0.0] for entry in panels]
+inward = [radius(entry[1], -0.005) * 1000 - radii[0.0] for entry in panels]
 say("  per panel: outward %+.0f..%+.0f mm, inward %+.0f..%+.0f mm"
     % (min(outward), max(outward), min(inward), max(inward)))
-bias_only = radius(hem, 45.0) * 1000 - radius(hem, 0.0) * 1000
 master[P.AMOUNT_PROP] = 0.0
 arm.update_tag()
 bpy.context.view_layer.update()
-silenced_radius = arm.pose.bones[hem].tail.copy()
-say("  Offset +45 with Amount 0 still flares: %+.0f mm of the bias channel alone"
-    % ((silenced_radius - centre).length * 1000 - radii[0.0]))
-check("the bias does not depend on Amount", (silenced_radius - centre).length * 1000 - radii[0.0] > 5.0,
-      "measured at Amount 0")
-check("Offset +45 flares every panel outward", all(delta > 5.0 for delta in outward),
+silenced = arm.pose.bones[hem].tail.copy()
+say("  the offset with Amount 0: %+.0f mm (it is a channel of its own)"
+    % ((silenced - centre).length * 1000 - radii[0.0]))
+check("the offset is not scaled by Amount", (silenced - centre).length * 1000 - radii[0.0] > 20.0,
+      "measured at Amount 0, where the master does nothing")
+check("dragging up flares every panel outward", all(delta > 5.0 for delta in outward),
       "%d of %d panels" % (sum(1 for delta in outward if delta > 5.0), len(outward)))
-check("Offset -45 tucks every panel inward", all(delta < -5.0 for delta in inward),
+check("dragging down tucks every panel inward", all(delta < -5.0 for delta in inward),
       "%d of %d panels" % (sum(1 for delta in inward if delta < -5.0), len(inward)))
 
 say("")
