@@ -19,6 +19,8 @@ Run these before shipping anything that touches the exporter, the add-on's opera
 | **a label that hides a step** | a review row that said nothing about a step read as "it never ran" | `build_review_scene.py` prints `not run` per step; `verify_review_scene.py` cross-checks each claim against the data |
 | **a review render that proves nothing** | the first row ran refine + normals only, so nothing looked shaded | the verifier's per-model opaque coverage in its own projected box |
 | **eye control keys "missing" after shading** | the face split moves the frame morphs onto the face piece; a check on the body finds none | the verifier checks every piece of the model |
+| **a damped-track toggle that reads off when it is on** | the getter returned from inside its `for bone_name` loop, so only the first bone in the list was ever looked at, and a second press stacked a second constraint | `Tools/verify_physics_panel.py` (both directions, no stacking, missing-first-bone case) |
+| **an operator no panel draws** | `uma.build_morph_drivers` was reachable only from F3 while the Morphs panel told the user to run it | the same script records the panel's layout calls and requires the row |
 
 ## Open (no automated guard yet)
 
@@ -54,3 +56,4 @@ Ordered by what has actually broken, not by what is easy:
 
 Not yet in a runner: only the fixture list exists (`--fixtures manifest.json`), because the automated assertions
 want the same fixtures the review scene uses.
+

@@ -109,6 +109,12 @@ console and obvious in a picture. These two turn a run into something that can b
 Fixtures can also come from a JSON manifest (`--fixtures manifest.json`), which is the shape a test dataset should
 take: `{"title": ..., "fixtures": [{"label": ..., "pmx": ...}]}`.
 
+## Blender-side add-on checks
+
+| File | What it does |
+|---|---|
+| `verify_physics_panel.py` | The damped-track toggles and the Morphs panel, which had two silent defects: the toggle getter returned from inside its `for bone_name` loop (so it only ever looked at the first bone), and `uma.build_morph_drivers` was drawn by no panel while the Morphs panel told the user to run it. Checks every toggle on both directions, that a second press stacks nothing, that a bone list whose first entry is missing still finds a constraint further down, and records the Morphs panel's layout calls to prove the operator row is drawn. Exit 1 on a failure. |
+
 ## Blender-side eye controls
 
 `Refine Structure` (in the add-on) turns the game's four eye range morphs into eight bone-driven shape keys, and
@@ -161,5 +167,6 @@ The verification, rendering and game-data-research scripts this fork was built w
 shading A/B renders, the end-to-end workflow script, the game's-own-shader workbench - live outside the project, in
 the companion `UmaViewer-DevTools` directory, so a shipped checkout does not carry them. Its `README.md` holds the
 measurements behind the claims in [`../README.md`](../README.md) and [`../docs`](../docs).
+
 
 
