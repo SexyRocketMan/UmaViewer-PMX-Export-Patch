@@ -41,7 +41,7 @@ MARK = "uma_review_"
 def parse_args(argv):
     options = {"out": None, "render": None, "refine": False, "shade": False, "normals": False,
                "morphs": False, "spacing": 0.18, "proportion": 0.75, "fixtures": None, "title": None,
-               "opaque": False}
+               "opaque": False, "rig": False, "all": False}
     fixtures = []
     index = 0
     while index < len(argv):
@@ -64,6 +64,10 @@ def parse_args(argv):
         elif token == "--title":
             index += 1
             options["title"] = argv[index]
+        elif token == "--rig":
+            options["rig"] = True
+        elif token == "--all":
+            options["all"] = True
         elif token == "--opaque":
             options["opaque"] = True
         elif token in ("--refine", "--shade", "--normals", "--morphs"):
@@ -77,6 +81,9 @@ def parse_args(argv):
             fixtures.append((label, path))
         index += 1
 
+    if options["all"]:
+        for flag in ("refine", "shade", "normals", "morphs"):
+            options[flag] = True
     if options["fixtures"]:
         with open(options["fixtures"], encoding="utf-8") as handle:
             data = json.load(handle)
@@ -119,6 +126,15 @@ def import_model(path, label):
     return added, root, meshes
 
 
+def outcome(result):
+    """An operator's return, as a word: `FINISHED` is ok, `CANCELLED` is "it said why in a report"."""
+    if result == {"FINISHED"}:
+        return "ok"
+    if result == {"CANCELLED"}:
+        return "cancelled"
+    return str(result)
+
+
 def run_steps(label, added, meshes, options):
     """Run the requested pipeline steps on one model and return a list of result strings for the label."""
     results = []
@@ -154,7 +170,7 @@ def run_steps(label, added, meshes, options):
                             paired += 1
                     symmetry = "eye symmetry %d/%d" % (2 * paired if paired * 2 <= len(points) * 2 else paired,
                                                        len(points) * 2)
-            results.append("refine %s, %d eye keys%s" % ("ok" if result == {'FINISHED'} else result,
+            results.append("refine %s, %d eye keys%s" % (outcome(result),
                                                          len(keys) // 2, (", " + symmetry) if symmetry else ""))
         except Exception as exc:                 # noqa: BLE001 - the label has to show the failure
             results.append("refine FAILED: %s" % exc)
@@ -164,7 +180,7 @@ def run_steps(label, added, meshes, options):
             result = bpy.ops.uma.apply_shader()
             roles = sorted({material.get("uma_shader_role") for material in bpy.data.materials
                             if material.get("uma_shader_role")})
-            results.append("shade %s (%s)" % ("ok" if result == {'FINISHED'} else result,
+            results.append("shade %s (%s)" % (outcome(result),
                                               ", ".join(str(role) for role in roles) or "no roles"))
         except Exception as exc:                 # noqa: BLE001
             results.append("shade FAILED: %s" % exc)
@@ -178,7 +194,7 @@ def run_steps(label, added, meshes, options):
                 keys = getattr(donor.data, "shape_keys", None)
                 kept = [k.name for k in keys.key_blocks if k.name != "Basis"] if keys else []
             results.append("normals %s, donor keys %s"
-                           % ("ok" if result == {'FINISHED'} else result,
+                           % (outcome(result),
                               ", ".join(kept) or "none"))
         except Exception as exc:                 # noqa: BLE001
             results.append("normals FAILED: %s" % exc)
@@ -186,9 +202,27 @@ def run_steps(label, added, meshes, options):
         focus(mesh)
         try:
             result = bpy.ops.uma.build_morph_drivers()
-            results.append("morphs %s" % ("ok" if result == {'FINISHED'} else result))
+            deploy = [k.name for k in mesh.data.shape_keys.key_blocks
+                      if k.name.startswith(("Cheek_", "Manga_", "Tear_"))] if mesh.data.shape_keys else []
+            # `uma.build_morph_drivers` returns CANCELLED whenever it has *notes* (dead morph names after the
+            # face split), not when it failed - so a label calling that "cancelled" would misread
+            word = "ok (notes)" if result == {"CANCELLED"} else outcome(result)
+            results.append("morphs %s, %d deploy key(s)" % (word, len(deploy)))
         except Exception as exc:                 # noqa: BLE001
             results.append("morphs FAILED: %s" % exc)
+    if options["rig"]:
+        focus(mesh)
+        try:
+            result = bpy.ops.uma.mmr_rig()
+            results.append("rig %s" % outcome(result))
+        except Exception as exc:                 # noqa: BLE001
+            results.append("rig FAILED: %s" % exc)
+    # A label is a record, so a step that did not run says so instead of being absent: "not run" and "ran"
+    # must not look the same in a file somebody opens a week later.
+    for flag, name in (("refine", "refine"), ("shade", "shade"), ("normals", "normals"),
+                       ("morphs", "morphs"), ("rig", "rig")):
+        if not options[flag] and not any(line.startswith(name + " ") for line in results):
+            results.append("%s not run" % name)
     if not results:
         results.append("imported only")
     return results
@@ -249,6 +283,10 @@ def make_text(body, location, size=0.08, align='CENTER'):
     bpy.context.scene.collection.objects.link(obj)
     obj.location = location
     obj.rotation_euler = (1.5707963, 0.0, 0.0)      # face -Y, the way the models face
+    # **no shadow from a label.** A label is a viewport annotation, not a prop: a text object standing over the
+    # head at label size throws a band of shade across the face of the model behind it, which is exactly the part
+    # of the render a reviewer is looking at.
+    obj.visible_shadow = False
     material = bpy.data.materials.get(MARK + "label")
     if material is None:
         material = bpy.data.materials.new(MARK + "label")
@@ -404,5 +442,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 

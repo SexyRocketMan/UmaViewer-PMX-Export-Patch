@@ -93,8 +93,8 @@ console and obvious in a picture. These two turn a run into something that can b
 
 | File | What it does |
 |---|---|
-| `build_review_scene.py` | Imports each fixture, optionally runs the pipeline on it (`--refine`, `--shade`, `--normals`, `--morphs`), lays them out in one row, puts a **label over each head** saying what was run and with which numbers (donor keys, eye-key count, eye symmetry), frames a camera, and saves a `.blend` — which also carries the add-on's run report as the text block `uma_run_report`. `--render out.png` writes a preview on a **transparent** backdrop (`--opaque` for a dark one). |
-| `verify_review_scene.py` | Checks the result by numbers, because "it rendered" is not a claim: one labelled root per fixture, a label object above each model's own top and inside its slot, a camera aimed at the row, light, the embedded report non-empty, and — with `--render` — **coverage per model and per label in their own projected screen boxes** (a blank render cannot pass), plus the shading range over opaque pixels. Exit 1 on a failure. |
+| `build_review_scene.py` | Imports each fixture, runs the pipeline on it (`--all` = refine + shade + normals + morphs; `--rig` adds `uma.mmr_rig` and is slow), lays them out in one row, puts a **label over each head** saying what was run and with which numbers (donor keys, eye-key count, eye symmetry), frames a camera, and saves a `.blend` — which also carries the add-on's run report as the text block `uma_run_report`. `--render out.png` writes a preview on a **transparent** backdrop (`--opaque` for a dark one). |
+| `verify_review_scene.py` | Checks the result by numbers, because "it rendered" is not a claim: one labelled root per fixture, a label object above each model's own top and inside its slot, a camera aimed at the row, light, the embedded report non-empty, and — with `--render` — **coverage per model and per label in their own projected screen boxes** (a blank render cannot pass), plus the shading range over opaque pixels. It also **cross-checks each label's claims against the data**: "refine ok" means the eight eye control keys are really on the mesh, "shade ok" that the mesh wears `uma_shader_role` copies, "normals ok" that a donor exists for it, "morphs ok" that the deploy keys are there — and that no label casts a shadow. Exit 1 on a failure. |
 
 ```powershell
 & "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --factory-startup `
@@ -161,3 +161,4 @@ The verification, rendering and game-data-research scripts this fork was built w
 shading A/B renders, the end-to-end workflow script, the game's-own-shader workbench - live outside the project, in
 the companion `UmaViewer-DevTools` directory, so a shipped checkout does not carry them. Its `README.md` holds the
 measurements behind the claims in [`../README.md`](../README.md) and [`../docs`](../docs).
+

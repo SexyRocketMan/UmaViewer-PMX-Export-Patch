@@ -224,6 +224,7 @@ def main():
              if obj.type == 'FONT' and obj.name.startswith(MARK + "label")]
     check("there is one label per model (plus an optional title)", len(texts) >= len(models),
           "%d label(s) for %d model(s)" % (len(texts), len(models)))
+    label_for = {}
     for label, root, meshes in models:
         low, high = bounds(meshes, depsgraph)
         if low is None:
@@ -236,6 +237,7 @@ def main():
         detail = ""
         if above:
             nearest = min(above, key=lambda obj: abs(obj.location.x - (slot_low + slot_high) * 0.5))
+            label_for[label] = nearest
             detail = ("%r at z %.2f, head top %.2f, %d line(s)"
                       % (nearest.data.body.split("\n")[0][:28], nearest.location.z, high.z,
                          len(nearest.data.body.split("\n"))))
@@ -243,7 +245,50 @@ def main():
         check("%r: a label sits above its head and is renderable" % label, ok, detail)
 
     say("")
-    say("3. a camera and light on the row")
+    say("3. the labels say what ran - and the data agrees")
+    for label, root, meshes in models:
+        text_obj = label_for.get(label)
+        if text_obj is None:
+            continue
+        claims = [line.strip() for line in text_obj.data.body.replace("\n", " ").split() if False]
+        body = text_obj.data.body.replace("\n", " ")
+        # **every** piece of the model, not the biggest one: shading and the face split put the frame
+        # morphs on the face piece, so the body alone reports none of the eye control keys that refine built.
+        keys = set()
+        for piece in meshes:
+            if piece.data.shape_keys:
+                keys.update(piece.data.shape_keys.key_blocks.keys())
+        eye_keys = {name for name in keys if name.endswith(")") and name.startswith("Eye_")}
+        slots = [slot.material for piece in meshes for slot in piece.material_slots if slot.material]
+        roles = {material.get("uma_shader_role") for material in slots if material.get("uma_shader_role")}
+        donors = [obj for obj in scene.objects if obj.get("uma_face_normals_copy")]
+        deploy = {name for name in keys if name.startswith(("Cheek_", "Manga_", "Tear_"))}
+
+        if "refine ok" in body:
+            check("%r: refine ran - the eye control keys are on the mesh" % label, len(eye_keys) >= 4,
+                  "%d control key(s), e.g. %s" % (len(eye_keys), sorted(eye_keys)[:3]))
+        if "shade ok" in body:
+            check("%r: shade ran - the mesh wears tagged shader copies" % label, bool(roles),
+                  ", ".join(sorted(str(role) for role in roles)) or "no uma_shader_role material")
+        if "normals ok" in body:
+            check("%r: normals ran - a face donor exists for it" % label,
+                  any(donor.get("uma_face_normals_for") in {obj.name for obj in meshes} for donor in donors),
+                  "%d donor(s) in the scene" % len(donors))
+        if "morphs ok" in body or "morphs cancelled" in body:
+            check("%r: morphs ran - the deploy keys are on the mesh" % label, bool(deploy),
+                  "%d deploy key(s), e.g. %s" % (len(deploy), sorted(deploy)[:3]))
+        if "not run" in body:
+            say("  (skipped: the label records %r as not run)"
+                % next(line.strip() for line in text_obj.data.body.split("\n") if "not run" in line))
+
+    say("")
+    say("4. the labels do not shade the models")
+    casting = [obj for obj in texts if getattr(obj, "visible_shadow", False)]
+    check("no label casts a shadow", not casting,
+          ", ".join(obj.name for obj in casting) or "all %d label(s) have visible_shadow off" % len(texts))
+
+    say("")
+    say("5. a camera and light on the row")
     camera = scene.camera
     check("the scene has a camera", camera is not None, camera.name if camera else "none")
     if camera is not None and models:
@@ -262,7 +307,7 @@ def main():
     check("there is light in the scene", bool(lights), "%d light(s)" % len(lights))
 
     say("")
-    say("4. the run report travels with the file")
+    say("6. the run report travels with the file")
     text = bpy.data.texts.get("uma_run_report")
     check("the report is embedded as a text block", text is not None, "uma_run_report")
     if text is not None:
@@ -272,7 +317,7 @@ def main():
               next((line for line in body.splitlines() if "[" in line), "")[:70])
 
     say("")
-    say("5. the render, when there is one")
+    say("7. the render, when there is one")
     if not args.render:
         say("  (skipped: no --render given)")
     elif not os.path.exists(args.render):
@@ -344,4 +389,7 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+
 
