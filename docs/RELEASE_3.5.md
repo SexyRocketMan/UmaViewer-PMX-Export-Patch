@@ -91,3 +91,22 @@ Everything above is measured and written down in the exporter repository's `docs
   since (including the see-through render settings and the face's driver wiring);
 * `PMX_EXTENSIONS.md` - the metadata contract itself;
 * `KEYBINDS.md`, `MORPH_NAMES.md`, `OUTLINES.md`, `CLI.md` - the viewer-side documents.
+
+## Hot patch, 5 November 2026
+
+Shipped on top of 3.5 without a version bump, as `UmaViewer-3.5-hotfix-2026-11-05.zip` (48 MB, sha256 starts
+`D59DEB86F068E7D9`). The repository has the changelog that went inside it at `CHANGELOG.txt` in the package; what it
+fixes, and what a future session needs to know about each:
+
+| fix | commit | why it mattered |
+|---|---|---|
+| waist stretch on every export | `78878ba` | the rest pose was restored from a world-space table captured before `SetHeight`, so unskinned control bones rose by `P0 x (1 - BodyScale)`. **Every export between 2 and 5 November is wrong and must be re-exported** - the file cannot be repaired |
+| bone orientation | `9317c40` | a bone's tail now points at the joint MMD points it at (99.9% of joint selections over 368 exports, from 71.8%); `Tools/check_tails.py` gates it |
+| dump cost and survivability | `26bd4a2` | a 600 s deadline for the whole run killed long dumps, the plan was rebuilt per model (~3 s), and the asset cache was never released (6 GB per instance). A dump now runs 1777 models in ~25 minutes across four viewers and stays under 3 GB |
+| prop previews | `2fd9e7e` | near-plane, one-sided flats, and empty-frame retries; `check_dump.py` measures the drawn bounding box rather than pixel coverage, because a thin prop that fills the frame is a good picture |
+| standalone build | `10274b6` | the runner looked for `Assets/Scenes/Version2.unity` on disk, so a built player only worked when started from the project directory |
+
+The build is reproduced with `Unity.exe -batchmode -quit -projectPath . -executeMethod UmaPlayerBuild.BuildWindows`,
+which writes `BuildDev/uma-cli/UmaViewer.exe` (ignored by git); packaging is that folder plus `README.txt` and
+`CHANGELOG.txt`, minus `Config.json`, which would otherwise overwrite a user's settings.
+
