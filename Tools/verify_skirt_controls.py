@@ -5,7 +5,8 @@
 `Skirt_Amount` and `Skirt_Offset` are custom properties on the master bone, driven onto the constraints rather than
 baked into them. This measures the *result*, on the hem's world position, not the wiring:
 
-    Amount 1.0 / 0.5 / 0.0 with the master turned    full bend, about half, and nothing at all
+    gain 1.0 / 0.5 / 0.0 (the master's scale)        full bend, about half, and nothing at all
+    gain 2.0                                          past the influence cap, through the second copy slot
     Amount 0.0 with the master lifted                the lift channel silenced too
     the offset bone dragged -5 / 0 / +2 / +5 cm     the ring tucks in, is untouched, and flares out
 
@@ -61,7 +62,10 @@ say("=" * 100)
 say(f"skirt controls - {pmx_path}")
 say(f"  operator {result}; {len(panels)} panel(s); controls {[k for k in master.keys() if k.startswith('Skirt_')]}; "
     f"{drivers} driver(s)")
-check("the amount control is declared", P.AMOUNT_PROP in master.keys(), P.AMOUNT_PROP)
+gain_driver = [curve for curve in (arm.animation_data.drivers if arm.animation_data else [])
+               if curve.driver.variables
+               and "scale" in str(curve.driver.variables[0].targets[0].data_path)]
+check("the gain is the master's scale", bool(gain_driver), f"{len(gain_driver)} driver(s) read scale")
 offset_bone = arm.pose.bones.get(P.OFFSET_BONE)
 check("the offset is a bone you can drag", offset_bone is not None
       and not tuple(offset_bone.lock_location)[2],
@@ -72,7 +76,8 @@ check("the channels are driven, not baked", drivers >= 2 * len(panels), f"{drive
 
 
 def pose(amount=1.0, offset=0.0, turn=0.0, lift=0.0):
-    master[P.AMOUNT_PROP] = float(amount)
+    # the multiplier is the master's own scale now: S is the gesture, and 1.0 is "as wired"
+    master.scale = (float(amount), float(amount), float(amount))
     offset_bone.location = (0.0, 0.0, float(offset))
     master.rotation_mode = 'XYZ'
     master.rotation_euler = (0.0, 0.0, math.radians(turn))
@@ -85,7 +90,7 @@ def pose(amount=1.0, offset=0.0, turn=0.0, lift=0.0):
 def radius(bone_name, offset):
     # the master back to its rest pose **and** Amount back to 1: measuring the offset while the previous case left
     # the master silenced measured 0 for every offset, which is what made this check fail the first time
-    master[P.AMOUNT_PROP] = 1.0
+    master.scale = (1.0, 1.0, 1.0)
     master.rotation_mode = 'XYZ'
     master.rotation_euler = (0.0, 0.0, 0.0)
     master.location = (0.0, 0.0, 0.0)
@@ -100,7 +105,7 @@ def radius(bone_name, offset):
 
 rest = pose()
 say("")
-say("Amount - the hem's displacement, master turned 10 deg")
+say("Gain (the master's scale) - the hem's displacement, master turned 10 deg")
 full = (pose(turn=10.0) - rest).length * 1000
 half = (pose(amount=0.5, turn=10.0) - rest).length * 1000
 none = (pose(amount=0.0, turn=10.0) - rest).length * 1000
@@ -130,18 +135,37 @@ outward = [radius(entry[1], 0.05) * 1000 - radii[0.0] for entry in panels]
 inward = [radius(entry[1], -0.005) * 1000 - radii[0.0] for entry in panels]
 say("  per panel: outward %+.0f..%+.0f mm, inward %+.0f..%+.0f mm"
     % (min(outward), max(outward), min(inward), max(inward)))
-master[P.AMOUNT_PROP] = 0.0
+master.scale = (0.0, 0.0, 0.0)
 arm.update_tag()
 bpy.context.view_layer.update()
 silenced = arm.pose.bones[hem].tail.copy()
 say("  the offset with Amount 0: %+.0f mm (it is a channel of its own)"
     % ((silenced - centre).length * 1000 - radii[0.0]))
-check("the offset is not scaled by Amount", (silenced - centre).length * 1000 - radii[0.0] > 20.0,
-      "measured at Amount 0, where the master does nothing")
+check("the offset is not scaled by the gain", (silenced - centre).length * 1000 - radii[0.0] > 20.0,
+      "measured at gain 0, where the master does nothing")
 check("dragging up flares every panel outward", all(delta > 5.0 for delta in outward),
       "%d of %d panels" % (sum(1 for delta in outward if delta > 5.0), len(outward)))
 check("dragging down tucks every panel inward", all(delta < -5.0 for delta in inward),
       "%d of %d panels" % (sum(1 for delta in inward if delta < -5.0), len(inward)))
+
+say("")
+say("Links - the hinge count the bend is a sum over")
+counts = {}
+for links in (0, 6):
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.preferences.addon_enable(module="bl_ext.blender_org.mmd_tools")
+    bpy.ops.preferences.addon_enable(module=ADDON)
+    bpy.ops.mmd_tools.import_model(filepath=pmx_path, scale=0.08, types={'MESH', 'ARMATURE', 'MORPHS'})
+    arm = next(obj for obj in bpy.context.scene.objects if obj.type == 'ARMATURE')
+    for obj in bpy.context.scene.objects:
+        obj.select_set(False)
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.uma.skirt_master_plain(Links=links)
+    counts[links] = sorted({len(chain) for _root, _hem, chain in P.skirt_panels(arm)})
+say("  Links=0 -> %s (the bones the model has)   Links=6 -> %s" % (counts[0], counts[6]))
+check("Links=0 leaves the chains the model has alone", counts[0] and max(counts[0]) <= 4, str(counts[0]))
+check("Links=6 really gives six hinges per panel", counts[6] == [6], str(counts[6]))
 
 say("")
 say("=" * 100)
@@ -149,5 +173,6 @@ say("FAILURES: " + (", ".join(failures) if failures else "none"))
 with open(out_path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
 sys.exit(1 if failures else 0)
+
 
 
