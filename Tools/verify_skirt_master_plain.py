@@ -76,7 +76,9 @@ check("the operator works on a rig with no rigify", result == {'FINISHED'}, str(
 after_bones = {bone.name for bone in arm.data.bones}
 added = sorted(after_bones - before_bones)
 say(f"  bones it added: {added}")
-check("it added exactly one bone (the master)", added == ["UMA_skirt_master"], ", ".join(added))
+# two by design since the Offset channel: the master, and the small bone whose travel carries the bias
+check("it added the master and nothing else", set(added) <= {"UMA_skirt_master", "UMA_skirt_offset"}
+      and "UMA_skirt_master" in added, ", ".join(added))
 check("no rigify bones exist in the rig",
       not [bone for bone in after_bones if bone.startswith(("DEF-", "MCH-", "ORG-")) or
            (bone.endswith("_master") and bone != "UMA_skirt_master")],

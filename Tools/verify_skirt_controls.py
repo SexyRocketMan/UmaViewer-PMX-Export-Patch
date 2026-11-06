@@ -101,11 +101,15 @@ half = (pose(amount=0.5, turn=10.0) - rest).length * 1000
 none = (pose(amount=0.0, turn=10.0) - rest).length * 1000
 lifted = (pose(lift=0.05) - rest).length * 1000
 lifted_off = (pose(amount=0.0, lift=0.05) - rest).length * 1000
-say("  Amount 1.0: %6.1f mm   Amount 0.5: %6.1f mm   Amount 0.0: %5.2f mm" % (full, half, none))
+doubled = (pose(amount=2.0, turn=10.0) - rest).length * 1000
+say("  Amount 1.0: %6.1f mm   Amount 0.5: %6.1f mm   Amount 0.0: %5.2f mm   Amount 2.0: %6.1f mm"
+    % (full, half, none, doubled))
 say("  lift +5 cm: Amount 1.0 %6.1f mm, Amount 0.0 %5.2f mm" % (lifted, lifted_off))
 check("Amount 1.0 bends the panel", full > 5.0, f"{full:.1f} mm")
 check("Amount 0.0 silences the master", none < 0.5 and lifted_off < 0.5, f"{none:.2f} / {lifted_off:.2f} mm")
 check("Amount 0.5 lands between", 0.15 * full < half < 0.9 * full, f"{half:.1f} mm of {full:.1f}")
+check("Amount 2.0 goes past the 0..1 cap (the extra copy slot)", doubled > 1.4 * full,
+      f"{doubled:.1f} mm against {full:.1f} at 1.0")
 
 say("")
 say("Offset - the hem's horizontal radius from the master, master at rest")
@@ -116,6 +120,15 @@ outward = [radius(entry[1], 45.0) * 1000 - radii[0.0] for entry in panels]
 inward = [radius(entry[1], -45.0) * 1000 - radii[0.0] for entry in panels]
 say("  per panel: outward %+.0f..%+.0f mm, inward %+.0f..%+.0f mm"
     % (min(outward), max(outward), min(inward), max(inward)))
+bias_only = radius(hem, 45.0) * 1000 - radius(hem, 0.0) * 1000
+master[P.AMOUNT_PROP] = 0.0
+arm.update_tag()
+bpy.context.view_layer.update()
+silenced_radius = arm.pose.bones[hem].tail.copy()
+say("  Offset +45 with Amount 0 still flares: %+.0f mm of the bias channel alone"
+    % ((silenced_radius - centre).length * 1000 - radii[0.0]))
+check("the bias does not depend on Amount", (silenced_radius - centre).length * 1000 - radii[0.0] > 5.0,
+      "measured at Amount 0")
 check("Offset +45 flares every panel outward", all(delta > 5.0 for delta in outward),
       "%d of %d panels" % (sum(1 for delta in outward if delta > 5.0), len(outward)))
 check("Offset -45 tucks every panel inward", all(delta < -5.0 for delta in inward),
@@ -127,4 +140,5 @@ say("FAILURES: " + (", ".join(failures) if failures else "none"))
 with open(out_path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
 sys.exit(1 if failures else 0)
+
 
