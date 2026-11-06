@@ -85,6 +85,30 @@ Two traps. `scene.render.filepath` is not respected while rendering if a startup
 prefab's frame, not the armature's - applied directly they turn the tail about axes about 87 degrees from the
 solver's, so the demo carries them over per bone (`M @ R @ M^-1`) and verifies every frame against the solver.
 
+## Review scenes
+
+A pipeline that raises nothing has not necessarily done its job — the eye controls can build themselves from the
+wrong morph, the donor can lose the keys it follows, a decal can stay lit, and every one of those is silent in the
+console and obvious in a picture. These two turn a run into something that can be looked at and compared.
+
+| File | What it does |
+|---|---|
+| `build_review_scene.py` | Imports each fixture, optionally runs the pipeline on it (`--refine`, `--shade`, `--normals`, `--morphs`), lays them out in one row, puts a **label over each head** saying what was run and with which numbers (donor keys, eye-key count, eye symmetry), frames a camera, and saves a `.blend` — which also carries the add-on's run report as the text block `uma_run_report`. `--render out.png` writes a preview on a **transparent** backdrop (`--opaque` for a dark one). |
+| `verify_review_scene.py` | Checks the result by numbers, because "it rendered" is not a claim: one labelled root per fixture, a label object above each model's own top and inside its slot, a camera aimed at the row, light, the embedded report non-empty, and — with `--render` — **coverage per model and per label in their own projected screen boxes** (a blank render cannot pass), plus the shading range over opaque pixels. Exit 1 on a failure. |
+
+```powershell
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --factory-startup `
+    -P Tools/build_review_scene.py -- --out review\modes.blend --render review\modes.png `
+    --refine --normals --title "1001 costume 00 - morph naming modes" `
+    "mode 0 (tagged)=D:/out/1001_mode0.pmx" "mode 1 (short)=D:/out/1001_mode1.pmx" "mode 2 (unified)=D:/out/1001_mode2.pmx"
+
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --factory-startup `
+    -P Tools/verify_review_scene.py -- review\modes.blend --render review\modes.png --report review\verify.txt
+```
+
+Fixtures can also come from a JSON manifest (`--fixtures manifest.json`), which is the shape a test dataset should
+take: `{"title": ..., "fixtures": [{"label": ..., "pmx": ...}]}`.
+
 ## Blender-side eye controls
 
 `Refine Structure` (in the add-on) turns the game's four eye range morphs into eight bone-driven shape keys, and
