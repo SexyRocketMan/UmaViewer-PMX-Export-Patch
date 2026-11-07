@@ -25,6 +25,9 @@ Unzip anywhere and run `UmaViewer.exe`. It is a plain standalone build - no Unit
 Keybinds are in the same file under `ViewerShortcuts` (each entry is a name and a key): `PanelPrev`/`PanelNext`
 (Left/Right), `ListUp`/`ListDown` (Up/W and Down/S), `ExportModel` (E), `AutoRecord` (A), `RainLook` (R). Nothing is
 hard-coded, so a different keyboard layout or a different game pad does not need a rebuild.
+*(As built, this was not true: the file was read and then ignored, because the shortcuts were created before the
+config existed. Fixed, with a gate, in the 7 November hot patch below - and in pose mode the viewer's keys are now
+all off. Read that section for what a 3.5 user actually got.)*
 
 ## The add-on
 
