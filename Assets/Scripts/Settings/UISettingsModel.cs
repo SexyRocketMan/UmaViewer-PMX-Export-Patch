@@ -18,10 +18,12 @@ public class UISettingsModel : MonoBehaviour
     [SerializeField] private Slider _outlineWidthSlider;
 
     /// <summary>
-    /// Export options. Both are optional: an unassigned control only means the row is not in the scene,
+    /// Export options. All are optional: an unassigned control only means the row is not in the scene,
     /// <see cref="Config.json"/> still works and the exporter still follows it.
     /// </summary>
     [SerializeField] private Toggle _aPoseRestPose;
+    [SerializeField] private Toggle _extraMorphs;
+    [SerializeField] private Toggle _textureVariants;
     [SerializeField] private TMP_Dropdown _morphNameMode;
 
     /// <summary>
@@ -43,8 +45,13 @@ public class UISettingsModel : MonoBehaviour
         _isHeadFix,
         _isTPose,
         _dynamicBoneEnable = true,
-        _enableEyeTracking = true,
-        _enableFaceOverride = true;
+        // Look at camera is off by default. The solve bends the spine chain towards the camera on top of the clip,
+        // and a recorded motion carries whatever it contributed - see the recording notes in docs/CLI.md. That is a
+        // limitation of recording, not of viewing, so the feature stays available; it just does not start enabled
+        // on a viewer whose recordings are the reason it exists.
+        _enableEyeTracking = false,
+        _enableFaceOverride = true,
+        _isWetLook;
 
     private float _outlineWidth;
 
@@ -112,6 +119,38 @@ public class UISettingsModel : MonoBehaviour
         Builder.CurrentUMAContainer?.SetFaceOverrideData(isOn);
     }
 
+    /// <summary>
+    /// Whether the loaded character wears the game's rain (wet) texture set. Session only, like the other
+    /// view toggles here (T-pose, eye tracking, face override): the game decides this from the race's
+    /// weather, so there is nothing to write to Config.json.
+    /// </summary>
+    public bool IsWetLook
+    {
+        get { return _isWetLook; }
+    }
+
+    /// <summary>Rain look on or off for the character that is loaded (bound to R in <see cref="UIShortcuts"/>).</summary>
+    public void ToggleWetLook()
+    {
+        SetWetLook(!_isWetLook);
+    }
+
+    public void SetWetLook(bool wet)
+    {
+        var container = Builder.CurrentUMAContainer;
+        if (container == null)
+        {
+            UmaViewerUI.Instance?.ShowMessage("Load a character first", UIMessageType.Warning);
+            return;
+        }
+
+        // the container answers with what it could really do: a model whose parts ship no wet maps stays dry
+        _isWetLook = container.SetWetLook(wet);
+        UmaViewerUI.Instance?.ShowMessage(_isWetLook
+            ? "Rain look on (the game's wet textures)"
+            : "Rain look off", UIMessageType.Default);
+    }
+
     public void ChangeOutlineWidth(float val)
     {
         _outlineWidth = val;
@@ -126,6 +165,8 @@ public class UISettingsModel : MonoBehaviour
     public void ApplySettings()
     {
         if (_aPoseRestPose != null) _aPoseRestPose.SetIsOnWithoutNotify(Config.Instance.PmxAPoseRestPose);
+        if (_extraMorphs != null) _extraMorphs.SetIsOnWithoutNotify(Config.Instance.PmxExtraMorphs);
+        if (_textureVariants != null) _textureVariants.SetIsOnWithoutNotify(Config.Instance.PmxTextureVariants);
         if (_morphNameMode != null) _morphNameMode.SetValueWithoutNotify((int)Config.Instance.PmxMorphNameMode);
         if (_morphNameModeText != null) _morphNameModeText.text = MorphNameModeLabel(Config.Instance.PmxMorphNameMode);
     }
@@ -143,8 +184,45 @@ public class UISettingsModel : MonoBehaviour
     }
 
     /// <summary>
-    /// Naming of morphs in exported models and motions. Dropdown order matches
-    /// <see cref="PmxMorphNameMode"/>: 0 tagged (Blender addon), 1 short english, 2 both, 3 unified.
+    /// Export the facial morphs an MMD morph cannot express as extra vertex morphs instead of losing
+    /// them - the cheek blush, the eye manga expressions, the tears. What each one is called, which
+    /// decals stay out and what a morph cannot carry at all is written up in the
+    /// <see cref="Config.PmxExtraMorphsTip"/> row of <see cref="Config.json"/> and in
+    /// docs/PMX_EXTENSIONS.md.
+    ///
+    /// This row is the on/off test for the whole feature: the option existed in Config.json and on the
+    /// command line (-umaNoExtraMorphs) before it had a control, so comparing the two exports meant
+    /// editing Config.json by hand.
+    /// </summary>
+    public void EnablePmxExtraMorphs(bool enable)
+    {
+        if (Config.Instance.PmxExtraMorphs == enable) return;
+        Config.Instance.PmxExtraMorphs = enable;
+        Debug.Log($"[Export] advanced morphs are {(enable ? "on, decals export as vertex morphs" : "off, decals stay where the game draws them")}");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    /// <summary>
+    /// Also export the game's wet and dirt maps beside the dry ones, named per material by `wet=`/`dirt=`
+    /// tokens in the material comments. Off by default because it is the one option that roughly doubles the
+    /// size of an export (measured on 1001: 13 files, +2.22 MB, +80%) and nothing in MMD reads the extra
+    /// files - they are for a shader that knows what they are, which is the uma addon.
+    ///
+    /// The option existed in <see cref="Config.json"/> and on the command line
+    /// (`-umaTextureVariants`/`-TextureVariants`) before it had a control, exactly like the advanced morphs
+    /// did; the row is the on/off test for it.
+    /// </summary>
+    public void EnablePmxTextureVariants(bool enable)
+    {
+        if (Config.Instance.PmxTextureVariants == enable) return;
+        Config.Instance.PmxTextureVariants = enable;
+        Debug.Log($"[Export] the game's wet and dirt maps are {(enable ? "exported beside the dry ones" : "left out")}");
+        Config.Instance.UpdateConfig(false);
+    }
+
+    /// <summary>
+    /// Naming of morphs in exported models and recorded motions. Dropdown order matches
+    /// <see cref="PmxMorphNameMode"/>: 0 tagged (Blender addon), 1 short english, 2 unified.
     /// </summary>
     public void ChangeMorphNameMode(int mode)
     {
@@ -160,7 +238,7 @@ public class UISettingsModel : MonoBehaviour
     /// <summary>
     /// What each naming mode does, spelled out on one morph - the smiling right eyebrow of a character
     /// ("EyeBrow_1_R(WaraiA)[M_Face]"). Every morph follows the same rules; docs/MORPH_NAMES.md lists all
-    /// 192 of them in all four spellings.
+    /// 192 of them in all three spellings.
     /// </summary>
     static string MorphNameModeLabel(PmxMorphNameMode mode)
     {
@@ -168,14 +246,9 @@ public class UISettingsModel : MonoBehaviour
         {
             case PmxMorphNameMode.BlenderCompatible:
                 return "Tagged: EyeBrow_1_R(WaraiA)[M_Face]\n"
-                       + "The stock Blender addon finds these, but the name is 27 bytes and a motion can only "
-                       + "hold 15 - so a recorded vmd cannot drive these morphs.";
+                       + "Original UmaViewer naming schema: stock Uma Blender Addon compatible. Too long for the VMD 15-byte limit, morphs are not resolved in Blender.";
             case PmxMorphNameMode.ShortEnglish:
-                return "Short english: EyeBrow_1_R\n"
-                       + "Fits a motion, but the name says nothing about what the morph does.";
-            case PmxMorphNameMode.Both:
-                return "Both: EyeBrow_1_R(WaraiA)[M_Face] + EyeBrow_1_R\n"
-                       + "The addon stays happy and motions still land, at the cost of twice as many morphs.";
+                return "Short english: EyeBrow_1_R. Fits a motion, but the name says nothing about what the morph does.";
             default:
                 return "Unified: Brow_WaraiA_R\n"
                        + "English group, romaji tag and side, inside the 15 byte vmd limit - one descriptive "
@@ -244,18 +317,76 @@ public class UISettingsModel : MonoBehaviour
         }
     }
 
+    /// <summary>Prefix of the generated attachment rows, so they can be cleared again.</summary>
+    public const string AttachRowPrefix = "AttachRow_";
+
+    /// <summary>
+    /// Offers the attach prefabs the loaded character can wear - the game's `3d/chara/attach/attach{id}_00/`
+    /// sets, which is nail polish, bandages and that kind of thing on ten characters.
+    ///
+    /// One toggle per prefab rather than a pick-one list, because wearing two is meaningful. They live in the
+    /// materials panel for the same reason the texture sets do: that panel is built in code, so a new list
+    /// needs no scene object - only <see cref="MaterialsList"/> assigned.
+    ///
+    /// An attach prefab is not a prop with a placement: it carries a copy of the character rig, and
+    /// <see cref="UmaContainerCharacter.AttachAccessory"/> retargets its skins onto the character's own bones
+    /// by name, so the accessory follows the animation.
+    /// </summary>
+    public void LoadAttachPanel(UmaContainerCharacter character)
+    {
+        ClearAttachPanel();
+        if (character == null || MaterialsList == null) return;
+
+        var entries = Builder.AttachEntriesFor(character);
+        if (entries.Count == 0) return;
+
+        Debug.Log($"[UISettingsModel] offering {entries.Count} attachment(s) for {character.name}");
+        foreach (var entry in entries)
+        {
+            string label = System.IO.Path.GetFileName(entry.Name);
+            var prefab = _textureSetRowPrefab != null ? _textureSetRowPrefab : UmaViewerUI.Instance.UmaContainerTogglePrefab;
+            var row = Instantiate(prefab, MaterialsList.content);
+            row.name = AttachRowPrefix + label;
+            row.Name = label;
+            row.Toggle.SetIsOnWithoutNotify(character.Accessory(label) != null);
+            row.Toggle.onValueChanged.AddListener(value =>
+            {
+                if (value)
+                {
+                    if (Builder.LoadAttach(entry) == null)
+                    {
+                        row.Toggle.SetIsOnWithoutNotify(false);
+                        return;
+                    }
+                }
+                else if (!character.DetachAccessory(character.Accessory(label))) return;
+                Debug.Log($"[UISettingsModel] {(value ? "wearing" : "removed")} {label} on {character.name}");
+            });
+        }
+    }
+
+    public void ClearAttachPanel()
+    {
+        if (MaterialsList == null) return;
+        for (int i = MaterialsList.content.childCount - 1; i >= 0; i--)
+        {
+            var child = MaterialsList.content.GetChild(i);
+            if (child.name.StartsWith(AttachRowPrefix)) Destroy(child.gameObject);
+        }
+    }
+
     public void ExportModel()
     {
 #if !UNITY_ANDROID || UNITY_EDITOR
         var container = Builder.CurrentUMAContainer;
         if (container)
         {
-            var path = StandaloneFileBrowser.SaveFilePanel("Save PMX File",
+            var path = StandaloneFileBrowser.SaveFilePanel("Save Model File",
                 Config.Instance.ModelSaveFolder(Config.Instance.MainPath),
-                ExportNaming.ModelFile(container), "pmx");
+                ExportNaming.ModelFile(container), ModelExportFilters);
             if (!string.IsNullOrEmpty(path))
             {
-                ModelExporter.ExportModel(container, path);
+                ExportWithReport(() => ModelExporter.ExportModel(container, path), path);
                 Config.Instance.RememberModelSave(path);
             }
         }
@@ -263,11 +394,12 @@ public class UISettingsModel : MonoBehaviour
         var prop_container = Builder.CurrentOtherContainer;
         if (prop_container)
         {
-            var path = StandaloneFileBrowser.SaveFilePanel("Save PMX File",
-                Config.Instance.ModelSaveFolder(Config.Instance.MainPath), $"{prop_container}", "pmx");
+            var path = StandaloneFileBrowser.SaveFilePanel("Save Model File",
+                Config.Instance.ModelSaveFolder(Config.Instance.MainPath), $"{prop_container}",
+                ModelExportFilters);
             if (!string.IsNullOrEmpty(path))
             {
-                ModelExporter.ExportModel(prop_container, path);
+                ExportWithReport(() => ModelExporter.ExportModel(prop_container, path), path);
                 Config.Instance.RememberModelSave(path);
             }
         }
@@ -276,4 +408,50 @@ public class UISettingsModel : MonoBehaviour
         UmaViewerUI.Instance.ShowMessage("Not supported on this platform", UIMessageType.Warning);
 #endif
     }
+
+    /// <summary>
+    /// Runs one export and puts its failure in front of the user.
+    ///
+    /// The exporter writes the `Texture2D/` folder before it reads any geometry, so a scene it cannot read
+    /// used to leave the folder on disk, no model, and nothing on screen saying why - the exception went to
+    /// the log and `Export Model` looked as if it had simply done nothing. Scenes are where that happened:
+    /// their meshes are whatever the game shipped, and two of the shapes that broke the export (a mesh with
+    /// no normals, a scene with no textures at all) are fixed, but a third will show up eventually, and it
+    /// should name itself. The message is short on purpose - the exception with its stack is in the log,
+    /// which is what a bug report needs.
+    /// </summary>
+    private static void ExportWithReport(System.Action export, string path)
+    {
+        // File.Exists alone is not the question: a file left by an earlier export makes it true, and the
+        // export-failed-fix-export-again loop is exactly when the hint matters. Snapshot what is there
+        // before the write and compare after, which holds whether the path was empty, stale or fresh.
+        System.DateTime? before = System.IO.File.Exists(path)
+            ? System.IO.File.GetLastWriteTimeUtc(path)
+            : (System.DateTime?)null;
+        try
+        {
+            export();
+        }
+        catch (System.Exception e)
+        {
+            bool wroteModel = System.IO.File.Exists(path)
+                              && (before == null || System.IO.File.GetLastWriteTimeUtc(path) != before.Value);
+            UnityEngine.Debug.LogError($"[UISettingsModel] export to {path} failed: {e}");
+            UmaViewerUI.Instance?.ShowMessage($"Export failed ({e.GetType().Name}: {e.Message})."
+                                              + (wroteModel
+                                                  ? ""
+                                                  : " No model was written, though its textures may be.")
+                                              + " See the log for the full trace.", UIMessageType.Error);
+        }
+    }
+
+    /// <summary>
+    /// What the save dialog offers. The extension the name ends up with decides which writer runs
+    /// (<see cref="ModelExporter.ExportModel"/>), so both formats are reachable from this one dialog.
+    /// </summary>
+    private static readonly ExtensionFilter[] ModelExportFilters =
+    {
+        new ExtensionFilter("PMX model", "pmx"),
+        new ExtensionFilter("FBX model", "fbx")
+    };
 }

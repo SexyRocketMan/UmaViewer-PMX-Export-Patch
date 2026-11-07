@@ -36,7 +36,9 @@ public class HandleManager : MonoBehaviour
         var camera = Camera.main;
         var poseModeOn = UmaViewerUI.Instance.PoseManager.PoseModeOn;
 
-        if (Input.GetKeyDown(KeyCode.Space))
+        // Space is pose mode's IK toggle. It used to answer in every mode, where it flipped a flag for a
+        // solver that does not exist yet and left IKMode true for whenever pose mode was next entered.
+        if (poseModeOn && Input.GetKeyDown(KeyCode.Space))
         {
             IKMode = !IKMode;
             if (IKMode)

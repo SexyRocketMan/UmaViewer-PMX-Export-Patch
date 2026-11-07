@@ -1,4 +1,4 @@
-using Gallop;
+﻿using Gallop;
 using RootMotion;
 using RootMotion.Dynamics;
 using RootMotion.FinalIK;
@@ -33,6 +33,10 @@ public class UmaContainerCharacter : UmaContainer
     public Vector3 UpBodyPosition;
     public Quaternion UpBodyRotation;
     public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneTransform;
+    /// <summary>The same rest pose as <see cref="InitBoneTransform"/>, in local space, for putting bones back. The
+    /// world table cannot be written back: it is captured before <see cref="UmaViewerBuilder"/> scales the character
+    /// to their height, so restoring it puts every bone at its unscaled position. A local transform is immune to that.</summary>
+    public Dictionary<Transform, (Vector3 pos, Quaternion rot)> InitBoneLocal;
 
     [Header("Face")]
     public FaceDrivenKeyTarget FaceDrivenKeyTarget;
@@ -41,7 +45,7 @@ public class UmaContainerCharacter : UmaContainer
     public GameObject HeadBone;
     public Transform TrackTarget;
     public float EyeHeight;
-    public bool EnableEyeTracking = true;
+    public bool EnableEyeTracking = false;
     public Material FaceMaterial;
 
     [Header("Cheek")]
@@ -257,9 +261,28 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         InitBoneTransform = new Dictionary<Transform, (Vector3 pos, Quaternion rot)>();
+        // The same pose in *local* space, which is the form a restore has to use: this capture runs before SetHeight()
+        // scales the "Position" node, and a world transform written back afterwards ignores that scale. See UpBodyReset().
+        InitBoneLocal = new Dictionary<Transform, (Vector3 pos, Quaternion rot)>();
         foreach (var bone in bodySkinnedMeshRenderer.bones)
         {
             InitBoneTransform[bone] = (bone.position, bone.rotation);
+            InitBoneLocal[bone] = (bone.localPosition, bone.localRotation);
+        }
+
+        // ... and the bones the rig puts *between* a skinned bone and the character root: the control bones
+        // (UpBody_Ctrl, Waist, the IK targets), which are not skinned so nothing above captured them, and
+        // ResetBodyPose() restores this table and nothing else. Measured on a dance clip: the hip's world yaw was
+        // 0.0 degrees while the spine's was 93.9 - the turn sits on a control bone between them, so it went into
+        // every recorded key as a constant yaw of the upper body.
+        foreach (var bone in bodySkinnedMeshRenderer.bones)
+        {
+            for (var node = bone.parent; node != null && node != transform; node = node.parent)
+            {
+                if (InitBoneTransform.ContainsKey(node)) continue;
+                InitBoneTransform[node] = (node.position, node.rotation);
+                InitBoneLocal[node] = (node.localPosition, node.localRotation);
+            }
         }
     }
 
@@ -332,6 +355,209 @@ public class UmaContainerCharacter : UmaContainer
         };
     }
 
+    /// <summary>The attach prefabs this character is wearing, so they can be taken off again.</summary>
+    private readonly List<GameObject> accessories = new List<GameObject>();
+
+    public IReadOnlyList<GameObject> Accessories => accessories;
+
+    /// <summary>
+    /// Wears one of the game's `3d/chara/attach/...` prefabs: nail polish, bandages, that kind of thing. Its bone list is
+    /// a **copy of the character rig** at that character's rest pose with the accessory geometry skinned to it, so the job
+    /// is a retarget onto the character's own bones by name - what <see cref="MergeBone"/> does for hair - and the
+    /// accessory then follows the animation. Bones the character does not have (the bust chains, the `Wrist_*_Pole` and
+    /// `Wrist_*_Target` nodes) keep their own position.
+    /// </summary>
+    public GameObject AttachAccessory(GameObject accessory)
+    {
+        if (accessory == null) return null;
+
+        var targetBones = new Dictionary<string, Transform>();
+        foreach (var bone in GetComponentsInChildren<Transform>(true))
+        {
+            if (!targetBones.ContainsKey(bone.name)) targetBones.Add(bone.name, bone);
+        }
+
+        var emptyBones = new List<Transform>();
+        var skins = accessory.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+
+        // Captured before the retarget, because afterwards there is no way to tell which nodes came from the prefab.
+        // `keeps` is the closure of what has to survive whatever the bones do: renderer and collider nodes, and every
+        // ancestor of one.
+        var prefabNodes = new List<Transform>(accessory.GetComponentsInChildren<Transform>(true));
+        var keeps = new HashSet<Transform>();
+        MarkKeptNodes(accessory.transform, keeps);
+
+        int merged = 0;
+        // every name the skins deform with, before the retarget replaces them
+        var skinBoneNames = new List<string>();
+        // names the character has no bone for: those weights keep the prefab's own rest position, which is the one
+        // way an attachment can look half attached
+        var unmatched = new List<string>();
+        foreach (var skin in skins)
+        {
+            foreach (var bone in skin.bones)
+            {
+                if (!bone) continue;
+                if (!skinBoneNames.Contains(bone.name)) skinBoneNames.Add(bone.name);
+                if (!targetBones.ContainsKey(bone.name) && !unmatched.Contains(bone.name))
+                    unmatched.Add(bone.name);
+            }
+        }
+
+        // Retarget by bone name, always. Deciding otherwise first means measuring the prefab's rig against this
+        // character's, and every such measurement is pose-dependent: this character is animated, so its bones are
+        // wherever the clip put them while the prefab's are at rest. A plain attach prefab then reads as "its own
+        // space" as soon as the idle moves an arm. A prefab whose bones do not match matches nothing, and is reported.
+        foreach (var skin in skins)
+        {
+            int matchedHere = RetargetBones(skin, targetBones, ref emptyBones);
+            if (matchedHere > 0) merged++;
+            else Debug.LogWarning($"[attach] '{accessory.name}' shares no bone name with this character "
+                                  + $"(skin rooted at '{(skin.rootBone ? skin.rootBone.name : "")}'); it keeps its own rig");
+        }
+
+        // What the prefab carries but nothing points at once its skins follow this character: its copies of the bust
+        // chains, the animator's IK pole/target nodes, the leftover chain roots. Left in, the exporter reports them as
+        // extra bones - nine of them on attach 1048.
+        var stillUsed = new HashSet<Transform>();
+        foreach (var skin in skins)
+        {
+            if (skin.rootBone) stillUsed.Add(skin.rootBone);
+            foreach (var bone in skin.bones) if (bone) stillUsed.Add(bone);
+        }
+        var dead = prefabNodes.Where(node => node && !keeps.Contains(node) && !stillUsed.Contains(node)).ToList();
+
+        // Where it hangs. A retargeted attach follows the character from here; anything whose skins could not be
+        // retargeted (a toonprop's rig is a *flattened* copy of the right arm rooted at its own `Root`, not a character
+        // rig) is a held object and hangs off the joint the game names for exactly that - Hand_Attach_R/L.
+        Transform anchor = null;
+        if (merged == 0)
+        {
+            bool left = skinBoneNames.Any(n => n.EndsWith("_L", StringComparison.Ordinal));
+            bool right = skinBoneNames.Any(n => n.EndsWith("_R", StringComparison.Ordinal));
+            string side = left && !right ? "_L" : "_R";
+            foreach (string candidate in new[] { "Hand_Attach" + side, "Wrist" + side,
+                                                 "Hand_Attach_R", "Hand_Attach_L", "Wrist_R", "Wrist_L" })
+            {
+                if (targetBones.TryGetValue(candidate, out anchor) && anchor) break;
+            }
+        }
+
+        // under the node the body hangs off, so the character's height scale reaches any unskinned part too
+        Transform holder = transform.Find("Position") ?? transform;
+        accessory.transform.SetParent(anchor != null ? anchor : holder, false);
+        accessory.transform.localPosition = Vector3.zero;
+        accessory.transform.localRotation = Quaternion.identity;
+
+        // DestroyImmediate, not Destroy: the released bones have to be gone before anything measures this character,
+        // and a deferred Destroy leaves them alive until the end of the frame. An attach exported 500 bones instead of
+        // 425 - the prefab's whole rig came along as duplicate names.
+        foreach (var bone in emptyBones) if (bone) DestroyImmediate(bone.gameObject);
+        foreach (var node in dead)
+        {
+            if (!node) continue;
+            // never take a node that still carries a bone some skin points at (a bone this character has no
+            // counterpart for keeps its own rest position, and its parent may be prefab scaffolding)
+            if (node.GetComponentsInChildren<Transform>(true).Any(t => stillUsed.Contains(t))) continue;
+            DestroyImmediate(node.gameObject);
+        }
+        accessories.Add(accessory);
+        // where it ended up, in the world units the export uses: a retarget can plausibly place the geometry in the
+        // wrong spot without failing
+        Bounds? placed = null;
+        foreach (var renderer in accessory.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!placed.HasValue) { placed = renderer.bounds; continue; }
+            var union = placed.Value;
+            union.Encapsulate(renderer.bounds);
+            placed = union;
+        }
+        Debug.Log($"[attach] '{accessory.name}' on {name}: {skins.Length} skin(s), {merged} retargeted, "
+                  + $"{emptyBones.Count} prefab bone(s) released, "
+                  + $"{(accessory.GetComponentsInChildren<Renderer>(true).Length)} renderer(s)"
+                  + (unmatched.Count > 0
+                      ? $", {unmatched.Count} bone(s) with no counterpart here: "
+                        + string.Join(", ", unmatched.Take(8)) + (unmatched.Count > 8 ? " ..." : "")
+                      : ", every bone matched")
+                  + (placed.HasValue
+                      ? $", placed at ({placed.Value.center.x:F2},{placed.Value.center.y:F2},{placed.Value.center.z:F2}) "
+                        + $"size ({placed.Value.size.x:F2},{placed.Value.size.y:F2},{placed.Value.size.z:F2})"
+                      : ", nothing to place (no renderer)")
+                  + (anchor != null
+                      ? $", hanging off {anchor.name} at ({anchor.position.x:F2},{anchor.position.y:F2},{anchor.position.z:F2})"
+                      : ", retargeted onto the character")
+                  + (anchor != null && placed.HasValue
+                      ? $", {Vector3.Distance(placed.Value.center, anchor.position):F2} from that joint"
+                      : ""));
+        return accessory;
+    }
+
+    /// <summary>Takes every attachment back off.</summary>
+    public void ClearAccessories()
+    {
+        foreach (var accessory in accessories) if (accessory) Destroy(accessory);
+        accessories.Clear();
+    }
+
+    /// <summary>Takes one attachment back off (the panel's toggle-off path).</summary>
+    public bool DetachAccessory(GameObject accessory)
+    {
+        if (!accessory) return false;
+        accessories.Remove(accessory);
+        Destroy(accessory);
+        return true;
+    }
+
+    /// <summary>The worn attachment with that prefab name, or null.</summary>
+    public GameObject Accessory(string accessoryName)
+    {
+        return accessories.FirstOrDefault(a => a && a.name == accessoryName);
+    }
+
+    /// <summary>
+    /// Retargets one skin's deform bones onto this character by name, and reports how many matched. <see cref="MergeBone"/>
+    /// is the same operation but refuses when the skin's root bone is not one this character has - right for hair, wrong
+    /// for a toon prop, whose own `Root` is just the prefab's container. Bones with no counterpart are left alone.
+    /// </summary>
+    private static int RetargetBones(SkinnedMeshRenderer skin, Dictionary<string, Transform> targetBones,
+                                     ref List<Transform> emptyBones)
+    {
+        Transform[] bones = skin.bones;
+        int matched = 0;
+        for (int i = 0; i < bones.Length; i++)
+        {
+            Transform bone = bones[i];
+            if (!bone) continue;
+            if (!targetBones.TryGetValue(bone.name, out Transform target) || !target) continue;
+
+            bones[i] = target;
+            matched++;
+            // keep whatever hung below the prefab's copy of this bone (the rest of its chain) under the character's
+            while (bone.childCount > 0) bone.GetChild(0).SetParent(target);
+            emptyBones.Add(bone);
+        }
+        skin.bones = bones;
+
+        if (skin.rootBone && targetBones.TryGetValue(skin.rootBone.name, out Transform root) && root)
+            skin.rootBone = root;
+        else if (matched > 0 && skin.rootBone)
+        {
+            // the root it was bound to is not ours; the first matched bone is the closest honest root
+            skin.rootBone = bones.Length > 0 && bones[0] ? bones[0] : skin.rootBone;
+        }
+        return matched;
+    }
+
+    /// <summary>The nodes of a prefab that must survive a retarget: those carrying a renderer or a collider, and every
+    /// ancestor of one. The rest is rig, which the retarget takes over or leaves behind as dead weight in an export.</summary>
+    private static bool MarkKeptNodes(Transform node, HashSet<Transform> keeps)
+    {
+        bool keepsSomething = node.GetComponent<Renderer>() != null || node.GetComponent<Collider>() != null;
+        for (int i = 0; i < node.childCount; i++) keepsSomething |= MarkKeptNodes(node.GetChild(i), keeps);
+        if (keepsSomething) keeps.Add(node);
+        return keepsSomething;
+    }
+
     public void LoadPhysics()
     {
         cySpringDataContainers = new List<CySpringDataContainer>(PhysicsContainer.GetComponentsInChildren<CySpringDataContainer>());
@@ -379,9 +605,149 @@ public class UmaContainerCharacter : UmaContainer
         EnableEyeTracking = isOn;
     }
 
+    /// <summary>
+    /// The look-at solve, switched off for the duration of a caller's sampling and put back afterwards.
+    /// <see cref="EnableEyeTracking"/> gates the solve but only takes effect on this component's next <c>FixedUpdate</c>,
+    /// so a caller that samples the pose it is looking at *now* - the vmd recorder - would capture the solved pose on
+    /// its first frame, and <c>CloseRecordedLoop</c> copies that frame onto the last one. ModelExporter switches the same
+    /// flag off before it writes a model; this is the recorder's half of that rule.
+    /// </summary>
+    public IDisposable SuspendLookAt()
+    {
+        bool previous = EnableEyeTracking;
+        EnableEyeTracking = false;
+        if (IK != null) IK.enabled = false;
+        return new LookAtScope(this, previous);
+    }
+
+    /// <summary>Puts the setting back when the caller's sampling is over; see <see cref="SuspendLookAt"/>.</summary>
+    sealed class LookAtScope : IDisposable
+    {
+        readonly UmaContainerCharacter _container;
+        readonly bool _eyeTracking;
+        bool _disposed;
+
+        public LookAtScope(UmaContainerCharacter container, bool eyeTracking)
+        {
+            _container = container;
+            _eyeTracking = eyeTracking;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            // the component's own FixedUpdate re-enables the solver once the flag is back, so restoring the flag is
+            // the whole job - whether or not this container ever had an IK created
+            if (_container != null) _container.EnableEyeTracking = _eyeTracking;
+        }
+    }
+
     public void SetFaceOverrideData(bool isOn)
     {
         FaceOverrideData?.SetEnable(isOn);
+    }
+
+    /// <summary>The game's wet maps are named after the dry map they replace ("..._diff_wet").</summary>
+    private const string WetSuffix = "_wet";
+
+    /// <summary>Every wet texture in the database, by asset name. Built once and shared by all characters.</summary>
+    private static Dictionary<string, UmaDatabaseEntry> _wetTextures;
+
+    /// <summary>The maps a wet swap replaced, so switching back puts the original objects back.</summary>
+    private readonly List<(Material Material, string Property, Texture Dry)> _dryTextures =
+        new List<(Material, string, Texture)>();
+
+    /// <summary>Whether this character currently wears the rain texture set.</summary>
+    public bool IsWetLook { get; private set; }
+
+    /// <summary>
+    /// The rain look: the game swaps a character's maps for a separately shipped wet set when a race is rained on. The
+    /// wet textures are assets named after the dry map ("tex_bdy1001_00_diff" -> "tex_bdy1001_00_diff_wet") while the dry
+    /// ones live inside the part prefabs, so every texture slot of every material is asked whether a wet twin exists.
+    /// Minis and the few costumes without a wet set stay dry.
+    ///
+    /// <para><b>Once asked, this character owns private copies of its materials.</b> The swap walks <c>renderer.materials</c>,
+    /// which instantiates copies on first touch, so the facial driven keys (bound to the <i>shared</i> material when the
+    /// model loaded) and the material panels no longer see what renders: a morph that swaps a face texture does nothing
+    /// visible until the rain look is switched off. The copies stay even when nothing was swapped, so "asked once" is the
+    /// trigger, not "is wet"; editing the shared materials instead would repaint every character that shares them.</para>
+    /// </summary>
+    public bool SetWetLook(bool wet)
+    {
+        if (wet == IsWetLook) return IsWetLook;
+
+        if (!wet)
+        {
+            foreach (var (material, property, dry) in _dryTextures)
+            {
+                if (material) material.SetTexture(property, dry);
+            }
+
+            int restored = _dryTextures.Count;
+            _dryTextures.Clear();
+            IsWetLook = false;
+            Debug.Log($"[Wet] {restored} map(s) back to the dry set");
+            return IsWetLook;
+        }
+
+        var wetTextures = WetTextureEntries();
+        // Ask before touching a renderer: reading renderer.materials below instantiates private copies, and a mini or a
+        // costume with no wet set would pay that for every material to learn it had no work to do.
+        if (wetTextures.Count == 0)
+        {
+            Debug.Log("[Wet] the database carries no wet textures at all, staying dry");
+            return IsWetLook;
+        }
+
+        int swapped = 0;
+
+        foreach (var renderer in GetComponentsInChildren<Renderer>(true))
+        {
+            foreach (var material in renderer.materials)
+            {
+                if (!material) continue;
+
+                foreach (var property in material.GetTexturePropertyNames())
+                {
+                    var dry = material.GetTexture(property);
+                    if (!dry) continue;
+                    if (!wetTextures.TryGetValue(dry.name + WetSuffix, out UmaDatabaseEntry entry)) continue;
+
+                    var texture = entry.GetAll<Texture2D>().FirstOrDefault();
+                    if (!texture) continue;
+
+                    _dryTextures.Add((material, property, dry));
+                    material.SetTexture(property, texture);
+                    swapped++;
+                }
+            }
+        }
+
+        IsWetLook = swapped > 0;
+        Debug.Log(swapped > 0
+            ? $"[Wet] {swapped} map(s) swapped for the wet set"
+            : "[Wet] this model ships no wet textures, staying dry");
+        return IsWetLook;
+    }
+
+    private static Dictionary<string, UmaDatabaseEntry> WetTextureEntries()
+    {
+        if (_wetTextures != null) return _wetTextures;
+
+        _wetTextures = new Dictionary<string, UmaDatabaseEntry>(StringComparer.Ordinal);
+        var main = UmaViewerMain.Instance;
+        if (main == null || main.AbChara == null) return _wetTextures;
+
+        foreach (var entry in main.AbChara)
+        {
+            if (entry == null || !entry.Name.EndsWith(WetSuffix, StringComparison.Ordinal)) continue;
+            if (!entry.Name.Contains("/textures/")) continue;
+            _wetTextures[entry.Name.Substring(entry.Name.LastIndexOf('/') + 1)] = entry;
+        }
+
+        Debug.Log($"[Wet] {_wetTextures.Count} wet texture(s) available");
+        return _wetTextures;
     }
 
     private void FixedUpdate()
@@ -451,11 +817,22 @@ public class UmaContainerCharacter : UmaContainer
 
     public void UpBodyReset()
     {
-        if (UpBodyBone)
+        if (!UpBodyBone) return;
+        // Prefer the rest table, which now holds this bone: UpBodyPosition/UpBodyRotation are read in Initialize() and
+        // so record whatever pose the rig was already in - the idle starts as soon as a character loads and the look-at
+        // solve moves this very bone - which puts a session-dependent turn into anything that samples the rig.
+        //
+        // Applied as a *local* transform: in world space (SetPositionAndRotation) it snapped the bone back to its
+        // unscaled position, since the table is captured before SetHeight() scales the rig - the upper body rose by
+        // P0 * (1 - BodyScale).
+        if (InitBoneLocal != null && InitBoneLocal.TryGetValue(UpBodyBone.transform, out var rest))
         {
-            UpBodyBone.transform.localPosition = UpBodyPosition;
-            UpBodyBone.transform.localRotation = UpBodyRotation;
+            UpBodyBone.transform.localPosition = rest.pos;
+            UpBodyBone.transform.localRotation = rest.rot;
+            return;
         }
+        UpBodyBone.transform.localPosition = UpBodyPosition;
+        UpBodyBone.transform.localRotation = UpBodyRotation;
     }
 
     public void CreateIK()
@@ -745,6 +1122,11 @@ public class UmaContainerCharacter : UmaContainer
 
         //Some setting for Head
         EnableEyeTracking = UI.ModelSettings.EnableEyeTracking;
+        // Said out loud, because this is the state a recording's reference pose is built in: with it on, a recorded
+        // motion can carry the look-at solve (see docs/CLI.md). One line per model load, so the log states which
+        // build and which setting a take was made under.
+        Debug.Log($"[Uma] look-at at load: {(EnableEyeTracking ? "on" : "off")} "
+                  + $"(setting {UI.ModelSettings.EnableEyeTracking}, IK {(IK != null ? "present" : "not built yet")})");
 
         foreach (Renderer r in head.GetComponentsInChildren<Renderer>())
         {
@@ -853,16 +1235,18 @@ public class UmaContainerCharacter : UmaContainer
                             break;
                         case "Gallop/3D/Chara/ToonFace/TSER":
                             m.shader = UmaAssetManager.FaceShader;
-                            m.SetFloat("_CylinderBlend", 0.25f);
+                            // `_CylinderBlend` is deliberately *not* overridden here: the game sets the rim, toon and
+                            // saturation values at runtime (Gallop/Live/Director.cs:215-258) and never this one, so the
+                            // material asset's own value - 0 on the face - is what the game renders with, and what the
+                            // exporter has to carry: it reads this live material, so an override would reach the exported
+                            // material comment and the Blender port would shade with a value the game never uses.
                             m.SetColor("_RimColor", new Color(0, 0, 0, 0));
                             break;
                         case "Gallop/3D/Chara/ToonEye/T":
                             m.shader = UmaAssetManager.EyeShader;
-                            m.SetFloat("_CylinderBlend", 0.25f);
                             break;
                         case "Gallop/3D/Chara/ToonHair/TSER":
                             m.shader = UmaAssetManager.HairShader;
-                            m.SetFloat("_CylinderBlend", 0.25f);
                             break;
                         case "Gallop/3D/Chara/ToonMayu":
                             m.shader = UmaAssetManager.EyebrowShader;
@@ -870,7 +1254,6 @@ public class UmaContainerCharacter : UmaContainer
                             break;
                         default:
                             Debug.Log(m.shader.name);
-                            // m.shader = Shader.Find("Nars/UmaMusume/Body");
                             break;
                     }
                 }
@@ -930,11 +1313,11 @@ public class UmaContainerCharacter : UmaContainer
                 {
                     case "Gallop/3D/Chara/ToonHair/TSER":
                         m.shader = UmaAssetManager.HairShader;
-                        m.SetFloat("_CylinderBlend", 0.25f);
+                        // see the face case above: the game does not set `_CylinderBlend` at runtime, so the asset's
+                        // value is the one the exporter has to carry
                         break;
                     default:
                         Debug.Log(m.shader.name);
-                        // m.shader = Shader.Find("Nars/UmaMusume/Body");
                         break;
                 }
             }
@@ -1180,7 +1563,6 @@ public class UmaContainerCharacter : UmaContainer
 
         if (UmaAnimator)
         {
-            //Debug.Log("LiveTime" + UI.LiveTime.ToString());
             aClip.name = entry.Name; // Need a complete path to find dependencies
             LoadAnimation(aClip);
             return;
@@ -1545,7 +1927,6 @@ public class UmaContainerCharacter : UmaContainer
         var firsehead = Head;
         var faceDriven = Instantiate(firsehead.GetComponent<AssetHolder>()._assetTable["facial_target"]) as FaceDrivenKeyTarget;
 
-        //Need Instantiate or not?
         var earDriven = firsehead.GetComponent<AssetHolder>()._assetTable["ear_target"] as DrivenKeyTarget;
         var faceOverride = firsehead.GetComponent<AssetHolder>()._assetTable["face_override"] as FaceOverrideData;
 
@@ -1651,9 +2032,6 @@ public class UmaContainerCharacter : UmaContainer
             GatherSerializableBonesRecursive(current.GetChild(i), bones, depth + 1);
         }
 
-        //this can be optimized by keeping track if the bone is dynamic
-        //and generating a list of tags beforehand
-        //otherwise getComponentInParent() is called for every bone
         var bone = new SerializableBone(current, true);
         
         if(depth == 0)
@@ -1686,7 +2064,6 @@ public class UmaContainerCharacter : UmaContainer
             savedBone.Transform.ApplyTo(bone.Bone, options);
         }
 
-        //could add a 'bone not found' threshold for returning false
         return true;
     }
 
@@ -1777,10 +2154,29 @@ public class UmaContainerCharacter : UmaContainer
         {
             return;
         }
-        foreach (var pair in InitBoneTransform)
+        // Restored as *local* transforms, parents-first. Local, because the table is captured before SetHeight() applies
+        // the character's height scale, and a world restore would undo that scale for every bone in it (the upper body
+        // rose and the model came out stretched). Parents-first is explicit and cannot hurt: a local value does not
+        // depend on whether its parent has been written yet.
+        var table = InitBoneLocal ?? InitBoneTransform;
+        foreach (var pair in table
+                     .OrderBy(pair => DepthOf(pair.Key))
+                     .ToList())
         {
-            pair.Key.SetPositionAndRotation(pair.Value.pos, pair.Value.rot);
+            pair.Key.localPosition = pair.Value.pos;
+            pair.Key.localRotation = pair.Value.rot;
         }
+    }
+
+    /// <summary>How many transforms sit between <paramref name="node"/> and this container.</summary>
+    int DepthOf(Transform node)
+    {
+        int depth = 0;
+        for (var walk = node; walk != null && walk != transform; walk = walk.parent)
+        {
+            depth++;
+        }
+        return depth;
     }
 
     public List<UmaDatabaseEntry> GetAssetsList()

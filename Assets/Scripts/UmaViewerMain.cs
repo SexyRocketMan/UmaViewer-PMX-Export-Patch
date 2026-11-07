@@ -35,7 +35,7 @@ public class UmaViewerMain : MonoBehaviour
     private void Awake()
     {
         Instance = this;
-        new Config();
+        Config.Ensure();
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 120;
 
@@ -72,17 +72,24 @@ public class UmaViewerMain : MonoBehaviour
             var translationsUrl = "https://raw.githubusercontent.com/UmaTL/hachimi-tl-en/refs/heads/main/localized_data/text_data_dict.json";
             yield return UmaViewerDownload.DownloadText(translationsUrl, txt =>
             {
-                if (string.IsNullOrEmpty(txt)) return;
+                // A download that worked is kept beside Config.json, so the next start - or a machine without a
+                // working network - still has the names. Without that, a headless run silently exported the
+                // japanese name in the english name field whenever GitHub was unreachable, which is the kind of
+                // difference nobody notices until they compare two files.
+                if (string.IsNullOrEmpty(txt))
+                {
+                    LoadCachedTranslations();
+                    return;
+                }
                 try
                 {
-                    var translations = JObject.Parse(txt);
-                    //Translations[TranslationTables.Costumes] = translations[((int)TranslationTables.Costumes).ToString()].ToObject<Dictionary<int, string>>();
-                    Translations[TranslationTables.UmaNames] = translations[((int)TranslationTables.UmaNames).ToString()].ToObject<Dictionary<int, string>>();
-                    Translations[TranslationTables.MobNames] = translations[((int)TranslationTables.MobNames).ToString()].ToObject<Dictionary<int, string>>();
+                    ApplyTranslations(JObject.Parse(txt));
+                    SaveCachedTranslations(txt);
                 }
                 catch
                 {
                     UI.ShowMessage("Loading Translations failed", UIMessageType.Error);
+                    LoadCachedTranslations();
                 }
             });
         }
@@ -222,6 +229,54 @@ public class UmaViewerMain : MonoBehaviour
         //Load Shader First
         var shaders = UmaAssetManager.LoadAssetBundle(AbList["shader"], true);
         Builder.ShaderList = new List<Shader>(shaders.LoadAllAssets<Shader>()); 
+    }
+
+    /// <summary>Where the english translations are remembered between runs: beside the install's Config.json.</summary>
+    private static string TranslationCachePath()
+    {
+        // the folder the build or the project lives in, which is where Config.json is - not persistentDataPath,
+        // which a portable copy of the viewer would not carry with it
+        string folder = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+        return Path.Combine(folder, "translations_en.json");
+    }
+
+    /// <summary>Reads the cached tables back when the download did not happen. Silent when there is no cache.</summary>
+    private void LoadCachedTranslations()
+    {
+        try
+        {
+            string path = TranslationCachePath();
+            if (!File.Exists(path)) return;
+            ApplyTranslations(JObject.Parse(File.ReadAllText(path)));
+            Debug.Log($"[UmaViewer] english translations loaded from {path}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[UmaViewer] could not read the cached translations: {e.Message}");
+        }
+    }
+
+    /// <summary>Keeps the downloaded tables for the next run.</summary>
+    private void SaveCachedTranslations(string json)
+    {
+        try
+        {
+            File.WriteAllText(TranslationCachePath(), json);
+            Debug.Log($"[UmaViewer] english translations cached to {TranslationCachePath()}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[UmaViewer] could not cache the translations: {e.Message}");
+        }
+    }
+
+    /// <summary>Fills the translation tables from a parsed `text_data_dict.json`.</summary>
+    private void ApplyTranslations(JObject translations)
+    {
+        Translations[TranslationTables.UmaNames] =
+            translations[((int)TranslationTables.UmaNames).ToString()].ToObject<Dictionary<int, string>>();
+        Translations[TranslationTables.MobNames] =
+            translations[((int)TranslationTables.MobNames).ToString()].ToObject<Dictionary<int, string>>();
     }
 
     public void OpenUrl(string url)

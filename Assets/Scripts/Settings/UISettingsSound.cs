@@ -18,13 +18,58 @@ public class UISettingsSound : MonoBehaviour
     public Button PlayButton;
     public Text LyricsText;
 
+    // How many lines of a transcript the panel shows at once. A story voice sheet can carry a whole
+    // episode's worth of lines, and the panel sits over the viewport.
+    private const int TranscriptLinesShown = 12;
+
+    private string transcriptKey;
+    private string transcriptText;
+
     internal void UpdateTrack(AudioSource mianSource)
     {
         TitleText.text = mianSource.clip.name;
         ProgressText.text = string.Format("{0} / {1}", ToTimeFormat(mianSource.time), ToTimeFormat(mianSource.clip.length));
         ProgressSlider.SetValueWithoutNotify(mianSource.time / mianSource.clip.length);
-        LyricsText.text = UmaUtility.GetCurrentLyrics(mianSource.time, UmaViewerBuilder.Instance.CurrentLyrics);
-        LyricsText.text = LyricsText.text;
+
+        // A story line or a recorded character voice says what it says; only the live songs have lyrics.
+        string transcript = CurrentTranscript();
+        LyricsText.text = transcript.Length > 0
+            ? transcript
+            : UmaUtility.GetCurrentLyrics(mianSource.time, Builder.CurrentLyrics);
+    }
+
+    /// <summary>
+    /// The text of what is playing, ready for the panel: the story line the clip voices, or the master
+    /// data's line for a recorded character voice. Empty for music and sound effects, which have no text.
+    /// </summary>
+    public string CurrentTranscript()
+    {
+        UmaDatabaseEntry entry = CurrentSound;
+        if (entry == null) return "";
+
+        int index = Builder.CurrentLiveSoundAWBIndex;
+        string key = $"{entry.Name}#{index}";
+        if (key == transcriptKey) return transcriptText;
+
+        transcriptKey = key;
+        string text = index >= 0
+            ? AudioTranscripts.Format(AudioTranscripts.ForClip(entry, index))
+            : AudioTranscripts.Format(AudioTranscripts.ForAsset(entry).OrderBy(pair => pair.Key)
+                                                       .SelectMany(pair => pair.Value));
+        transcriptText = Limit(text, TranscriptLinesShown);
+        return transcriptText;
+    }
+
+    /// <summary>The sound asset the page is playing, or null.</summary>
+    private static UmaDatabaseEntry CurrentSound =>
+        Builder.CurrentLiveSoundAWB.Count > 0 ? Builder.CurrentLiveSoundAWB[0] : null;
+
+    private static string Limit(string text, int lines)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        string[] split = text.Split('\n');
+        if (split.Length <= lines) return text;
+        return string.Join("\n", split.Take(lines)) + "\n…";
     }
 
     public void PauseAudio()
@@ -67,6 +112,8 @@ public class UISettingsSound : MonoBehaviour
         ProgressText.text = "00:00:00 / 00:00:00";
         ProgressSlider.SetValueWithoutNotify(0);
         LyricsText.text = "";
+        transcriptKey = null;
+        transcriptText = null;
     }
 
     public void ExportAudio()
@@ -87,7 +134,7 @@ public class UISettingsSound : MonoBehaviour
             var path = StandaloneFileBrowser.SaveFilePanel("Save Music MP3 File", Config.Instance.MainPath, $"{TitleText.text}", "mp3");
             if (!string.IsNullOrEmpty(path))
             {
-                StartCoroutine(AudioExporter.ExportAudio(lists, path, Builder.CurrentLiveSoundAWBIndex));
+                StartCoroutine(AudioExporter.ExportAudio(lists, path, Builder.CurrentLiveSoundAWBIndex, BuildTag()));
             }
 
         }
@@ -95,6 +142,15 @@ public class UISettingsSound : MonoBehaviour
         UmaViewerUI.Instance.ShowMessage("Not supported on this platform", UIMessageType.Warning);
 #endif
     }
+
+    /// <summary>
+    /// The transcript to carry into the exported mp3, or null when the clip has no text.
+    ///
+    /// The clip the page is on decides what goes in: its own line for the title and the speaker, the story
+    /// it belongs to for the album, and the whole text (all lines, when the whole asset is being mixed)
+    /// for the lyrics frame.
+    /// </summary>
+    private AudioTranscriptTag? BuildTag() => AudioTranscripts.Tag(CurrentSound, Builder.CurrentLiveSoundAWBIndex);
 
     public void AudioProgressChange(float val)
     {

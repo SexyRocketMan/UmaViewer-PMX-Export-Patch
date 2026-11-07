@@ -1,0 +1,278 @@
+# Handoff: the advanced morphs work
+
+Everything this session built, what is settled, what is open, and how to pick it up cold. Two repositories are
+involved:
+
+| repository | branch | what it is |
+|---|---|---|
+| `C:\Users\user\Documents\dev\UmaViewer-PMX-Export-Patch` | `feat/extra-morphs` | the Unity viewer fork and its PMX exporter |
+| `C:\Users\user\AppData\Roaming\Blender Foundation\Blender\5.2\extensions\user_default\uma_addon` | `feat/morph-drivers` | the Blender addon |
+
+Current export: `C:\Users\user\Documents\umaviewer_exports\morphs\1001_nouv.pmx` (207 morphs, 27 materials, no uv
+morphs). A shaded character for inspecting the eye material lives beside it as `Special_Week_Looper.blend`.
+
+## What "advanced morphs" are, and where each one stands
+
+The game drives five facial effects outside its vertex morphs (`docs/EXTRA_MORPHS.md`). The mechanism that makes
+them portable is the **collapse + deploy morph**: every decal part is written collapsed onto one point inside the
+head (zero-area triangles, invisible) and one vertex morph per part puts it back, so MMD rests hidden and weight
+1 is the deployed part. The animated ones are carried by the add-on's material drivers, not by morphs.
+
+| effect | MMD / pmx | Blender (addon) |
+|---|---|---|
+| cheek blush | `Cheek_Blush` deploy morph, baked blush maps `<map>_blush.png` | decal material blended, no shadow, maps clipped |
+| eye manga ×4 ×2 eyes | `Manga_Star_L` … `Manga_Wide_R` deploy morphs | decal material rules |
+| `@_@` spin | nothing - no uv morphs are exported (see below) | `Spin_Speed` (turns/s) + `Spin` offset, a Vector Rotate node |
+| animated tears ×2 cards | `Tear_Pool_L/R` deploy morphs | `Tear_Scroll` (sheet frames/s) over the `scroll=` grid, a Mapping node |
+| static tears | `Tear_Static_L`, `Tear_Static_R` | decal material rules |
+| tear-eye highlights | **not in the pmx** (see below) | **in the shader library** + properties |
+
+**The uv-morph stacks are gone** (this session): `Manga_Spin_*_Turn1..7` and `<card>_Sheet1..7` were 42 of a
+character's 249 morphs and nothing in the pipeline could read them - Blender cannot animate a uv layer, which is why
+the add-on drives both effects on the material instead. The cost is that plain MMD without the add-on no longer
+animates those two decals; reasoning and measurements in `EXTRA_MORPHS.md` under "Why the export carries no UV
+morphs".
+
+**The rolling tear card is not exported either** (`Tear_Stream_L/R`): a tear that cannot roll reads as a mistake, and
+the roll is the one part of the feature still unsolved, so its morph and its `scroll=` token are gone and the card
+stays collapsed - it is simply not in the model. The wide `Tear_Pool_L/R` card stays. Reverting is two small edits
+(`TearMorphs`, `ExtraMorphGrid`), listed in `EXTRA_MORPHS.md` under "The rolling card is not exported". Character 1001
+now exports 205 morphs, all vertex: 192 ordinary + 13 deploy.
+
+Advanced morphs have their own opt-out (`Advanced morphs` scene switch, default on) and their own operator,
+`Set Up Advanced Morphs`, which runs the whole step without a Shading pass.
+
+## Shader animation: nodes or drivers, measured
+
+The eye-highlight motion used to be **drivers on the rotate sockets** (rame * ...), and the user's replacement
+animates it **inside the shader** (Scene Time -> noise -> threshold -> angle). Which is cheaper is a question worth
+answering with numbers, so it was measured on spe_configured.blend (EEVEE, 640x640, 8 samples, warm-up render per
+configuration so lazy shader compilation does not pollute the samples):
+
+| what was measured | result |
+|---|---|
+| 305 drivers on material node trees, frame stepping | **0.27 ms/frame** total (2.11 -> 1.84 without them) |
+| render, highlights animated by Scene Time + noise | 179.7 ms/frame |
+| render, the same two angles driven by `frame * 0.2618` instead | 181.5 ms/frame |
+| render, angles left static | 184.8 ms/frame |
+| 320 px -> 1280 px (16x the pixels) | 176 -> 210 ms/frame |
+| 1 -> 32 samples | 161 -> 250 ms/frame |
+| all 27 materials replaced by one flat emission | 189 -> 130 ms/frame |
+| modifiers off (armature, outline GN shell, data transfer) | 130 -> 91 ms/frame |
+| shape keys removed | 91 -> 88 ms/frame |
+
+**Conclusion: the animation source is not the cost.** Drivers are ~1 us each per frame (they are simple expressions,
+so no Python VM), and the node route moves the same work to the per-pixel path, which is why the two land within
+noise of each other. What the frame actually costs is a per-material, per-frame constant (~2 ms per material) plus
+the modifier stack, and it does *not* scale with resolution - so a framerate problem at 60 fps is materials and
+geometry, not drivers, and converting drivers to nodes buys portability rather than speed. The win that *would*
+count: don't drive the 20 appearance settings every frame (write them when the panel changes), and cut material
+instances.
+
+**Consequences shipped**: the library now animates the highlights itself, so `build_highlights` and its five `Hi_*`
+properties are gone - it had been writing drivers onto the very sockets the graph drives by link, and a linked
+socket ignores its `default_value`, which made both the drivers and the knobs inert. The library blends also moved
+beside their manifests (`operators/shaders/`), read through one resolver, `ShaderManifest.blend_path()`.
+
+**Still open on this front**: the panel does not yet expose the new knobs. A `settings` row addresses a *group
+socket* today; the highlight colours (`Color`/`Color.001`) and the tremble inputs (`NoiseGenerator`
+`TimeScale`/`Gain`/`Offset`, `SmoothThreshold` `Threshold`/`Smothness`) are nodes inside the material, so
+rows need a target like `{"node": ..., "socket": ...}`. The eyebrow "render in front of hair" trick (view-vector
+displacement, `0.05`, `displacement_method = BOTH`, measured to expose 970 brow pixels instead of 106) needs its
+own part role - `brows` -> a `Uma Brows` library material - because the brows currently match the `face` rule
+and the shared `default` template must not displace the whole body.
+## The highlights: what is settled, what is not
+
+**Settled** (documented in `docs/UMA_EYE_SHADER.md`, which is the document to read first):
+
+- the game composites **three** highlight maps (`eyehi00/01/02`) over the eye; the viewer's own eye shader is
+  static, the game's is not
+- the decompiled game eye shader (`croakfang/UmaMusumeMME`, `UMA_Eye.fx`) shows the highlight UV is rotated per
+  layer about a centre (`uv - 0.5 + param.xy`, `sincos(param.z)`), and each layer is **thresholded**
+  (`tex.r * intensity - _Limit`, `saturate`) and added — not alpha blended
+- in Blender the threshold is two `GREATER_THAN` nodes at **0.5** fed by `eyehi00`/`eyehi01`; the third layer has
+  no threshold (matching `_HighParam1[2].w = 0`)
+- **in-engine footage says the teary state is that threshold dropping** (highlights grow), possibly with a
+  wobble on the value. There is no intro swirl. The rotation machinery exists but is not what the teary state
+  does.
+
+**Not settled** — the two numbers the game keeps in its own code: how far `_Limit` drops, and the wobble's rate
+and amplitude. Also unknown: whether the shipped `charactertooneyet.shader` differs from the MME port.
+
+**Where the controls are**: `MorphDrivers.build_highlights()` creates `Hi_Limit` (0.5), `Hi_Throb` (0),
+`Hi_Jitter_Rate`, plus the rotation path (`Hi_Swirl`, `Hi_Jitter`, defaulted to 0) on the character root empty,
+and drives the threshold nodes and the `UMA Hi N` rotate nodes.
+
+**The shader libraries are patched, deliberately**: `operators/Umashaders-0.2.6.blend` (`Uma Eyes`, three
+`UMA Hi 0..2` rotate nodes) and `operators/SporkShaders.blend` (`Spork Eye`, two). They carry **no drivers** —
+the motion is the addon's. `Tools/patch_eye_masters.py` re-applies the nodes (backs each library up as `.bak`
+first, skips an already-patched file). If a shader update ever lands, re-run it.
+
+## The shipped shader's values: measured, and what is left
+
+`Tools/headless_export.ps1 -DumpShaders` **is wired and has been run** (the call sits in the Export stage right
+after the `ProbeMorphs` block; the prompt for it is:
+
+```powershell
+.\Tools\headless_export.ps1 -Char 1001 -Costume 00 -DumpShaders -Out C:\tmp\x.pmx
+```
+
+A run prints `[shaders]` lines to the log and, since the display filter includes them, to the console. It prints
+the **whole** property list of the loaded eye/face/cheek materials rather than a guessed subset, then
+`chara_shader_effect`, then a scan for material animation curves.
+
+This is the game's own data, not a port's: `UmaContainerCharacter` swaps the material's shader for the shipped
+compiled shader out of `shader.a` (`UmaAssetManager.EyeShader`), so names, ranges and values are real. What was
+learned is written up in `docs/UMA_EYE_SHADER.md` under "Measured". In short:
+
+* `_Limit` is real, is **one** scalar, and the normal value is **0.5** (the MME port declares 0.1).
+* The shipped shader has **no** `_HighParam*`/`_MainParam*` — those are the port's own interface. So "the third
+  layer has no threshold" was describing the port, and the 0.5 the addon thresholds at was right.
+* There is a `_WetTex`/`_WetRate` pair on the eye that nothing in this repository uses, and 8128 asset names
+  contain `wet` (every texture has a wet variant — the rain/wet look). Separating "wet look" from "tears" is
+  the first thing to settle before using this as the tear lead.
+* `chara_shader_effect` is `none` on both head and body for 1001, so `CharaShaderEffectData` (the
+  `_UVEmissiveScroll` driver, the animated-tear mechanism) is not where the highlight numbers live for her.
+* The first motion scan sampled 8 `campaign/bg` bundles (7 clips, 0 material curves) — a useless sample, because
+  alphabetical order starts at campaign backgrounds. It now selects character motions (`chara` in the name) and
+  logs each bundle's clip count, so the next run actually tests the character side.
+
+**The decision this was meant to inform:** the material has now given everything a material can give. A material
+asset carries static values only, so nothing in it drops `_Limit` in the teary state — that is code
+(`MaterialPropertyBlock`, the pattern the viewer's own `Director.cs` uses for rim) or a keyed animation. And the
+decompile route is confirmed blocked: there is **no `global-metadata.dat`** anywhere under
+`C:\Users\user\Umamusume` (only `GameAssembly.dll`, 179 MB, and `il2cpp_data\Resources`), so the IL2CPP metadata
+needed to name the method that sets `_Limit` is simply absent. AssetStudio/AssetRipper over the material and
+animation bundles stays the next tool — still not installed.
+
+A reminder on what a shipped shader can and cannot give: the game's shaders are *compiled* assets in `shader.a`;
+properties and defaults are readable, **source is not**. The decompile remains the source of truth for logic.
+
+## Known gaps and next steps, in order
+
+1. **DONE — the `-DumpShaders` call site is wired and run.** See "The shipped shader's values" above for what it
+   found. The AssetStudio question is answered as far as this tool can answer it: the material holds nothing
+   more, and the IL2CPP route is confirmed blocked (no `global-metadata.dat`).
+2. **DONE — the `Hi_*` rows are in the Morphs panel** (`Morphs` panel, an "Eye highlights" box: `Hi_Limit`,
+   `Hi_Throb`, `Hi_Swirl`, `Hi_Jitter`, `Hi_Jitter_Rate`, with a single info row when the step has not been run).
+3. **Next real question: what sets `_Limit` in the teary state?** Three cheap candidates, cheapest first:
+   (a) a facial morph binding the property — `-ProbeMorphs` prints every `OtherMorphs` bind with its
+   `property=` name, so grep that log for `_Limit`/`_Wet`/`_High`; (b) a material animation curve — the motion
+   scan says no for 8 character motions, so this needs a wider or targeted sample before it is called dead;
+   (c) code. Also worth a look, independent of tears: **`_WetTex` has no matching texture anywhere** — there are
+   0 asset names containing both `wet` and `eye`, while face/hair/body have thousands — so whatever the game
+   assigns to it is not part of the wet-texture-variant system and is worth identifying on its own.
+4. **Normals donor retained morphs** (parked by the user, design agreed): the static face copy used for the
+   normal transfer should *keep* selected shape keys (`Eye_EyeHideA_L/_R` first) and drive them from the real
+   face's keys, instead of masking the transfer. The Vertex Group field of the Data Transfer modifier does not
+   mask normal transfers. Hooks: `FaceNormals.split_face_into_object`, `prune_dead_shape_keys`,
+   `remove_shape_keys`.
+5. **Parked deliberately**: `Shade_Ctrl` (`_faceShadowAlpha`; needs the face-region port to have an input),
+   vmd/recording of the advanced morphs (the sampler design is in `EXTRA_MORPHS.md`, judged not worth it yet),
+   eye-highlight UV morphs in the pmx (superseded by the shader route), the `@_@` turn and tear-sheet uv morphs
+   (removed this session - the add-on drives both on the material, so they were 42 unused sliders), and **the tear
+   card's roll** - it was built, verified and then taken back out: twelve morphs for one effect, animated only by an
+   addon-side crossfade, so in plain `mmd_tools` it is dead weight. The measurement and the reason are in
+   `EXTRA_MORPHS.md` under "Shelved: exporting the roll"; if it is ever revisited, the carrier to use is bones plus
+   a VMD, not morphs.
+6. **Robustness pass, in progress.** A reviewer's audit of both repositories is in
+   `C:\tmp\pipeline_robustness_review.md` (not in the repo - copy it in if it is still wanted after a reboot). What
+   it found and what has been fixed since:
+   * **fixed** - the two export switches now each govern their own feature: `PmxExtraMorphs = false` stops the tears
+     being written at all (they used to ship collapsed and undeployable) and `PmxUmaMaterialFields = false` no longer
+     drops the `morph=`/`blend=`/`scroll=` tokens, which belong to the morphs and not to the shader values;
+     `-NoExtraMorphs` exposes the switch in the headless runner;
+   * **fixed** - decals did not follow the head at all (a decal is a *child* of a bone, so `bones.IndexOf(...)` was
+     -1, and the tear card's joints are not pmx bones so its skin indices resolved to 0); morphs renamed
+     `<feature>_<what it does>_<side>` with the old spelling still accepted; duplicate tear cards deduplicated on
+     geometry; the panel finds the character from any selected part (root, mesh, armature, the separated face);
+     `report_export` and the deploy rows look at every mesh rather than the first; the advanced-morph step runs
+     *after* the materials exist, so eye highlights work on the first Shading run; each character's drivers are
+     scoped to her own materials and claimed once; the pmx index widths are computed instead of hardcoded to 2
+     bytes; `FindHeadBone` matches loosely and warns; a failed export puts the model back (try/finally); a Shading
+     run covers every mesh of the character, skips a bad slot instead of aborting mid-way, and re-verifies the
+     shader control afterwards.
+   * **investigated, not a bug on 5.2** - "a driven shape key loses its driver when the face is separated". Measured
+     two ways: a plain `frame * 0.01` driver on an eye key survives the split and still evaluates (0.370 at frame
+     37, before and after), and a driver whose variable reads a key of its *own* Key follows the *piece's* key, not
+     the other piece's - so `mesh.separate` carries and re-points driver data correctly on Blender 5.2. The add-on
+     keeps a cheap check instead (report any driver that does not resolve, right after the split); a repair was
+     written, A/B-tested, found to change nothing, and taken back out.
+   * **fixed** - the exporter wrote coordinates transferred into the model's frame but normals copied raw out of the
+     mesh, so a part whose transform is not the identity had its geometry and its shading in two different frames
+     (invisible while every transform is identity, which is why the reference character looked fine). Both paths now
+     transform the normal the same way the position goes and normalise it - the chain is not scale-free, and without
+     the normalise every normal came out 0.9829 long instead of 1.0000. Skinning can collapse a vertex, and a
+     collapsed normal bakes as zero (24 on 1001), so those fall back to the rest pose's normal. Measured on 1001:
+     only the skinned body changes (2206 of 14492 vertices, every other part byte-identical), and it agrees with its
+     own geometry better than before (mean dot 0.86 → 0.89; 1976 vertices improved against 204 that moved away from
+     the triangle-plane normal at sharp features). A mesh that fails to read no longer advances `baseShift`, so one
+     unreadable part cannot misalign every material after it.
+   * **fixed** - the pre-4.2 driver builder in `MorphDrivers.py` is gone: `build`, `verify`, `build_material_visibility`
+     and `build_cheek` had no callers since the deploy shape keys replaced them, and they were the only code touching
+     `material.blend_method`, which was removed in Blender 4.2 - so they could not have run even if called. Their
+     private helpers, the two bind-type tuples and the three parsers only they used went with them (483 lines).
+     `setup_advanced_morphs` is untouched, and a Shading run on 1001 still builds spin 2 / tear scroll 16 /
+     highlight 3 drivers, 11 deploy rows and 4 tear cards.
+   * **still open** - `Alt+D` duplicates share one set of drivers (they share the *material*, which is where the
+     drivers live, so this is inherent rather than a bug - the honest options are a warning or leaving it). The
+     `@_@` spin's absolute direction is no longer a pmx question at all: with the uv-morph stack removed the turn is
+     entirely the add-on's driver, so if it ever looks like it turns the wrong way, the fix is that driver's sign and
+     nothing in the file. The static face copy being keyed on the face object's *name* was the other entry here and
+     is now handled: a copy whose marker names an object that has gone, and whose topology still matches, is re-tagged
+     instead of duplicated (A/B measured: one copy before and after a rename).
+   * **the pooled tear card "moving forward"** - not reproducible in the *coordinates*: the card's absolute position is
+     identical in every export from `morphs13` (when the tears appeared) through `morphs33`
+     (`Y 17.405…17.587`, `Z −0.468…−0.455`), and its drawing state is identical too (BLENDED, no culling, repeat,
+     same texture). The card that used to be weighted to bone 0 now follows the head, so a decal that was previously
+     stuck in the wrong place is visible where it belongs - that is the most likely explanation for the change in
+     appearance. **But the lift itself was wrong, and is now fixed**: it moved every decal along the *radius from the
+     head bone* rather than off its own surface, so each part was slid sideways across the face (up to 0.092 in the
+     file's units) and got a clearance that depended on its angle instead of a constant one. Measured before and
+     after on the same model: clearance was `0.039 … 0.063` per part, with sideways travel `0.040 … 0.092`; it is now
+     `0.061 … 0.071` for every part with sideways travel `0.000001`. The lesson worth keeping: an offset is only
+     clearance along the normal, and it must be a *fraction* of something (the export has no physical unit - the head
+     bone reads 1.34 in the exporter and 16.79 in the file, 12.5x), which is why an absolute "0.063" pushed every
+     decal 0.79 clear of the face on the first attempt.
+7. **Merges**: `feat/morph-drivers` → addon `main`, `feat/extra-morphs` → integration. Two unrelated dirty
+   file sets in the fork (rain/wet look, VMD loop lead-in) belong to the user.
+
+## Pitfalls that cost time this session
+
+* **Panel `bl_idname` collision**: a new panel taking an existing `SCENE_PT_umaaddonpanel5` silently ate the
+  shading panel. New panels use their own id (`SCENE_PT_umaaddonpanel_morphs`).
+* **`Tools/headless_export.ps1` echoes only what its allowlist matches.** New `Debug.Log` prefixes are invisible
+  on the console even when the run succeeds — the `[shaders]` lines were there in the log all along. Add the
+  prefix to the `Select-String` pattern at the bottom of the script, or grep the log file.
+* **PowerShell here-string replacements fail silently** on these files (line endings), and one of them truncated
+  `ModelExporter.cs` to zero bytes. Prefer a small Python script with `assert` on every anchor, or the `edit`
+  tool; check `Get-Item … Length` after a scripted write.
+* **Scripted insertion inside a method body** (inserting a method after a signature line, or a call between an
+  `if` and its `{`) compiles into nonsense — insert *before* the doc comment, or after the whole block.
+* **The stale-bake trap**: derived textures (`<map>_blush.png`, `<map>_mask.png`) are written into the shared
+  `Texture2D/` folder and must be **rewritten every export**, or an older bake ships. Nothing is baked any more
+  (both `BakeBlush` and `BakeHighlight` are gone, and the pmx names no derived file), but the trap returns with
+  the first derived texture that comes back.
+* **`bmesh.ops.duplicate`** with faces+verts+edges in `geom` throws; pass faces only.
+* **mmd_tools and UV morphs**: they import (`mmd_root.uv_morphs`, as vertex groups) and can be viewed/applied by
+  the UV Morph operators, but they never deform on their own — Blender cannot animate a UV layer. That is the reason
+  this export carries no uv morphs at all (see "Why the export carries no UV morphs" in `EXTRA_MORPHS.md`).
+
+## Shader library side
+
+The shading work has its own handoff: `docs/HANDOFF_SHADER_LIBRARY.md` - the library blends now sit beside their
+manifests, the eye-highlight motion animates inside the library, and it records the nodes-vs-drivers measurements, the
+open items (brows role, panel rows, Spork's new version, decal lighting, the face donor) and the pending decisions.
+## Fast orientation
+
+* `docs/EXTRA_MORPHS.md` — the game-side inventory, the deploy-morph idiom, the tear scroll, the open questions
+* `docs/PMX_EXTENSIONS.md` — the comment grammar and the deploy/UV morph tables
+* `docs/UMA_EYE_SHADER.md` — the eye shader ground truth, uniforms and maths
+* `docs/MORPHS.md` — the original analysis of the five non-vertex morphs
+* `ModelExporter.cs`: `DeployMorphs`, `SpinMorphs`, `TearMorphs`, `MorphPartRenderers`, `MorphPartTextures`
+  (no bake of any kind any more: `BakeBlush` and `BakeHighlight` were both removed, the cheek keeps the game's map
+  and the highlight maps are thresholded by the consumer)
+* addon `MorphDrivers.py`: `decal_materials`, `build_spin`, `build_tear_scroll`, `build_highlights`,
+  `setup_advanced_morphs`, `report_export`
+
+

@@ -3,29 +3,42 @@
     Export a PMX model, a VMD motion, or prop/scene info from UmaViewer without the GUI.
 
 .DESCRIPTION
-    Drives Assets/Editor/UmaHeadlessExport.cs through Unity in batch mode: the viewer scene is
-    opened, its normal startup runs in play mode, then the requested asset is loaded and exported
-    exactly like the in-app buttons do - just without any clicking.
+    Drives Assets/Scripts/Cli/UmaHeadlessExport.cs through Unity in batch mode: the viewer scene is opened, its
+    normal startup runs in play mode, then the requested asset is loaded and exported exactly like the in-app
+    buttons do. The model's extension picks the writer (PMX or FBX); -DryRun prints the argument vector and
+    launches nothing. Exits 1 when the log has no result marker or a FAILED one, 0 otherwise.
 
 .EXAMPLE
     ./Tools/headless_export.ps1 -ListChars
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -Out D:/out/1001_00.pmx
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_rac_type01_run02_stride -RecordVmd D:/out/run.vmd
-    # let a one shot animation run to its end first, the state the viewer is in when a user records
-    # after the animation finished (batch mode alone gets nowhere near the end of the clip)
+    # let a one shot animation run to its end first, the state a recording is made in; batch mode alone gets
+    # nowhere near the end of the clip
     ./Tools/headless_export.ps1 -Char 1001 -Motion anm_res_chr1001_001 -PlaySeconds 8 -RecordVmd D:/out/res.vmd
     # write plain pre-2.6 materials (no uma shader data in each material comment)
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -PlainMaterials -Out D:/out/plain.pmx
     # the game's own render of the face, as the baseline to compare a Blender shading setup against
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -Screenshot D:/out/game_face.png -ShotOnly
-    # ... and the same view from several angles, which is what shading has to hold up under
+    # the same view from several angles, which is what shading has to hold up under
     ./Tools/headless_export.ps1 -Char 1001 -Costume 00 -ShotView face -ShotYaws 0,45,-45,90 `
         -Screenshot D:/out/game_face.png -ShotOnly
     ./Tools/headless_export.ps1 -ListProps home10001
+    # what the ten 3d/chara families hold and what their prefabs are called - manifest names only, so this
+    # opens no bundle and downloads nothing. The filter needs its own parameter, exactly like -ListProps:
+    # after a [switch] the next bare word binds positionally to -Char
+    ./Tools/headless_export.ps1 -ListFamilies
+    ./Tools/headless_export.ps1 -ListFamilies -ListFamiliesFilter richprop
+    # wear a character's attachments and hold its toon props: -Attach is an array, so several go comma
+    # separated - "-Attach a -Attach b" is a binding error, not two entries
+    ./Tools/headless_export.ps1 -Char 1048 -Costume 00 -Attach pfb_attach1048_00_0001_00,pfb_toon_prop1048_00 `
+        -Out D:/out/worn.pmx
+    # export every matching scene in one editor run, and report the ones that fail
+    ./Tools/headless_export.ps1 -ScanProps "3d/env/race" -ScanCount 40 -ScanExport -ScanOut D:/scan
     ./Tools/headless_export.ps1 -Prop pfb_env_home10001_main000_000 -DumpMaterials -Variant 214 -Out D:/out/home.pmx
 #>
 [CmdletBinding()]
 param(
+
     [int]$Char = -1,
     [string]$Costume = "",
     [string]$Out = "",
@@ -37,16 +50,58 @@ param(
     [switch]$ListCostumes,
     [switch]$ListProps,
     [string]$ListPropsFilter = "",
+    [switch]$ListTextures,
+    [string]$ListTexturesFilter = "",
+    [switch]$ListFamilies,
+    [string]$ListFamiliesFilter = "",
     [string]$ScanProps = "",
     [int]$ScanCount = 10,
+    [switch]$ScanExport,
+    [string]$ScanOut = "",
+    # export every prop into its own folder, with index.json: the dump a web viewer reads
+    [string]$DumpProps = "",
+    [string]$DumpPropsFilter = "",
+    [int]$DumpPropsCount = 0,
+    [string]$Transcript = "",
+    [string]$ExportAudio = "",
+    [int]$ExportClip = 0,
     [switch]$DumpMaterials,
+[switch]$DumpFace,
+    [switch]$ProbeMorphs,
+    [switch]$ProbeTears,
+    [switch]$DumpShaders,
+    # the harness's own explanations: what the flags are, and what this build is
+    [switch]$Help,
+    [switch]$About,
+    # batches: one boot, many models (docs/CLI.md)
+    # the dump a browser reads: characters and props, one index.json, shared textures
+    [string]$DumpModels = "",
+    [int]$DumpModelsCount = 0,
+    # start this many models into the plan, so several viewers can split the dump between them
+    [int]$DumpModelsSkip = 0,
+    [switch]$DumpModelsChars,
+    [switch]$DumpModelsProps,
+    [switch]$Packs,
+    [switch]$Thumbs,
+    [int]$ThumbSize = 0,
+    [switch]$Refresh,
+    [switch]$AllCostumes,
+    [switch]$AllChars,
+    [double]$BootTimeout = 0,
+    # the harness's machine readable result line; the double-dash flags are the harness's own
+    [switch]$Json,
     [string]$RecordVmd = "",
     [int]$RecordFps = 30,
     [int]$RecordReduction = 0,
     [ValidateSet("deterministic", "realtime")][string]$RecordMode = "deterministic",
     [int]$MorphNameMode = -1,
     [switch]$APose,
+    [string[]]$Attach = @(),
     [switch]$PlainMaterials,
+    [switch]$NoExtraMorphs,
+    [switch]$TextureVariants,
+    [ValidateSet("on", "off", "config")][string]$Refine = "config",
+    [ValidateSet("on", "off", "config")][string]$EmbedTextures = "config",
     [string]$Screenshot = "",
     [ValidateSet("face", "head", "upper", "full")][string]$ShotView = "full",
     [int]$ShotWidth = 1280,
@@ -54,6 +109,11 @@ param(
     [double]$ShotYaw = 0,
     [string]$ShotYaws = "",
     [string]$ShotAzimuths = "",
+[string]$ShotTexture = "",
+[string]$ShotGlobal = "",
+[string]$ShotFloat = "",
+[double]$PinPose = -1,
+[string]$ShotMaterial = "",
     [double]$ShotLightElevation = -1,
     [switch]$ShotTransparent,
     [switch]$ShotOnly,
@@ -62,7 +122,8 @@ param(
     [double]$PlaySeconds = 0,
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
     [string]$UnityExe = "",
-    [string]$LogPath = ""
+    [string]$LogPath = "",
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -100,9 +161,8 @@ function Clear-StaleUnityLock {
 
 function Wait-UnityExit {
     <#
-      Unity's launcher returns (and the runner writes its result) before the editor process has fully
-      released the project. Starting the next run while that is still happening fails with "project
-      already open in another instance", so wait for it when chaining exports.
+      Unity's launcher returns (and the runner writes its result) before the editor process has fully released
+      the project, so starting the next run too early fails with "project already open in another instance".
     #>
     param([string]$Project, [int]$Seconds = 120)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -116,15 +176,17 @@ function Wait-UnityExit {
     return $false
 }
 
-if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
-if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
-Clear-StaleUnityLock -Project $ProjectPath
+if (-not $DryRun) {
+    if (-not $UnityExe) { $UnityExe = Find-UnityExe -Project $ProjectPath }
+    if (-not (Test-Path $UnityExe)) { throw "Unity not found at $UnityExe" }
+    Clear-StaleUnityLock -Project $ProjectPath
+}
 
-$doingSomething = $ListChars -or $ListCostumes -or $ListProps -or $ScanProps -or $Char -ge 0 -or $Prop -or $RecordVmd
+$doingSomething = $Help -or $About -or $DumpModels -or $Refresh -or $AllCostumes -or $AllChars -or $DumpProps -or $ListChars -or $ListCostumes -or $ListProps -or $ListTextures -or $ListFamilies -or $ScanProps -or $Transcript -or $ExportAudio -or $Char -ge 0 -or $Prop -or $RecordVmd
 if (-not $doingSomething) {
     throw "Nothing to do: pass -Char <id>, -Prop <path>, -RecordVmd <path>, or a -List* switch."
 }
-if (-not $LogPath) {
+if (-not $LogPath -and -not $DryRun) {
     $logDir = Join-Path $ProjectPath "Logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $LogPath = Join-Path $logDir ("headless_export_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
@@ -154,28 +216,102 @@ if ($ListProps) {
     $arguments += "-umaListProps"
     if ($ListPropsFilter) { $arguments += $ListPropsFilter }
 }
+if ($ListTextures) {
+    $arguments += "-umaListTextures"
+    if ($ListTexturesFilter) { $arguments += $ListTexturesFilter }
+}
+if ($ListFamilies) {
+    $arguments += "-umaListFamilies"
+    if ($ListFamiliesFilter) { $arguments += $ListFamiliesFilter }
+}
 if ($ScanProps) {
     $arguments += @("-umaScanProps", $ScanProps, "-umaScanCount", $ScanCount)
+    if ($ScanExport) { $arguments += "-umaScanExport" }
+    if ($ScanOut) {
+        New-Item -ItemType Directory -Force -Path $ScanOut | Out-Null
+        $arguments += @("-umaScanOut", (Resolve-Path $ScanOut).Path)
+    }
 }
+if ($DumpProps) {
+    $arguments += @("-umaDumpProps", $DumpProps)
+    # both are optional: an empty string would be dropped by PowerShell and the next switch taken as its value
+    if ($DumpPropsCount -gt 0) { $arguments += @("-umaDumpPropsCount", $DumpPropsCount) }
+}
+# a model dump takes the same filter
+if ($DumpPropsFilter -and ($DumpProps -or $DumpModels)) {
+    $arguments += @("-umaDumpPropsFilter", $DumpPropsFilter)
+}
+if ($Transcript) { $arguments += @("-umaTranscript", $Transcript) }
+if ($ExportAudio) { $arguments += @("-umaExportAudio", $ExportAudio, "-umaExportClip", $ExportClip) }
 if ($DumpMaterials) { $arguments += "-umaDumpMaterials" }
+if ($DumpFace) { $arguments += "-umaDumpFace" }
+    if ($ProbeMorphs) { $arguments += "-umaProbeMorphs" }
+    if ($ProbeTears) { $arguments += "-umaProbeTears" }
+    if ($DumpShaders) { $arguments += "-umaDumpShaders" }
 if ($RecordVmd) { $arguments += @("-umaRecordVmd", $RecordVmd) }
 if ($RecordFps -gt 0) { $arguments += @("-umaRecordFps", $RecordFps) }
 if ($RecordReduction -gt 0) { $arguments += @("-umaRecordReduction", $RecordReduction) }
 if ($RecordMode) { $arguments += @("-umaRecordMode", $RecordMode) }
 if ($MorphNameMode -ge 0) { $arguments += @("-umaMorphNameMode", $MorphNameMode) }
 if ($APose) { $arguments += "-umaAPose" }
+# one -umaAttach per pattern, on the character, before anything is measured
+foreach ($pattern in $Attach) { if ($pattern) { $arguments += @("-umaAttach", $pattern) } }
 if ($PlainMaterials) { $arguments += "-umaPlainMaterials" }
+if ($NoExtraMorphs) { $arguments += "-umaNoExtraMorphs" }
+if ($TextureVariants) { $arguments += "-umaTextureVariants" }
+if ($Refine -ne "config") { $arguments += @("-umaRefine", ($Refine -eq "on")) }
+if ($EmbedTextures -ne "config") { $arguments += @("-umaEmbedTextures", ($EmbedTextures -eq "on")) }
 if ($Screenshot) {
     $arguments += @("-umaScreenshot", $Screenshot, "-umaShotView", $ShotView,
                     "-umaShotWidth", $ShotWidth, "-umaShotHeight", $ShotHeight)
-    if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
+    if ($PinPose -ge 0) { $arguments += @("-umaPinPose", $PinPose) }
+if ($ShotMaterial) { $arguments += @("-umaShotMaterial", $ShotMaterial) }
+if ($ShotYaws) { $arguments += @("-umaShotYaws", $ShotYaws) }
     if ($ShotAzimuths) { $arguments += @("-umaShotAzimuths", $ShotAzimuths) }
+foreach ($entry in ($ShotGlobal -split ';')) {
+    if ($entry.Trim()) { $arguments += @("-umaShotGlobal", $entry.Trim()) }
+}
+foreach ($entry in ($ShotFloat -split ';')) {
+    if ($entry.Trim()) { $arguments += @("-umaShotFloat", $entry.Trim()) }
+}
+# one string split here, not an array: passing a [string[]] through `pwsh -File` delivers the whole
+# array as a single quoted argument, quotes included
+foreach ($entry in ($ShotTexture -split ';')) {
+    if ($entry.Trim()) { $arguments += @("-umaShotTexture", $entry.Trim()) }
+}
+    # the camera angle and the light height are independent: the editor side reads -umaShotYaw for the
+    # camera and -umaShotLightElevation to rebuild the light's direction, so both are always passed
+    $arguments += @("-umaShotYaw", $ShotYaw)
     if ($ShotLightElevation -ge 0) { $arguments += @("-umaShotLightElevation", $ShotLightElevation) }
-    else { $arguments += @("-umaShotYaw", $ShotYaw) }
     if ($ShotTransparent) { $arguments += "-umaShotTransparent" }
     if ($ShotOnly) { $arguments += "-umaShotOnly" }
 }
 if ($PlaySeconds -gt 0) { $arguments += @("-umaPlaySeconds", $PlaySeconds) }
+
+if ($Json) { $arguments += "--json" }
+if ($DumpModels) {
+    $arguments += @("-umaDumpModels", $DumpModels)
+    if ($DumpModelsCount -gt 0) { $arguments += @("-umaDumpModelsCount", $DumpModelsCount) }
+    if ($DumpModelsSkip -gt 0) { $arguments += @("-umaDumpModelsSkip", $DumpModelsSkip) }
+    if ($DumpModelsChars) { $arguments += "-umaDumpModelsChars" }
+    if ($DumpModelsProps) { $arguments += "-umaDumpModelsProps" }
+    if ($Packs) { $arguments += "-umaPacks" }
+if ($Thumbs) { $arguments += "-umaThumbs" }
+if ($Refresh) { $arguments += "-umaRefresh" }
+if ($ThumbSize -gt 0) { $arguments += @("-umaThumbSize", $ThumbSize) }
+}
+if ($AllCostumes) { $arguments += "-umaAllCostumes" }
+if ($AllChars) { $arguments += "-umaAllChars" }
+if ($BootTimeout -gt 0) { $arguments += @("-umaBootTimeout", $BootTimeout) }
+if ($Help) { $arguments += "--help" }
+if ($About) { $arguments += "--about" }
+if ($DryRun) {
+    # one per line, so a value that happens to contain spaces is still one value to whoever reads it
+    $arguments | ForEach-Object { Write-Output $_ }
+    return
+}
+
+Write-Verbose ("arguments: " + ($arguments -join " "))
 
 Write-Host "Unity  : $UnityExe"
 Write-Host "Project: $ProjectPath"
@@ -185,13 +321,16 @@ Write-Host ""
 & $UnityExe @arguments | Out-Null
 $launcherExit = $LASTEXITCODE
 
-# Unity's launcher process can exit before the editor it spawned has finished, so the process exit
-# code is not proof of anything: wait for the runner's own result marker in the log instead.
+# Unity's launcher process can exit before the editor it spawned has finished, so the process exit code is
+# not proof of anything: wait for the runner's own result marker in the log instead.
+#
+# Only the *terminal* marker counts, which is why the pattern is anchored: a sweep logs `[7] name: exported
+# (...)` and `[8] name: FAILED: ...` per prop, and matching one of those would stop the wait at the first prop.
 $marker = $null
 $deadline = (Get-Date).AddSeconds($Timeout + 120)
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $LogPath) {
-        $marker = Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\] (OK|FAILED)" -ErrorAction SilentlyContinue |
+        $marker = Select-String -Path $LogPath -Pattern "^\[UmaHeadlessExport\] (OK\s*$|FAILED)" -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($marker) { break }
     }
@@ -199,7 +338,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (Test-Path $LogPath) {
-    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]" |
+    Select-String -Path $LogPath -Pattern "\[UmaHeadlessExport\]|\[VMD\]|\[UmaEnvTextureSet\]|\[UISettingsModel\]|\[shaders\]|\[tears\]|\[attach\]" |
         Where-Object { $_.Line -notmatch "StackTraceUtility|DebugLogHandler|Logger:Log|Debug:Log" } |
         ForEach-Object { $_.Line.Trim() }
 }
@@ -216,6 +355,6 @@ if ($marker.Line -match "FAILED") {
     exit 1
 }
 
-# leave the project free for the next run in a chain (run_workflow.ps1 starts several)
+# leave the project free for the next run in a chain
 [void](Wait-UnityExit -Project $ProjectPath)
 exit 0

@@ -122,9 +122,17 @@ public class UmaViewerUI : MonoBehaviour
 
     public FaceDrivenKeyTarget currentFaceDrivenKeyTarget;
 
+    private UIShortcuts shortcuts;
+
     private void Awake()
     {
         Instance = this;
+
+        // Built here, in Awake, because the command line takes over in `RuntimeInitializeOnLoadMethod(AfterSceneLoad)`
+        // - after Awake, before any Start - so a shortcut list built in Start would be missing from every CLI run,
+        // which is where the binding log is checked. The config is therefore created on first use
+        // (Config.Ensure) rather than depending on which component's Awake happens to run first.
+        shortcuts = new UIShortcuts(this);
     }
 
     private void Start()
@@ -162,6 +170,8 @@ public class UmaViewerUI : MonoBehaviour
 
     private void Update()
     {
+        shortcuts?.Update();
+
         if (Builder.CurrentAudioSources.Count > 0 && Builder.CurrentAudioSources[0])
         {
             AudioSource MianSource = Builder.CurrentAudioSources[0];
@@ -191,7 +201,8 @@ public class UmaViewerUI : MonoBehaviour
         foreach (var t in mainObject.GetComponentsInChildren<UmaUIContainer>())
         {
             if (t.transform.parent != mainObject) continue;
-            t.ToggleImage.enabled = (t == child);
+            // the container the paged lists share has no highlight image of its own
+            if (t.ToggleImage) t.ToggleImage.enabled = (t == child);
         }
     }
 
@@ -227,6 +238,7 @@ public class UmaViewerUI : MonoBehaviour
 
             var container3 = Instantiate(UmaContainerPrefab, CharactersList.content).GetComponent<UmaUIContainer>();
             container3.Name = container3.name = chara.Id + " " + chara.GetName();
+            container3.Keywords = CharaSearchText(chara);
             container3.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(CharactersList.content, container3);
@@ -241,6 +253,7 @@ public class UmaViewerUI : MonoBehaviour
 
             var container4 = Instantiate(UmaContainerPrefab, AnimationSetList.content).GetComponent<UmaUIContainer>();
             container4.Name = container4.name = chara.Id + " " + chara.GetName();
+            container4.Keywords = container3.Keywords;
             container4.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(AnimationSetList.content, container4);
@@ -261,6 +274,7 @@ public class UmaViewerUI : MonoBehaviour
             var pageentry = new PageManager.Entry();
 
             pageentry.Name = chara.GetName();
+            pageentry.Keywords = CharaSearchText(chara);
             pageentry.OnClick = (container) =>
             {
                 HighlightChildImage(MobCharactersList.content, container);
@@ -290,6 +304,7 @@ public class UmaViewerUI : MonoBehaviour
             var charaInstance = chara;
             var container2 = Instantiate(UmaContainerPrefab, MiniCharactersList.content).GetComponent<UmaUIContainer>();
             container2.Name = container2.name = chara.Id + " " + chara.GetName();
+            container2.Keywords = CharaSearchText(chara);
             container2.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(MiniCharactersList.content, container2);
@@ -304,6 +319,7 @@ public class UmaViewerUI : MonoBehaviour
 
             var container3 = Instantiate(UmaContainerPrefab, MiniAnimationSetList.content).GetComponent<UmaUIContainer>();
             container3.Name = container3.name = chara.Id + " " + chara.GetName();
+            container3.Keywords = CharaSearchText(chara);
             container3.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(MiniAnimationSetList.content, container3);
@@ -515,6 +531,14 @@ public class UmaViewerUI : MonoBehaviour
     public void LoadNormalSoundPanels()
     {
         NormalSoundCtrl.Clear();
+        // the key walk carries on into the clips of whichever awb it lands on, instead of stopping at the
+        // file that holds them. Wired here rather than in the inspector: the page manager lives on a prefab
+        // every paged list shares, so a value set there would apply to all of them at once.
+        if (NormalSoundCtrl && NormalSubSoundList)
+            NormalSoundCtrl.SubList = NormalSubSoundList;
+        else
+            Debug.LogWarning("NormalSoundCtrl or NormalSubSoundList is not assigned, so the key walk will " +
+                             "not go into the sound clips: it will step over each awb instead.");
         var pageentrys = new List<PageManager.Entry>();
         foreach (var entry in Main.AbSounds.Where(a => (!a.Name.Contains("live")) && a.Name.EndsWith("awb")))
         {
@@ -530,13 +554,50 @@ public class UmaViewerUI : MonoBehaviour
         NormalSoundCtrl.Initialize(pageentrys, NormalSoundList);
     }
 
+    /// <summary>
+    /// The prefab name prefixes the prop panel lists.
+    ///
+    /// The game names each `3d/chara` family its own way, so the single `pfb_chr_prop` substring this panel
+    /// used to filter on reached exactly one family and left others unreachable in the UI even though their
+    /// bundles are in the manifest: `toonprop` (held/effect props, one per character) and `richprop` (three
+    /// live-show props). `docs/ASSET_FAMILIES.md` has the measured counts, from `-umaListFamilies`.
+    ///
+    /// `attach` is deliberately absent and `sweat` always was: attach prefabs are not props at all - they carry
+    /// a copy of the character rig and belong to a character, so they are toggles on the character
+    /// (`UISettingsModel.LoadAttachPanel`, `UmaContainerCharacter.AttachAccessory`), not scene objects. A
+    /// sweat prefab is a `..._sweatlocator` with no geometry.
+    /// </summary>
+    private static readonly string[] PropPrefixes =
+        { "pfb_chr_prop", "pfb_toon_prop", "pfb_rich_prop" };
+
+    /// <summary>True for a manifest path the prop panel should offer (the family's prefab, not its clothes).</summary>
+    private static bool IsPropAsset(string path)
+    {
+        if (path.Contains("clothes")) return false;
+        string name = Path.GetFileName(path);
+        return PropPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    /// <summary>The `3d/chara` family a manifest path belongs to ("attach", "prop", ...), or "" outside it.</summary>
+    private static string CharaFamily(string path)
+    {
+        const string root = "3d/chara/";
+        if (!path.StartsWith(root, StringComparison.Ordinal)) return "";
+        string rest = path.Substring(root.Length);
+        int slash = rest.IndexOf('/');
+        return slash > 0 ? rest.Substring(0, slash) : rest;
+    }
+
     public void LoadPropPanel()
     {
         var pageentrys = new List<PageManager.Entry>();
-        foreach (var prop in Main.AbList.Where(a => a.Key.Contains("pfb_chr_prop") && !a.Key.Contains("clothes")))
+        foreach (var prop in Main.AbList.Where(a => IsPropAsset(a.Key)).OrderBy(a => a.Key, StringComparer.Ordinal))
         {
             var pageentry = new PageManager.Entry();
             pageentry.Name = Path.GetFileName(prop.Key);
+            // so a search finds a family whose name the prefab does not repeat (richprop's prefabs are
+            // pfb_rich_prop*, not pfb_richprop*)
+            pageentry.Keywords = CharaFamily(prop.Key);
             pageentry.OnClick = (container) =>
             {
                 HighlightChildImage(PropList.content, container);
@@ -839,21 +900,77 @@ public class UmaViewerUI : MonoBehaviour
     {
         for (int i = NormalSubSoundList.content.childCount - 1; i >= 0; i--)
         {
-            Destroy(NormalSubSoundList.content.GetChild(i).gameObject);
+            // Hidden before it is destroyed, because a destroy only happens at the end of the frame: the
+            // key walk reads this content in the same frame, and an old row still sitting there is a row it
+            // can land on. That played the previous awb's clip a second time and left the highlight on a row
+            // that vanished moments later, so no clip looked selected.
+            var row = NormalSubSoundList.content.GetChild(i).gameObject;
+            row.SetActive(false);
+            Destroy(row);
         }
 
         var subSounds = UmaViewerBuilder.LoadAudio(awb);
+        var rows = new List<UmaUIContainer>();
 
-        foreach (var sound in subSounds)
+        for (int i = 0; i < subSounds.Count; i++)
         {
+            int index = i;
             var container = Instantiate(UmaContainerPrefab, NormalSubSoundList.content).GetComponent<UmaUIContainer>();
-            container.Name = $"Clip_{subSounds.IndexOf(sound)}";
+            container.Name = $"Clip_{index}";
             container.Button.onClick.AddListener(() =>
             {
                 HighlightChildImage(NormalSubSoundList.content, container);
-                Builder.SetLastAudio(awb, subSounds.IndexOf(sound));
-                Builder.PlaySound(awb, subSounds.IndexOf(sound));
+                Builder.SetLastAudio(awb, index);
+                Builder.PlaySound(awb, index);
             });
+            rows.Add(container);
+        }
+
+        // The line each clip voices is looked up after the list is on screen: resolving a story voice sheet
+        // can mean reading every timeline of a character's arc the first time it is asked for.
+        StartCoroutine(LabelClipTranscripts(awb, rows));
+    }
+
+    /// <summary>
+    /// Renames the clip rows after the line they voice. Clips with no text keep their Clip_N label - music
+    /// and sound effects have nothing to say - and the text also goes in as a keyword, so the search box
+    /// finds a row by what is said in it.
+    /// </summary>
+    private IEnumerator LabelClipTranscripts(UmaDatabaseEntry awb, List<UmaUIContainer> rows)
+    {
+        yield return null;
+
+        // Only the voice banks are slow: reading one means walking every episode of a character's arc the
+        // first time, which takes a moment and happens in a single frame, so say so before it starts. A
+        // story's own sheet or a home scene is one bundle and needs no announcement.
+        if (rows.Count > 0 && AudioTranscripts.NeedsFolderScan(awb))
+        {
+            UmaViewerUI.Instance.ShowMessage("Reading the transcript of these clips…", UIMessageType.Default);
+        }
+
+        Dictionary<int, List<TranscriptLine>> transcripts = AudioTranscripts.ForAsset(awb);
+        if (transcripts.Count == 0)
+        {
+            // a voice asset with no line for any clip is the case worth a log line; music and effects are
+            // expected to have none
+            if (AudioTranscripts.IsVoiceAssetName(awb.Name))
+            {
+                Debug.Log($"[Transcript] {awb.Name}: no line found for any of its {rows.Count} clip(s)");
+            }
+            yield break;
+        }
+
+        for (int index = 0; index < rows.Count; index++)
+        {
+            if (!rows[index]) continue;   // the list was rebuilt while the lookup was running
+            if (!transcripts.TryGetValue(index, out var lines)) continue;
+            string summary = AudioTranscripts.Summarize(lines);
+            if (string.IsNullOrEmpty(summary)) continue;
+            // one clip can be used by several lines (the same take covering a scene's variant, or a long
+            // voice running over several text boxes), so say how many more there are
+            if (lines.Count > 1) summary += $"  (+{lines.Count - 1})";
+            rows[index].Name = $"{index}  {summary}";
+            rows[index].Keywords = AudioTranscripts.Format(lines);
         }
     }
 
@@ -874,68 +991,44 @@ public class UmaViewerUI : MonoBehaviour
         && !a.Name.EndsWith($"_e")
         );
 
+        IEnumerable<UmaDatabaseEntry> motions;
         if (umaId == -1)
         {
-            var pageentrys = new List<PageManager.Entry>();
-            foreach (var entry in filteredList.Where(a => (a.Name.Contains($"/type0") || a.Name.Contains($"/type99") || a.Name.Contains($"anm_sty_")) && !a.Name.Contains($"/tail") && !a.Name.EndsWith($"_pos") && !a.Name.Contains($"prop") && !a.Name.EndsWith($"_pose") && !a.Name.Contains($"_defaultmotion")))
-            {
-                var pageentry = new PageManager.Entry();
-                pageentry.Name = Path.GetFileName(entry.Name);
-                pageentry.FontSize = 20;
-                pageentry.OnClick = (container) =>
-                {
-                    HighlightChildImage(animationList.content, container);
-                    (Builder.CurrentUMAContainer)?.LoadAnimation(entry);
-                    LoadedAnimation();
-                };
-                pageentrys.Add(pageentry);
-            }
-            pageManager.Initialize(pageentrys, animationList);
+            motions = filteredList.Where(a => (a.Name.Contains($"/type0") || a.Name.Contains($"/type99") || a.Name.Contains($"anm_sty_")) && !a.Name.Contains($"/tail") && !a.Name.EndsWith($"_pos") && !a.Name.Contains($"prop") && !a.Name.EndsWith($"_pose") && !a.Name.Contains($"_defaultmotion"));
         }
         else if (umaId == -2)
         {
-            foreach (var entry in filteredList.Where(a => a.Name.Contains($"/tail")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-            pageManager.ResetCtrl();
+            motions = filteredList.Where(a => a.Name.Contains($"/tail"));
         }
         else if (umaId == -3)
         {
-            foreach (var entry in Main.AbMotions.Where(a => a.Name.Contains($"type00_ear") && !a.Name.EndsWith("driven") && !a.Name.Contains("touch")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-            pageManager.ResetCtrl();
+            motions = Main.AbMotions.Where(a => a.Name.Contains($"type00_ear") && !a.Name.EndsWith("driven") && !a.Name.Contains("touch"));
         }
         else
         {
-            //Common animations
-            foreach (var entry in filteredList.Where(a => a.Name.Contains($"chara/chr{umaId}") && !a.Name.Contains("pose")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-
-            //Skill animations
-            foreach (var entry in filteredList.Where(a => a.Name.Contains($"card/body/crd{umaId}")))
-            {
-                CreateAnimationSelectionPanel(entry, animationList.content);
-            }
-            pageManager.ResetCtrl();
+            //Common animations, then skill animations. Concat rather than one Where, so the two groups
+            //stay in that order whatever order the motions happen to be listed in.
+            motions = filteredList.Where(a => a.Name.Contains($"chara/chr{umaId}") && !a.Name.Contains("pose"))
+                .Concat(filteredList.Where(a => a.Name.Contains($"card/body/crd{umaId}")));
         }
-    }
 
-    void CreateAnimationSelectionPanel(UmaDatabaseEntry entry, Transform parent)
-    {
-        var container = Instantiate(UmaContainerPrefab, parent).GetComponent<UmaUIContainer>();
-        container.Name = container.name = Path.GetFileName(entry.Name);
-        container.FontSize = 20;
-        container.Button.onClick.AddListener(() =>
+        // Every one of these lists goes through the page manager, which is what gives it paging, the
+        // search box and the key walk over the whole list, instead of a second way to build rows.
+        var pageentrys = new List<PageManager.Entry>();
+        foreach (var entry in motions)
         {
-            HighlightChildImage(parent, container);
-            (Builder.CurrentUMAContainer)?.LoadAnimation(entry);
-            LoadedAnimation();
-        });
+            var pageentry = new PageManager.Entry();
+            pageentry.Name = Path.GetFileName(entry.Name);
+            pageentry.FontSize = 20;
+            pageentry.OnClick = (container) =>
+            {
+                HighlightChildImage(animationList.content, container);
+                (Builder.CurrentUMAContainer)?.LoadAnimation(entry);
+                LoadedAnimation();
+            };
+            pageentrys.Add(pageentry);
+        }
+        pageManager.Initialize(pageentrys, animationList);
     }
 
     string getCharaName(string id)
@@ -943,6 +1036,12 @@ public class UmaViewerUI : MonoBehaviour
         var entry = Main.Characters.FirstOrDefault(a => a.Id.ToString().Equals(id));
         return (entry == null) ? id.ToString() : entry.GetName();
     }
+
+    /// <summary>
+    /// What a search box on a character list matches besides the row text: the id, and whichever of the
+    /// two names the row is not showing.
+    /// </summary>
+    static string CharaSearchText(CharaEntry chara) => $"{chara.Id} {chara.Name} {chara.EnName}";
 
     public string getCharaTailPath(CharaEntry chara)
     {

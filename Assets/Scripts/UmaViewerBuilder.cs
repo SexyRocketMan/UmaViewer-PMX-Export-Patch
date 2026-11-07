@@ -1,4 +1,4 @@
-﻿using CriWareFormats;
+using CriWareFormats;
 using Gallop;
 using Gallop.Live;
 using NAudio.Wave;
@@ -75,6 +75,12 @@ public class UmaViewerBuilder : MonoBehaviour
             LoadNormalUma(umaContainer, chara, costumeId, true, haedCostumeId);
         }
 
+        // the rain look is a view setting, so a character loaded while it is on wears it too
+        if (ModelSettings.IsWetLook) umaContainer.SetWetLook(true);
+
+        // and the game's own attachment set for this character id, when it has one (ten of them do)
+        UI.ModelSettings?.LoadAttachPanel(umaContainer);
+
         yield break;
     }
 
@@ -101,6 +107,8 @@ public class UmaViewerBuilder : MonoBehaviour
                 }
 
                 Gallop.Live.Director.instance.CharaContainerScript.Add(umaContainer);
+
+                if (ModelSettings.IsWetLook) umaContainer.SetWetLook(true);
             }
         }
     }
@@ -734,6 +742,58 @@ public class UmaViewerBuilder : MonoBehaviour
 
         CurrentOtherContainer = prop;
         UI.ModelSettings?.LoadTextureSetPanel(prop.TextureSet);
+    }
+
+    /// <summary>
+    /// The attach prefabs the loaded character can wear: `3d/chara/attach/attach{id}_00/`, ten characters, keyed by
+    /// character id.
+    ///
+    /// **Toon props are deliberately not here** (they were for one revision). They look like they pair with a
+    /// character because the numbers line up - `toon_prop1001_00` beside `bdy1001_00` - and the user's own look
+    /// says the ids are a coincidence: what `toon_prop1001_00` actually is, is a model of a hand from the fingers to
+    /// the elbow, and it aligns with nothing. They stay a browsable prop (`3d/chara/toonprop/` in the prop panel)
+    /// until someone works out what holds them.
+    /// </summary>
+    public List<UmaDatabaseEntry> AttachEntriesFor(UmaContainerCharacter character)
+    {
+        var entries = new List<UmaDatabaseEntry>();
+        if (character == null || character.CharaEntry == null) return entries;
+        string prefix = $"3d/chara/attach/attach{character.CharaEntry.Id}_";
+        return UmaViewerMain.Instance.AbChara
+            .Where(e => e.Name.StartsWith(prefix, StringComparison.Ordinal)
+                        && Path.GetFileName(e.Name).StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Instantiates one attach prefab and wears it on the current character. Returns null (and says why) when
+    /// no character is loaded or the prefab cannot be read.
+    /// </summary>
+    public GameObject LoadAttach(UmaDatabaseEntry entry)
+    {
+        var character = CurrentUMAContainer;
+        if (character == null)
+        {
+            Debug.LogWarning($"[attach] {entry?.Name}: no character is loaded, so there is nothing to attach to");
+            return null;
+        }
+
+        var prefab = entry.Get<GameObject>();
+        if (prefab == null)
+        {
+            Debug.LogWarning($"[attach] {entry.Name}: the bundle holds no prefab");
+            return null;
+        }
+
+        var instance = Instantiate(prefab);
+        instance.name = Path.GetFileName(entry.Name);
+        return character.AttachAccessory(instance);
+    }
+
+    public void ClearAttachments()
+    {
+        CurrentUMAContainer?.ClearAccessories();
     }
 
     public void LoadLive(LiveEntry live, List<LiveCharacterSelect> characters)

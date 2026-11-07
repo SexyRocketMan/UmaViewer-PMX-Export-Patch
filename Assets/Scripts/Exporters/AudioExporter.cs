@@ -5,9 +5,28 @@ using UmaMusumeAudio;
 using NAudio.Wave.SampleProviders;
 using NAudio.Wave;
 
+/// <summary>What gets written into an exported mp3's tag: the text that belongs to the clip.</summary>
+public struct AudioTranscriptTag
+{
+    /// <summary>The line itself - what a player shows as the title.</summary>
+    public string Title;
+    /// <summary>Who says it.</summary>
+    public string Speaker;
+    /// <summary>Where it comes from: the story title, or the asset for a non-story voice.</summary>
+    public string Album;
+    /// <summary>The asset and clip it was exported from, so the file can be traced back.</summary>
+    public string Comment;
+    /// <summary>The full line(s), in a frame players show as lyrics.</summary>
+    public string Lyrics;
+
+    public bool IsEmpty => string.IsNullOrEmpty(Title) && string.IsNullOrEmpty(Speaker)
+                           && string.IsNullOrEmpty(Album) && string.IsNullOrEmpty(Lyrics);
+}
+
 public class AudioExporter
 {
-    public static IEnumerator ExportAudio(List<UmaWaveStream> a, string path, int index = -1) {
+    public static IEnumerator ExportAudio(List<UmaWaveStream> a, string path, int index = -1,
+                                          AudioTranscriptTag? transcript = null) {
 
         var l = new List<ISampleProvider>();
         if (index == -1)
@@ -47,8 +66,25 @@ public class AudioExporter
                     yield return 0;
                 }
             }
-            UmaViewerUI.Instance.ShowMessage("Export complete", UIMessageType.Default);
         }
+
+        // The tag goes on after the encoder closed the file: the writer has to finalise the stream first,
+        // and writing in front of the audio is what makes the tag readable by every player.
+        if (transcript.HasValue && !transcript.Value.IsEmpty)
+        {
+            try
+            {
+                AudioTranscriptTag tag = transcript.Value;
+                Id3Tag.WriteTranscript(path, tag.Title, tag.Speaker, tag.Album, tag.Comment, tag.Lyrics);
+            }
+            catch (System.Exception e)
+            {
+                UnityEngine.Debug.LogWarning($"[AudioExporter] could not tag {path}: {e.Message}");
+                UmaViewerUI.Instance.ShowMessage("Exported, but the transcript tag could not be written", UIMessageType.Warning);
+            }
+        }
+
+        UmaViewerUI.Instance.ShowMessage("Export complete", UIMessageType.Default);
     }
 
     private static ISampleProvider GetSampleFixedLength(UmaWaveStream sample)

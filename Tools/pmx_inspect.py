@@ -4,17 +4,23 @@
 # ///
 """Inspect / diff PMX files without Blender or Unity.
 
-  uv run pmx_inspect.py summary <file.pmx> [more.pmx ...]
-  uv run pmx_inspect.py bones   <file.pmx>
-  uv run pmx_inspect.py weights <file.pmx> [--material M_Eye]
-  uv run pmx_inspect.py morphs  <file.pmx> [--grep Eye_2]
-  uv run pmx_inspect.py diff    <a.pmx> <b.pmx>
-  uv run pmx_inspect.py check   <file.pmx>        # uma_addon morph-name contract + eye skinning
+  uv run pmx_inspect.py summary   <file.pmx> [more.pmx ...]
+  uv run pmx_inspect.py bones     <file.pmx>
+  uv run pmx_inspect.py tails     <file.pmx> [--named] [--pairs]
+  uv run pmx_inspect.py orient    <file.pmx> [--against old.pmx] [--named Hip,Head]
+  uv run pmx_inspect.py weights   <file.pmx> [--material M_Eye]
+  uv run pmx_inspect.py morphs    <file.pmx> [--grep Eye_2]
+  uv run pmx_inspect.py names     <file.pmx> [--require Name1,Name2]  # vmd byte limit + duplicates
+  uv run pmx_inspect.py integrity <file.pmx>                          # declared index sizes vs counts
+  uv run pmx_inspect.py check     <file.pmx>        # the uma_addon eye contract + eye skinning
+  uv run pmx_inspect.py eyes      <file.pmx>        # are the two eyes vertex-symmetric?
+  uv run pmx_inspect.py diff      <a.pmx> <b.pmx>
 
-`check` verifies the invariants the Blender uma_addon relies on:
-  * the four eye-range morphs are named "<name>(<tag>)[M_Face]" (used by "Refine Structure"
-    to build the Eye_L(L)/Eye_L(R)/... controls),
-  * the eyeball geometry is skinned to the Eye_L / Eye_R bones.
+`check` verifies what the Blender uma_addon relies on once "Refine Structure" runs: the four eye-range morphs are
+present in a spelling the exporter can write, and the eyeball is skinned to Eye_L / Eye_R. `eyes` answers whether
+the model could ever have shown the add-on's pre-2.35.20 eye defect: the mirror step paired one eye's vertices
+with the other's by exact position, so a vertex with no twin kept the *source* eye's motion. `check`, `integrity`,
+`names`, `tails` and `eyes` exit 1 when a check fails; the other subcommands exit 0.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import math
 import re
 import sys
 
-# these tools print japanese asset names, and a windows console is not utf-8 by default
+# asset names are japanese, and a windows console is not utf-8 by default
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError):
@@ -33,7 +39,7 @@ except (AttributeError, ValueError):
 from collections import Counter
 from dataclasses import dataclass, field
 
-# The morph names the Blender uma_addon's "Refine Structure" operator looks up by exact name.
+# The morph names the addon's "Refine Structure" operator resolves by exact name.
 # See uma_addon/.../operators/AddonOperators.py -> RefineBoneStructure.fix_eye_shapekeys.
 ADDON_EYE_RANGE_MORPHS = [
     "Eye_20_R(XRange)[M_Face]",
@@ -41,6 +47,15 @@ ADDON_EYE_RANGE_MORPHS = [
     "Eye_21_R(YRange)[M_Face]",
     "Eye_21_L(YRange)[M_Face]",
 ]
+
+# The same four morphs in every spelling Config.PmxMorphNameMode can write. The stock addon resolves only
+# "tagged"; the fork's naming resolver matches the other two by meaning, so all three are valid exports.
+EYE_RANGE_SPELLINGS = {
+    "tagged": ("Eye_20_R(XRange)[M_Face]", "Eye_20_L(XRange)[M_Face]",
+               "Eye_21_R(YRange)[M_Face]", "Eye_21_L(YRange)[M_Face]"),
+    "short": ("Eye_20_R", "Eye_20_L", "Eye_21_R", "Eye_21_L"),
+    "unified": ("Eye_XRange_R", "Eye_XRange_L", "Eye_YRange_R", "Eye_YRange_L"),
+}
 
 
 class Reader:
@@ -144,6 +159,17 @@ class Model:
     bones: list[Bone] = field(default_factory=list)
     morph_names: list[str] = field(default_factory=list)
     morph_cats: list[int] = field(default_factory=list)
+    #: the morph bodies: `name`, `cat` (panel), `type` and `items` - vertex morphs hold (index, (x, y, z))
+    morph_data: list[dict] = field(default_factory=list)
+    end_offset: int = 0
+    file_size: int = 0
+    #: (section, byte offset) as the reader enters each section - after a failed parse, the last entry names
+    #: the section that was misread
+    trace: list = field(default_factory=list)
+
+
+#: section trace of the most recent read - when the parse raised, there is no Model and this is all there is
+LAST_TRACE: list = []
 
 
 def read_model(path: str) -> Model:
@@ -164,13 +190,22 @@ def read_model(path: str) -> Model:
 
     model = Model(version=version, encoding=encoding, extra_uv=g[1], sizes=sizes,
                   name=text(), name_en=text())
-    text(); text()  # comments
 
+    def note(label: str) -> None:
+        global LAST_TRACE
+        model.trace.append((label, r.p))
+        LAST_TRACE = model.trace          # survives a failed parse, when there is no model to return
+
+    note("name")
+    text(); text()  # comments
+    note("comments")
+
+    note("vertices")
     for _ in range(r.i32()):
         pos = r.vec(3)
         r.vec(3); r.vec(2)
-        if g[1]:
-            r.vec(4 * g[1])
+        # each extra uv is one Vector4, so g[1] extra sets cost 4 * g[1] floats
+        extra_uvs = [r.vec(4) for _ in range(g[1])]
         wt = r.u8()
         bones: list[int] = []
         weights: list[float] = []
@@ -194,12 +229,15 @@ def read_model(path: str) -> Model:
         r.f32()
         model.vertices.append(Vertex(pos, wt, bones, weights))
 
+    note("surfaces")
     for _ in range(r.i32()):
         model.surfaces.append(r.index(sizes["vertex"], signed=False))
 
+    note("textures")
     for _ in range(r.i32()):
         model.textures.append(text())
 
+    note("materials")
     for i in range(r.i32()):
         name = text(); name_en = text()
         r.vec(4); r.vec(3); r.f32(); r.vec(3)
@@ -220,6 +258,7 @@ def read_model(path: str) -> Model:
                                         toon_texture=toon, shared_toon=shared_toon_index,
                                         comment=comment))
 
+    note("bones")
     for i in range(r.i32()):
         b = Bone(i, text(), text(), r.vec(3), r.index(sizes["bone"]), 0)
         r.i32()  # transform level
@@ -228,7 +267,9 @@ def read_model(path: str) -> Model:
             b.tail_bone = r.index(sizes["bone"])
         else:
             b.tail_pos = r.vec(3)
-        if b.flags & (0x0100 | 0x0200):
+        # 0x0080 is local attribution, 0x0100 rotates with the parent, 0x0200 translates with it; all three
+        # carry the inherit pair, so reading only the latter two desyncs by eight bytes per such bone
+        if b.flags & (0x0080 | 0x0100 | 0x0200):
             b.inherit_parent = r.index(sizes["bone"]); b.inherit_weight = r.f32()
         if b.flags & 0x0400:
             r.vec(3)
@@ -246,38 +287,79 @@ def read_model(path: str) -> Model:
             b.ik = ik
         model.bones.append(b)
 
+    note("morphs")
     for _ in range(r.i32()):
-        model.morph_names.append(text())
+        morph_name = text()
+        model.morph_names.append(morph_name)
         text()
-        model.morph_cats.append(r.u8())
+        morph_cat = r.u8()
+        model.morph_cats.append(morph_cat)
         mtype = r.u8()
         off = r.i32()
+        items = []
         if mtype == 0:
             for _ in range(off):
-                r.index(sizes["morph"]); r.f32()
+                items.append((r.index(sizes["morph"]), r.f32()))
         elif mtype == 1:
             for _ in range(off):
-                r.index(sizes["vertex"]); r.vec(3)
+                items.append((r.index(sizes["vertex"]), tuple(r.vec(3))))
         elif mtype == 2:
             for _ in range(off):
-                r.index(sizes["bone"]); r.vec(3); r.vec(4)
-        elif mtype == 3:
+                items.append((r.index(sizes["bone"]), tuple(r.vec(3)), tuple(r.vec(4))))
+        elif mtype in (3, 4, 5, 6, 7):
+            # UV, then the four extra UV sets: a vertex index and one Vector4 each
             for _ in range(off):
-                r.index(sizes["vertex"]); r.vec(4)
-        elif mtype in (4, 5, 6, 7):
-            for _ in range(off):
-                r.index(sizes["material"]); r.u8(); r.vec(4)
+                items.append((r.index(sizes["vertex"]), tuple(r.vec(4))))
         elif mtype == 8:
+            # material morph: index, an offset flag, then 28 floats - diffuse (4), specular (3) and its
+            # coefficient, ambient (3), edge colour (4), edge size, and the texture, sphere and toon tints (4 each)
             for _ in range(off):
-                r.index(sizes["bone"]); r.i32(); r.f32()
+                index = r.index(sizes["material"])
+                multiply = r.u8()
+                items.append((index, multiply, tuple(r.vec(28))))
         elif mtype == 9:
+            # flip morph: a morph index and a weight, the same shape as a group morph
             for _ in range(off):
-                r.index(sizes["material"]); r.u8(); r.vec(4)
+                items.append((r.index(sizes["morph"]), r.f32()))
         elif mtype == 10:
+            # impulse morph: a bone index, a local flag and a velocity
             for _ in range(off):
-                r.index(sizes["morph"]); r.f32()
+                items.append((r.index(sizes["bone"]), r.i32(), r.f32()))
         else:
             raise ValueError(f"unknown morph type {mtype}")
+        model.morph_data.append({"name": morph_name, "cat": morph_cat, "type": mtype, "items": items})
+
+    # display frames, then rigid bodies and joints. The exporter always writes at least one frame, so a reader
+    # that stops after the morphs leaves those bytes unread - which is what the integrity cursor check catches.
+    note("frames")
+    for _ in range(r.i32()):
+        text(); text()
+        r.u8()                          # isSpecial
+        for _ in range(r.i32()):
+            is_morph = r.u8()
+            r.index(sizes["morph"] if is_morph else sizes["bone"])
+
+    note("rigidbodies")
+    for _ in range(r.i32()):
+        text(); text()
+        r.index(sizes["bone"])          # the bone the body is attached to
+        r.u8()                          # group
+        r.u16()                         # collision mask
+        r.u8()                          # shape
+        r.vec(3); r.vec(3); r.vec(3)    # size, position, rotation
+        r.f32(); r.f32(); r.f32(); r.f32(); r.f32(); r.u8()   # mass, damping, restitution, friction, mode
+
+    note("joints")
+    for _ in range(r.i32()):
+        text(); text()
+        r.u8()                          # dof type
+        r.index(sizes["rigidbody"]); r.index(sizes["rigidbody"])
+        r.vec(3); r.vec(3)
+        r.vec(3); r.vec(3); r.vec(3); r.vec(3)
+        r.vec(3); r.vec(3)
+
+    model.end_offset = r.p
+    model.file_size = len(data)
     return model
 
 
@@ -411,15 +493,23 @@ def cmd_check(paths: list[str], args) -> int:
         m = read_model(path)
         print(f"== {path}")
         names = set(m.morph_names)
-        missing = [n for n in ADDON_EYE_RANGE_MORPHS if n not in names]
-        short = [n for n in ("Eye_20_R", "Eye_20_L", "Eye_21_R", "Eye_21_L") if n in names]
-        print(f"   uma_addon tagged eye-range morphs present: "
-              f"{len(ADDON_EYE_RANGE_MORPHS) - len(missing)}/{len(ADDON_EYE_RANGE_MORPHS)}")
-        if missing:
-            print(f"      MISSING: {missing}")
-            if short:
-                print(f"      found short names instead: {short}  <- uma_addon will silently skip the eye controls")
+
+        # the four eye-range morphs have to be resolvable in a spelling the exporter writes; which spelling
+        # decides which addon can use them, so a missing one of the three is not a failure of the model
+        complete = [scheme for scheme, wanted in EYE_RANGE_SPELLINGS.items()
+                    if all(n in names for n in wanted)]
+        if complete:
+            print(f"   eye-range morphs present as: {', '.join(complete)}")
+            if "tagged" not in complete:
+                print("      the stock uma_addon resolves only the tagged spelling; this one needs the "
+                      "fork's naming resolver (MorphNaming.cs / the addon's utils/naming.py)")
+        else:
             ok = False
+            print("   !! none of the four eye-range morphs is complete in any spelling:")
+            for scheme, wanted in EYE_RANGE_SPELLINGS.items():
+                found = [n for n in wanted if n in names]
+                print(f"      {scheme:8} {len(found)}/4 present"
+                      + (f", missing {[n for n in wanted if n not in names]}" if found else ""))
 
         vids = material_vertices(m, "_eye")
         if vids is None:
@@ -438,6 +528,130 @@ def cmd_check(paths: list[str], args) -> int:
             ok = False
         else:
             print(f"   eyeball -> Eye_L/Eye_R ok ({eye_bound})")
+    return 0 if ok else 1
+
+
+def cmd_integrity(paths: list[str], args) -> int:
+    """Audit the declared index sizes against the counts and every index against the file.
+
+    Checked in order, because the first failure makes the rest meaningless: the parse consumes the file byte for
+    byte, each declared size can address its count (vertex indices are unsigned, the rest signed), and every index
+    lies inside its range, -1 counting as pmx's "none" where the format allows it.
+    """
+    ok = True
+    for path in paths:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+        if head != b"PMX ":
+            print(f"== {path}\n   !! not a pmx file")
+            ok = False
+            continue
+        m = read_model(path)
+        print(f"== {path}")
+        print(f"   {len(m.vertices)} vertices, {len(m.surfaces)} surface indices, {len(m.textures)} textures, "
+              f"{len(m.materials)} materials, {len(m.bones)} bones, {len(m.morph_names)} morphs")
+        print(f"   declared index sizes: " + ", ".join(f"{k}={v}" for k, v in m.sizes.items()))
+
+        # 1. did the parse consume the file exactly?
+        if m.end_offset == m.file_size:
+            print(f"   [ok] the parse consumed all {m.file_size} bytes")
+        else:
+            print(f"   [FAIL] the parse stopped at {m.end_offset} of {m.file_size} bytes "
+                  f"({m.file_size - m.end_offset:+d}) - the declared sizes do not match what was written")
+            ok = False
+
+        # 2. can each declared size address its count?
+        limits = {"vertex": len(m.vertices), "texture": len(m.textures), "material": len(m.materials),
+                  "bone": len(m.bones), "morph": len(m.morph_names)}
+        for kind, count in limits.items():
+            size = m.sizes.get(kind)
+            if size not in (1, 2, 4):
+                print(f"   [FAIL] {kind} index size {size} is not 1, 2 or 4")
+                ok = False
+                continue
+            if kind == "vertex":
+                capacity = 256 ** size          # a pmx vertex index is unsigned
+            else:
+                capacity = 128 * 256 ** (size - 1)      # the rest are signed
+            if count > capacity:
+                print(f"   [FAIL] {kind}: {count} entries need more than {capacity} "
+                      f"that a {size} byte index can address")
+                ok = False
+            else:
+                print(f"   [ok] {kind}: {count} entries fit a {size} byte index (capacity {capacity})")
+
+        # 3. every index in range
+        problems = 0
+        high = max(m.surfaces) if m.surfaces else -1
+        if m.surfaces and high >= len(m.vertices):
+            print(f"   [FAIL] a surface index is {high}, past the last vertex ({len(m.vertices) - 1})")
+            problems += 1
+        elif m.surfaces:
+            print(f"   [ok] surface indices run 0..{high} inside {len(m.vertices)} vertices")
+
+        total_faces = sum(mat.face_count for mat in m.materials)
+        if total_faces != len(m.surfaces):
+            print(f"   [FAIL] the materials' face counts sum to {total_faces}, "
+                  f"but the file holds {len(m.surfaces)} indices")
+            problems += 1
+        else:
+            cursor = 0
+            bad = None
+            for mat in m.materials:
+                if mat.face_count % 3:
+                    bad = f"material {mat.index} ({mat.name}) has {mat.face_count} indices, not a multiple of 3"
+                    break
+                cursor += mat.face_count
+            if bad:
+                print(f"   [FAIL] {bad}")
+                problems += 1
+            else:
+                print(f"   [ok] the materials' face counts sum to the surface list exactly, all multiples of 3")
+
+        for mat in m.materials:
+            for label, value, count in (("texture", mat.texture, len(m.textures)),
+                                        ("sphere", mat.sphere_texture, len(m.textures)),
+                                        ("toon", mat.toon_texture, len(m.textures))):
+                if value is None:
+                    continue
+                if value == -1:
+                    continue
+                if not 0 <= value < count:
+                    print(f"   [FAIL] material {mat.index} ({mat.name}) {label} index {value} "
+                          f"is outside 0..{count - 1}")
+                    problems += 1
+        for bone in m.bones:
+            # -1 is pmx's "no bone" and an exported uma model's root bone uses it, so -1 is in range for the
+            # fields that allow it; an ik target may not be -1.
+            if not -1 <= bone.parent < len(m.bones):
+                print(f"   [FAIL] bone {bone.index} ({bone.name}) parent {bone.parent} "
+                      f"is outside -1..{len(m.bones) - 1}")
+                problems += 1
+            if bone.tail_bone is not None and not -1 <= bone.tail_bone < len(m.bones):
+                print(f"   [FAIL] bone {bone.index} ({bone.name}) tail {bone.tail_bone} out of range")
+                problems += 1
+            if bone.ik:
+                if not 0 <= bone.ik["target"] < len(m.bones):
+                    print(f"   [FAIL] bone {bone.index} ({bone.name}) ik target out of range")
+                    problems += 1
+                for link in bone.ik["links"]:
+                    if not 0 <= link["bone"] < len(m.bones):
+                        print(f"   [FAIL] bone {bone.index} ({bone.name}) ik link out of range")
+                        problems += 1
+        weighted = 0
+        for index, vertex in enumerate(m.vertices):
+            for bone in vertex.bones:
+                weighted += 1
+                if not 0 <= bone < len(m.bones):
+                    print(f"   [FAIL] vertex {index} is skinned to bone {bone}, "
+                          f"outside 0..{len(m.bones) - 1}")
+                    problems += 1
+                    break
+        if not problems:
+            print(f"   [ok] every texture, bone and skinning index is inside its range "
+                  f"({weighted} bone references over {len(m.vertices)} vertices)")
+        else:
+            ok = False
     return 0 if ok else 1
 
 
@@ -484,13 +698,11 @@ def cmd_names(paths: list[str], args) -> int:
 
 
 def cmd_tails(paths: list[str], args) -> int:
-    """Where every bone points, for the bones whose direction a user notices.
+    """Where every bone points, and whether that follows the segment leading into it.
 
-    A PMX bone's tail is either a child index or an offset, and the direction from head to tail is what
-    Blender draws. The uma rig has no tails, so the exporter derives them: a bone points at the child that
-    continues its chain, and a bone without one (finger tips, hair ends, the roll helpers) continues the
-    segment leading into it. This reports the result, the left/right mirroring, and the bones that do not
-    follow the segment leading into them - a hair strand that turns is expected there, the head bone is not.
+    A pmx tail is a child index or an offset, and head -> tail is the direction Blender draws; the uma rig has no
+    tails, so the exporter derives them. Exits 1 when a --pairs left/right pair is not mirrored - a hair strand may
+    leave the incoming segment, the head bone may not.
     """
     exit_code = 0
     for path in paths:
@@ -582,10 +794,255 @@ def cmd_tails(paths: list[str], args) -> int:
     return exit_code
 
 
+def cmd_orient(paths: list[str], args) -> int:
+    """How the file's bone tails are oriented, and what changed against another export.
+
+    A pmx stores no bone axis, so head -> tail is the orientation. Reports the distribution of tails against the
+    incoming segment, child index against offset, and the named bones; --against compares an older export matched by
+    bone name, so it survives reindexing. MMD's own rigs are the reference (98 models: 41% within 5 deg of the
+    incoming segment, 11% past 90, 54% child index) - a hair strand is meant to leave its root wide, so compare the
+    named joints as well as the total.
+    """
+
+    def load(path):
+        model = read_model(path)
+        bones = model.bones
+        by_index = {bone.index: bone for bone in bones}
+        children: dict[int, list[Bone]] = {}
+        for bone in bones:
+            children.setdefault(bone.parent, []).append(bone)
+        return model, bones, by_index, children
+
+    def subtract(a, b):
+        return [a[i] - b[i] for i in range(3)]
+
+    def length(vector):
+        return math.sqrt(sum(component * component for component in vector))
+
+    def angle(a, b):
+        la, lb = length(a), length(b)
+        if la < 1e-9 or lb < 1e-9:
+            return None
+        cosine = max(-1.0, min(1.0, sum(a[i] * b[i] for i in range(3)) / (la * lb)))
+        return math.degrees(math.acos(cosine))
+
+    def tails_of(bones, by_index):
+        """name -> (tail vector from the head, kind, child name or None)"""
+        out = {}
+        for bone in bones:
+            if bone.tail_bone is not None and 0 <= bone.tail_bone < len(bones):
+                child = bones[bone.tail_bone]
+                out[bone.name] = (subtract(child.pos, bone.pos), "child", child.name)
+            elif bone.tail_pos is not None:
+                out[bone.name] = (list(bone.tail_pos), "offset", None)
+        return out
+
+    def incoming(bones, by_index, bone):
+        current = bone
+        while current is not None and current.parent in by_index:
+            parent = by_index[current.parent]
+            delta = subtract(current.pos, parent.pos)
+            if length(delta) > 1e-5:
+                return delta
+            current = parent
+        return None
+
+    model, bones, by_index, children = load(paths[0])
+    tail_rows = tails_of(bones, by_index)
+    print(f"== {paths[0]}   ({len(bones)} bones)")
+
+    buckets = {"<=5": 0, "5..15": 0, "15..30": 0, "30..60": 0, "60..90": 0, ">90": 0}
+    kinds = {"child": 0, "offset": 0}
+    deviations = []
+    for bone in bones:
+        entry = tail_rows.get(bone.name)
+        if entry is None:
+            continue
+        kinds[entry[1]] += 1
+        chain = incoming(bones, by_index, bone)
+        if chain is None:
+            continue
+        value = angle(entry[0], chain)
+        if value is None:
+            continue
+        if value <= 5:
+            buckets["<=5"] += 1
+        elif value <= 15:
+            buckets["5..15"] += 1
+        elif value <= 30:
+            buckets["15..30"] += 1
+        elif value <= 60:
+            buckets["30..60"] += 1
+        elif value <= 90:
+            buckets["60..90"] += 1
+        else:
+            buckets[">90"] += 1
+        deviations.append((value, bone.name, len(children.get(bone.index, []))))
+
+    measured = sum(buckets.values()) or 1
+    print("   tail against the segment arriving at the bone:")
+    for key, count in buckets.items():
+        print(f"      {key:<7} {count:>5}  ({100.0 * count / measured:>3.0f}%)")
+    print(f"   tails stored: {kinds['child']} child index, {kinds['offset']} offset")
+    print(f"   MMD reference: 41% <=5 deg, 11% >90 deg, 54% child index")
+
+    names = [name for name in args.named.split(",") if name]
+    print("   named bones:")
+    for name in names:
+        bone = next((candidate for candidate in bones if candidate.name == name), None)
+        if bone is None:
+            print(f"      {name:<16} (not in this model)")
+            continue
+        entry = tail_rows.get(name)
+        if entry is None:
+            print(f"      {name:<16} no tail")
+            continue
+        vector, kind, target = entry
+        chain = incoming(bones, by_index, bone)
+        off = angle(vector, chain) if chain else None
+        up = angle(vector, [0.0, 1.0, 0.0])
+        print(f"      {name:<16} {kind:<6} {('-> ' + target) if target else '':<26} "
+              f"len {length(vector):6.3f}  off-chain {('-' if off is None else f'{off:.1f}'):>5}  "
+              f"from up {up:.1f}")
+
+    deviations.sort(reverse=True)
+    print(f"   worst {args.worst} away from the incoming segment:")
+    for value, name, kids in deviations[:args.worst]:
+        print(f"      {name:<28} {value:6.1f} deg   children={kids}")
+
+    if not args.against:
+        return 0
+
+    other, other_bones, other_by_index, _ = load(args.against)
+    other_tails = tails_of(other_bones, other_by_index)
+    print(f"\n== changed against {args.against}")
+    missing = [name for name in tail_rows if name not in other_tails]
+    added = [name for name in other_tails if name not in tail_rows]
+    moved = []
+    for name, (vector, kind, target) in tail_rows.items():
+        if name not in other_tails:
+            continue
+        old_vector, old_kind, old_target = other_tails[name]
+        turn = angle(vector, old_vector)
+        if turn is None:
+            continue
+        old_length, new_length = length(old_vector), length(vector)
+        scale = (new_length / old_length) if old_length > 1e-9 else float("inf")
+        if turn > args.tolerance or abs(scale - 1.0) > 0.01 or kind != old_kind:
+            moved.append((turn, name, old_kind, old_target, old_vector, kind, target, vector, scale))
+    moved.sort(reverse=True)
+    print(f"   {len(moved)} of {len(tail_rows)} tails changed  "
+          f"({len(missing)} bones gone, {len(added)} new)")
+    for turn, name, old_kind, old_target, old_vector, kind, target, vector, scale in moved[:args.worst * 3]:
+        was = f"{old_kind}{' -> ' + old_target if old_target else ''}"
+        now = f"{kind}{' -> ' + target if target else ''}"
+        print(f"      {name:<28} {turn:6.1f} deg  {was:<34} => {now:<34} len x{scale:.2f}")
+    if len(moved) > args.worst * 3:
+        print(f"      ... {len(moved) - args.worst * 3} more")
+    return 0
+
+
+def eye_symmetry(model: "Model", tolerance: float, weight: float):
+    """`(counts, points, unpaired_distances)` - the eye vertices and how far their twins are.
+
+    Kept separate from the printing so the numbers can be checked against a model that has been
+    mutated in memory, without writing a file.
+    """
+    bone_index = {b.name: b.index for b in model.bones}
+    points: list[tuple[float, float, float]] = []
+    counts = {}
+    for side in ("Eye_L", "Eye_R"):
+        index = bone_index.get(side)
+        if index is None:
+            counts[side] = 0
+            continue
+        verts = [v for v in model.vertices
+                 if any(b == index and w >= weight for b, w in zip(v.bones, v.weights))]
+        counts[side] = len(verts)
+        points.extend((v.pos[0], v.pos[1], v.pos[2]) for v in verts)
+    unpaired = []
+    for pos in points:
+        target = (-pos[0], pos[1], pos[2])
+        best = min((math.dist(target, other) for other in points), default=0.0)
+        if best > tolerance:
+            unpaired.append(best)
+    return counts, points, sorted(unpaired)
+
+
+def cmd_eyes(paths: list[str], args) -> int:
+    """Whether the two eyes are vertex-symmetric - what the add-on's mirror step depends on.
+
+    `Refine Structure` builds each eye control by pairing one eye's vertices with the other eye's, and the
+    pairing it used until 2.35.20 wanted an *exact* mirrored twin: a vertex without one kept the source
+    eye's motion, so a model that is not exactly symmetric put a few vertices of the wrong eye into each
+    mirrored key and rotating one eye bone dragged part of the other.
+
+    Models exported by this viewer measure every vertex paired to 0.000000 m, so they cannot show it -
+    which is why the defect was not reproducible on them. Anything less is a model that could, and the
+    exit code says so.
+    """
+    tolerance = args.tolerance / 1000.0          # mm on the command line
+    worst_exit = 0
+    for path in paths:
+        m = read_model(path)
+        print(f"== {path}")
+        counts, points, unpaired = eye_symmetry(m, tolerance, args.weight)
+        for side, count in counts.items():
+            if count:
+                print(f"   {side}: {count} vertices skinned to it")
+            else:
+                print(f"   {side}: nothing (this model has no eye controls to build)")
+        if not points:
+            worst_exit = 1
+            continue
+        paired = len(points) - len(unpaired)
+        print(f"   {paired}/{len(points)} vertices have an exact mirror twin within {args.tolerance:g} mm"
+              + (f"; the other {len(unpaired)} are up to {unpaired[-1]*1000:.2f} mm off" if unpaired else
+                 "; worst distance 0.0000 mm"))
+        if unpaired:
+            print("   verdict: NOT symmetric - a build <= 2.35.19 mirrored this eye with vertices left on the")
+            print("            wrong side; 2.35.20 pairs every vertex instead. A fresh export from this viewer")
+            print("            is symmetric, which is why the defect can seem to come and go.")
+            worst_exit = 1
+        else:
+            print("   verdict: exactly symmetric - this model cannot show the pre-2.35.20 eye defect")
+    return worst_exit
+
+
+def cmd_bounds(paths: list[str], args) -> int:
+    """Where each material's geometry ended up, as a world-space box.
+
+    A merged or retargeted part still exports without an error, so the box its vertices occupy is the only thing
+    that shows it headlessly. Print a bone from the same file (`bones`) to compare against.
+    """
+    for path in paths:
+        m = read_model(path)
+        print(f"== {path}")
+        cursor = 0
+        for mat in m.materials:
+            vids = sorted(set(m.surfaces[cursor:cursor + mat.face_count]))
+            cursor += mat.face_count
+            if args.material and args.material not in mat.name:
+                continue
+            if not vids:
+                continue
+            xs = [m.vertices[vi].pos[0] for vi in vids]
+            ys = [m.vertices[vi].pos[1] for vi in vids]
+            zs = [m.vertices[vi].pos[2] for vi in vids]
+            lo = (min(xs), min(ys), min(zs))
+            hi = (max(xs), max(ys), max(zs))
+            size = tuple(h - l for l, h in zip(lo, hi))
+            centre = tuple((l + h) / 2 for l, h in zip(lo, hi))
+            print(f"   {mat.name!r:34} verts={len(vids):6}  centre=({centre[0]:7.2f},{centre[1]:7.2f},{centre[2]:7.2f}) "
+                  f"size=({size[0]:6.2f},{size[1]:6.2f},{size[2]:6.2f})  "
+                  f"y {lo[1]:7.2f}..{hi[1]:7.2f}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("summary", "bones", "weights", "morphs", "check"):
+    for name in ("summary", "bones", "weights", "morphs", "check", "bounds"):
         p = sub.add_parser(name)
         p.add_argument("paths", nargs="+")
         p.add_argument("--material")
@@ -596,6 +1053,14 @@ def main() -> int:
     p = sub.add_parser("names")
     p.add_argument("paths", nargs="+")
     p.add_argument("--require", help="comma separated morph names that must exist")
+    p = sub.add_parser("eyes")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("--tolerance", type=float, default=0.1,
+                   help="how close a mirrored pair has to be to count as a twin, in mm (default 0.1)")
+    p.add_argument("--weight", type=float, default=0.5,
+                   help="how much weight a vertex needs on Eye_L/Eye_R to belong to that eye (default 0.5)")
+    p = sub.add_parser("integrity")
+    p.add_argument("paths", nargs="+")
     p = sub.add_parser("diff")
     p.add_argument("paths", nargs=2)
     p = sub.add_parser("tails")
@@ -608,10 +1073,19 @@ def main() -> int:
     p.add_argument("--mirror-tolerance", type=float, default=5.0,
                    help="how far a left/right pair may differ, in degrees")
     p.add_argument("--worst", type=int, default=8, help="how many of the worst bone deviations to list")
+    p = sub.add_parser("orient")
+    p.add_argument("paths", nargs="+", help="the file to report; with --against, only the first is read")
+    p.add_argument("--against", help="an older export to compare against, matched by bone name")
+    p.add_argument("--named", default="Hip,UpBody_Ctrl,Waist,Spine,Chest,Neck,Head",
+                   help="comma separated bones to report one by one")
+    p.add_argument("--worst", type=int, default=8, help="how many bones to list per section")
+    p.add_argument("--tolerance", type=float, default=1.0,
+                   help="how far a tail may turn, in degrees, before --against reports it")
     args = ap.parse_args()
     return {"summary": cmd_summary, "bones": cmd_bones, "weights": cmd_weights,
-            "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check,
-            "names": cmd_names, "tails": cmd_tails}[args.cmd](args.paths, args)
+            "morphs": cmd_morphs, "diff": cmd_diff, "check": cmd_check, "bounds": cmd_bounds,
+            "names": cmd_names, "tails": cmd_tails, "integrity": cmd_integrity,
+            "eyes": cmd_eyes, "orient": cmd_orient}[args.cmd](args.paths, args)
 
 
 if __name__ == "__main__":

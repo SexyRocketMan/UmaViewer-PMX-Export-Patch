@@ -33,8 +33,6 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public int FrameNumber { get; private set; } = 0;
     int frameNumberSaved = 0;
     const float FPSs = 0.03333f;
-    const string CenterNameString = "センター";
-    const string GrooveNameString = "グルーブ";
 
     public enum BoneNames
     {
@@ -104,32 +102,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         { BoneNames.右足ＩＫ, "Ankle_R_IK" }
     };
 
+    /// <summary>
+    /// The name a bone gets in the vmd: the rig's own name, which is also the name
+    /// <see cref="ModelExporter"/> writes into the pmx (it sets each bone's display and english field to
+    /// <c>bone.name</c>). The japanese standard names this recorder was originally written against - the
+    /// ones <see cref="BoneNames"/> spells - do not exist in any pmx this project exports, so a vmd
+    /// spelled that way could not drive its own model: the keyframes would be dropped on import with
+    /// nothing said. That is why there is no longer a switch here at all.
+    /// </summary>
     private string GetBoneNameForExport(BoneNames boneName)
     {
-        // Check if we should use English names
-        if (Config.Instance.VmdUseEnglishBoneNames)
-        {
-            if (EnglishBoneNameMap.TryGetValue(boneName, out string englishName))
-            {
-                return englishName;
-            }
-            else
-            {
-            Debug.LogWarning($"Bone name lookup failed for {boneName}");
-        }
-        }
-        
-        // Default: Use Japanese names (original behavior)
-        string boneNameString = boneName.ToString();
-        if (boneName == BoneNames.全ての親 && UseCenterAsParentOfAll)
-    {
-            boneNameString = CenterNameString;
-        }
-        if (boneName == BoneNames.センター && UseCenterAsParentOfAll)
-        {
-            boneNameString = GrooveNameString;
-        }
-        return boneNameString;
+        if (EnglishBoneNameMap.TryGetValue(boneName, out string englishName)) return englishName;
+
+        // every bone the recorder records has an entry, so reaching this is a bug in the table rather
+        // than a mode the user chose. Say it loudly instead of quietly writing a name nothing drives.
+        Debug.LogError($"[VMD] no english name for {boneName}: the vmd will carry '{boneName}' and no "
+                       + "exported model will answer to it");
+        return boneName.ToString();
     }
 
     //コンストラクタにて初期化
@@ -153,8 +142,54 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public Vector3 RightFootIKOffset = Vector3.zero;
 
     BoneGhost boneGhost;
+    /// <summary>
+    /// Writes what the recorder actually samples, per bone and per frame, to `ghost_dump.jsonl` in the temp
+    /// directory - the ghost's local rotation, the live bone's, and both parent frames. Off unless the
+    /// environment variable below is set, so a normal run pays nothing for it.
+    ///
+    /// It exists because the recorder writes `ghost.localRotation` rather than the live bone's rotation
+    /// (the ghost chain mirrors the MMD hierarchy), and a recording that comes out wrong cannot be argued
+    /// about without knowing which of the two a value came from. `Tools/ghost_dump_check.py` reads the file
+    /// and reports, per bone, how far the recorded value is from the live pose and whether that difference
+    /// is a constant frame conversion or something that moves with the animation.
+    /// </summary>
+    static readonly bool GhostDumpEnabled =
+        System.Environment.GetEnvironmentVariable("UMA_GHOST_DUMP") == "1";
+    System.Text.StringBuilder ghostDump;
+    /// <summary>
+    /// Writes the harness dump (the reference pose and the per-frame samples) when <see cref="GhostDumpEnabled"/>
+    /// asked for it, and forgets it. Idempotent: whichever path ends a take calls it first, the other finds nothing
+    /// to write.
+    /// </summary>
+    void WriteHarnessDump()
+    {
+        if (ghostDump == null && referenceDump == null) return;
+        string dumpPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ghost_dump.jsonl");
+        System.IO.File.WriteAllText(dumpPath,
+            (referenceDump != null ? referenceDump.ToString() : "")
+            + (ghostDump != null ? ghostDump.ToString() : ""));
+        Debug.Log($"[VMD] ghost dump: {(ghostDump != null ? ghostDump.Length : 0)} frame chars, "
+                  + $"{(referenceDump != null ? referenceDump.Length : 0)} reference chars to {dumpPath}");
+        ghostDump = null;
+        referenceDump = null;
+    }
+
+    /// <summary>The recording session's hold on the look-at solve; released by <see cref="StopRecording"/>.</summary>
+    IDisposable lookAtForSession;
+
+    /// <summary>The reference pose the ghost captured, one line per recorded bone; see <see cref="Initialize"/>.</summary>
+    System.Text.StringBuilder referenceDump;
     public MorphRecorder morphRecorder;
     public MorphRecorder morphRecorderSaved;
+
+    /// <summary>
+    /// The fixed timestep the app was using before a recording pinned it to the recording rate, or -1
+    /// while nothing is pinned. It is put back by <see cref="StopRecording"/>: the manual recorder samples
+    /// in FixedUpdate, so the pin cannot be released any earlier than that. Static, because a live
+    /// recording builds one recorder per character and they all pin the same global - the first to
+    /// initialise sets the app's own value aside and the first to stop puts it back.
+    /// </summary>
+    private static float previousFixedDeltaTime = -1f;
 
     private UmaContainer container;
 
@@ -181,9 +216,18 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
 
     public void Initialize()
     {
+        if (previousFixedDeltaTime < 0f) previousFixedDeltaTime = Time.fixedDeltaTime;
         Time.fixedDeltaTime = FPSs;
         container = GetComponentInParent<UmaContainer>();
         List<Transform> objs = GetComponentsInChildren<Transform>().ToList();
+
+        // A component outlives a take whose save dialog was cancelled - only SaveVMD destroys it - and
+        // AutoRecordVMD calls Initialize again for the next take. BoneDictionary is replaced below, but the
+        // three dictionaries built further down are only ever added to, so without this the second run
+        // throws "An item with the same key has already been added" and nothing gets recorded.
+        transformDictionary.Clear();
+        positionDictionary.Clear();
+        rotationDictionary.Clear();
 
         // === DIAGNOSTIC TOOL ===
         if (container != null && UmaViewerBuilder.Instance.CurrentUMAContainer.IsMini) 
@@ -293,6 +337,14 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         var state = animator.GetCurrentAnimatorStateInfo(0);
         animator.enabled = false;
 
+        // The look-at solve is off while the reference pose is built. `BoneGhost` captures the live world
+        // rotations below, and every recorded rotation is written as a delta from that capture - so a solve that
+        // had already bent the spine here is not a pose in one frame, it is the frame every rotation of the take is
+        // expressed in. SuspendLookAt is used rather than the flag alone because it also disables the solver now,
+        // and this capture happens before the container's next FixedUpdate. Restored at the end of Initialize, so
+        // the viewer gets its setting back.
+        var lookAtSuspendedDuringInit = characterContainer != null ? characterContainer.SuspendLookAt() : null;
+
         // Set to T-Pose
         characterContainer.ResetBodyPose();
         characterContainer.UpBodyReset();
@@ -315,13 +367,50 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         if (BoneDictionary[BoneNames.右足ＩＫ] != null)
             RightFootIKOffset = Quaternion.Inverse(transform.rotation) * (BoneDictionary[BoneNames.右足ＩＫ].position - transform.position);
 
+        // the previous take's ghosts go before a new set is built, whether or not that take was saved
+        DestroyBoneGhosts();
         boneGhost = new BoneGhost(BoneDictionary, UseBottomCenter);
         morphRecorder = new MorphRecorder(transform);
 
         UmaAPose.BackToTPose(BoneDictionary[BoneNames.左腕], BoneDictionary[BoneNames.右腕]);
         
+        // The reference pose, captured the moment the ghost captured it. Every rotation in the take is written as a
+        // delta from this, so if a bone is not where the model's rest pose has it here, the whole take is rotated by
+        // that much - and the take looks wrong while the viewport looks right. Dumped with UMA_GHOST_DUMP=1 because
+        // a reported recording cannot be argued about without it.
+        if (GhostDumpEnabled)
+        {
+            referenceDump = new System.Text.StringBuilder();
+            foreach (var pair in BoneDictionary)
+            {
+                if (pair.Value == null) continue;
+                bool known = false;
+                (Vector3 pos, Quaternion rot) stored = default;
+                if (characterContainer.InitBoneTransform != null)
+                {
+                    known = characterContainer.InitBoneTransform.TryGetValue(pair.Value, out stored);
+                }
+                var live = pair.Value.localRotation;
+                var euler = live.eulerAngles;
+                // `InitBoneTransform` stores world transforms, so the comparison has to be world to world - a local
+                // against a world reads as a spurious 180 degrees on every bone deep in a chain.
+                var world = pair.Value.rotation;
+                referenceDump.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{{\"role\":\"reference\",\"bone\":\"{0}\",\"liveLocal\":[{1:F6},{2:F6},{3:F6},{4:F6}],"
+                    + "\"liveWorld\":[{5:F6},{6:F6},{7:F6},{8:F6}],"
+                    + "\"offRest\":{9:F3},\"inRestTable\":{10}}}",
+                    pair.Key,
+                    live.x, live.y, live.z, live.w,
+                    world.x, world.y, world.z, world.w,
+                    known ? Quaternion.Angle(world, stored.rot) : -1f,
+                    known ? "true" : "false"));
+            }
+            Debug.Log($"[VMD] reference pose dumped for {BoneDictionary.Count} bone(s)");
+        }
+
         animator.enabled = true;
         animator.Play(state.shortNameHash, 0, state.normalizedTime);
+        lookAtSuspendedDuringInit?.Dispose();
     }
 
     private void FixedUpdate()
@@ -522,6 +611,22 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         SetInitialPositionAndRotation();
         IsRecording = true;
 
+        // The look-at solve is off for the whole recording *session*, not just for the take a coroutine drives.
+        // It bends the spine chain towards the camera and the sampler reads exactly those bones, so a take whose
+        // reference was captured without it and whose frames were sampled with it carries the solve as a constant
+        // offset on the spine and everything above it - wrong in the file, right in the viewport. Suspending here
+        // rather than inside one path is what makes it not matter which button started the recording: the manual
+        // Record VMD path (`UmaViewerUI.RecordVMD`) calls Initialize() and StartRecording() itself and never
+        // reaches the auto-record coroutine, which is how a suspension placed in that coroutine (or only around
+        // the reference capture) left the manual path sampling a solved pose against an unsolved reference.
+        if (lookAtForSession == null)
+        {
+            var lookAtContainer = GetComponentInParent<UmaContainerCharacter>();
+            if (lookAtContainer != null) lookAtForSession = lookAtContainer.SuspendLookAt();
+            Debug.Log($"[VMD] recording session started: the look-at solve is held off for it "
+                      + $"(container {(lookAtContainer != null ? "found" : "MISSING")})");
+        }
+
         foreach (var kvp in BoneDictionary)
         {
             if (kvp.Value != null)
@@ -556,7 +661,90 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     {
         if (!IsRecording) return;
         SaveFrame();
+        // after SaveFrame, because that is where GhostAll() sets the ghost values this frame's sample used
+        if (ghostDump != null && boneGhost != null)
+        {
+            // The bones the ghost chain does not represent: a recorded bone whose live parent is not its MMD
+            // parent (the rig has UpBody_Ctrl and Waist between Hip and Spine, and nothing like them in the MMD
+            // chain). Their rotation cannot be written as a key of its own, so whatever they hold at sample time
+            // ends up folded into the recorded bone's local rotation - which is how an upper-body-only twist with
+            // untouched legs can appear in a motion that looks right in the viewport.
+            var skipped = new System.Collections.Generic.HashSet<Transform>();
+            foreach (var pair in boneGhost.GhostDictionary)
+            {
+                if (!BoneDictionary.ContainsKey(pair.Key) || BoneDictionary[pair.Key] == null) continue;
+                for (var node = BoneDictionary[pair.Key].parent;
+                     node != null && node != transform && !IsRecordedBone(node);
+                     node = node.parent)
+                {
+                    skipped.Add(node);
+                }
+            }
+            foreach (var node in skipped)
+            {
+                var euler = node.localRotation.eulerAngles;
+                string chainLine = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{{\"frame\":{0},\"bone\":\"{1}\",\"role\":\"skipped\",\"liveLocal\":[{2:F6},{3:F6},{4:F6},{5:F6}],"
+                    + "\"liveWorld\":[{6:F6},{7:F6},{8:F6},{9:F6}],"
+                    + "\"ghostLocal\":[0,0,0,1],\"ghostWorld\":[0,0,0,1],"
+                    + "\"liveParentWorld\":[{10:F6},{11:F6},{12:F6},{13:F6}],\"ghostParentWorld\":[0,0,0,1],"
+                    + "\"liveParent\":\"{14}\",\"ghostParent\":\"<not represented>\"}}",
+                    FrameNumber, node.name,
+                    node.localRotation.x, node.localRotation.y, node.localRotation.z, node.localRotation.w,
+                    node.rotation.x, node.rotation.y, node.rotation.z, node.rotation.w,
+                    node.parent != null ? node.parent.rotation.x : 0f,
+                    node.parent != null ? node.parent.rotation.y : 0f,
+                    node.parent != null ? node.parent.rotation.z : 0f,
+                    node.parent != null ? node.parent.rotation.w : 1f,
+                    node.parent != null ? node.parent.name : "<none>");
+                ghostDump.AppendLine(chainLine);
+            }
+            foreach (var pair in boneGhost.GhostDictionary)
+            {
+                if (pair.Value.ghost == null || !pair.Value.enabled) continue;
+                var live = BoneDictionary != null && BoneDictionary.ContainsKey(pair.Key) ? BoneDictionary[pair.Key] : null;
+                if (live == null) continue;
+                var ghost = pair.Value.ghost;
+                var liveParent = live.parent;
+                var ghostParent = ghost.parent;
+                string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{{\"frame\":{0},\"bone\":\"{1}\",\"liveLocal\":[{2:F6},{3:F6},{4:F6},{5:F6}],"
+                    + "\"liveWorld\":[{6:F6},{7:F6},{8:F6},{9:F6}],"
+                    + "\"ghostLocal\":[{10:F6},{11:F6},{12:F6},{13:F6}],"
+                    + "\"ghostWorld\":[{14:F6},{15:F6},{16:F6},{17:F6}],"
+                    + "\"liveParentWorld\":[{18:F6},{19:F6},{20:F6},{21:F6}],"
+                    + "\"ghostParentWorld\":[{22:F6},{23:F6},{24:F6},{25:F6}],"
+                    + "\"liveParent\":\"{26}\",\"ghostParent\":\"{27}\"}}",
+                    FrameNumber, pair.Key,
+                    live.localRotation.x, live.localRotation.y, live.localRotation.z, live.localRotation.w,
+                    live.rotation.x, live.rotation.y, live.rotation.z, live.rotation.w,
+                    ghost.localRotation.x, ghost.localRotation.y, ghost.localRotation.z, ghost.localRotation.w,
+                    ghost.rotation.x, ghost.rotation.y, ghost.rotation.z, ghost.rotation.w,
+                    liveParent != null ? liveParent.rotation.x : 0f,
+                    liveParent != null ? liveParent.rotation.y : 0f,
+                    liveParent != null ? liveParent.rotation.z : 0f,
+                    liveParent != null ? liveParent.rotation.w : 1f,
+                    ghostParent != null ? ghostParent.rotation.x : 0f,
+                    ghostParent != null ? ghostParent.rotation.y : 0f,
+                    ghostParent != null ? ghostParent.rotation.z : 0f,
+                    ghostParent != null ? ghostParent.rotation.w : 1f,
+                    liveParent != null ? liveParent.name : "<none>",
+                    ghostParent != null ? ghostParent.name : "<none>");
+                ghostDump.AppendLine(line);
+            }
+        }
         FrameNumber++;
+    }
+
+    /// <summary>Whether a transform is one of the bones the recorder writes a key for.</summary>
+    bool IsRecordedBone(Transform node)
+    {
+        if (BoneDictionary == null) return false;
+        foreach (var pair in BoneDictionary)
+        {
+            if (pair.Value == node) return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -614,6 +802,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         int movingBones = 0;
         bool looping = declaredLoop;
 
+        // The solve itself is held off by StartRecording() for the whole session (see there), so that every path -
+        // this coroutine, the manual Record VMD button, live recording - samples it the same way the reference was
+        // captured. What is left to do here is purge a solve that was applied *before* the session began.
+        var characterContainer = GetComponentInParent<UmaContainerCharacter>();
+        // TEMP-HARNESS
+        if (GhostDumpEnabled) ghostDump = new System.Text.StringBuilder();
+
+        // Switching the solver off stops it writing, but its last write is still on the bones - and the snapshot
+        // below is what frame 0 gets built from, so a spine the solve had bent comes back as the take's opening
+        // pose. One animator evaluation per layer lays the clip's own curves back over those bones first, which is
+        // what makes the snapshot read the pose the *clip* is showing. Measured against a take recorded with the
+        // solve switched off from the start: without this purge the opening frame carries the solved head.
+        foreach (var layer in layers)
+        {
+            layer.Animator.Update(0f);
+        }
+
         // Rewind to the start of the clip (see the remarks above): the pose is saved, every recorded layer
         // is put back on time 0, the pose is restored and one animator evaluation applies the clip on top.
         var poseBeforeSeek = SnapshotBonePose();
@@ -640,6 +845,25 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                           + $"{string.Join(", ", layer.Animator.GetCurrentAnimatorClipInfo(layer.Layer).Select(i => i.clip != null ? i.clip.name : "<null>"))}");
             }
 
+            // One physics step with the clip at 0, then the clip put back to 0 again, so that the first sampled
+            // frame is the clip's own first pose *and* a pose every system has already written. Sampling straight
+            // after the evaluation above catches a pose the pipeline has only half applied, because the layers
+            // that drive the head and the face - the locator and face layers - write their bones on the physics
+            // step rather than on an animator evaluation. Measured on a stride cycle: frames 0 and 1 recorded the
+            // identical pose and the motion only started at frame 2. And on a recording reported as "a jerk on the
+            // head/neck at the beginning", the head alone moved 78x its own typical step out of frame 0 while
+            // every other bone stepped normally (`vmd_inspect.py motion`, which now names the bone responsible).
+            yield return new WaitForFixedUpdate();
+            foreach (var layer in layers)
+            {
+                layer.Animator.Play(layer.StateHash, layer.Layer, 0f);
+            }
+            RestoreBonePose(poseBeforeSeek);
+            foreach (var layer in layers)
+            {
+                layer.Animator.Update(0f);
+            }
+
             for (int frame = 0; frame <= totalFrames; frame++)
             {
                 // One fixed step advances the animation by exactly 1/fps (captureDeltaTime is pinned),
@@ -649,8 +873,24 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 SampleFrame();
             }
 
+            // Whether the take is going to be closed on itself decides whether the lead-in drop applies at
+            // all: its whole justification is CloseRecordedLoop copying frame 0 onto the last frame, so a
+            // one-shot take must keep every frame it recorded. Measure before touching the samples.
             LoopSeam(out float seamRotation, out float seamPosition);
             bool closes = declaredLoop || (seamRotation <= LoopSeamRotation && seamPosition <= LoopSeamPosition);
+
+            int droppedLead = closes ? DropAnomalousLeadIn() : 0;
+            if (droppedLead > 0)
+            {
+                Debug.Log($"[VMD] dropped {droppedLead} leading frame(s): their step away from the "
+                          + $"cycle stood out from the rest of the take. CloseRecordedLoop would "
+                          + $"otherwise copy frame 0 onto the last frame and put that offset at both "
+                          + $"ends of the loop.");
+                // the drop moves the seam, so the closing decision and its log line have to be re-measured
+                LoopSeam(out seamRotation, out seamPosition);
+                closes = declaredLoop || (seamRotation <= LoopSeamRotation && seamPosition <= LoopSeamPosition);
+            }
+
             Debug.Log($"[VMD] '{clip.name}': {totalFrames + 1} frames, seam rotation {seamRotation:F5} "
                       + $"position {seamPosition:F5}, closed on itself {closes} "
                       + $"(declared loop {declaredLoop}, tolerances {LoopSeamRotation}/{LoopSeamPosition})");
@@ -663,6 +903,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         {
             ManualSampling = false;
             Time.captureDeltaTime = previousCaptureDeltaTime;
+            WriteHarnessDump();
             foreach (var pair in previousSpeeds)
             {
                 if (pair.Key != null) pair.Key.speed = pair.Value;
@@ -671,6 +912,19 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             {
                 if (pair.Key != null) pair.Key.cullingMode = pair.Value;
             }
+
+            // Put playback back where the take found it. The take rewinds every layer to 0 and steps it
+            // through the clip, so without this the character and the camera are both left on the last
+            // frame of a motion the viewer was only part way through - and a camera motion is a one shot
+            // fly through, so being left on its last frame parks the view somewhere it cannot come back
+            // from. Restoring every layer together is what keeps the two in step: putting only the camera
+            // back makes it replay the move against a character that has already finished.
+            foreach (var layer in layers)
+            {
+                if (layer.Animator != null)
+                    layer.Animator.Play(layer.StateHash, layer.Layer, layer.NormalizedTime);
+            }
+
             StopRecording();
         }
 
@@ -797,6 +1051,98 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Drop leading frames that are not part of the cycle, and report how many were dropped.
+    ///
+    /// <para>The first sampled frames are not reliably part of the motion. Measured on real takes of
+    /// <c>anm_eve_chr1032_00_idle01_loop</c>: summed over all bones, the step from frame 0 to 1 is
+    /// 25.97 degrees and from 1 to 2 is 21.69, while every step from frame 2 onward is at most 1.73.
+    /// The head alone accounts for 25.52 and 13.91 of that. So frames 0 and 1 are outliers and frames
+    /// 2..end are already a clean cycle whose end continues naturally into frame 2.</para>
+    ///
+    /// <para>It matters because <see cref="CloseRecordedLoop"/> copies frame 0 onto the LAST frame, so
+    /// that offset ends up at both ends of the loop: the seam then measures ~0.31 against a tolerance
+    /// of 0.05, and because a <c>_loop</c> clip sets <c>declaredLoop</c> the close happens anyway. A
+    /// forced close is a discontinuity, which is the one-frame jerk seen once per cycle.</para>
+    ///
+    /// <para>Dropping the outliers and re-closing fixes it at the source: same measurement, worst step
+    /// 47.47 -> 2.90 degrees and the head 38.93 -> 0.05. The threshold is relative on purpose -- a clip
+    /// that genuinely opens fast has opening steps no larger than its own interior ones, so a run
+    /// (opening 15.7/299.5 against an interior 280.17) and a walk (1.4/37.7 against 46.99) are left
+    /// untouched.</para>
+    /// </summary>
+    private int DropAnomalousLeadIn(int maxDrop = 3)
+    {
+        const float factor = 3f;      // opening must exceed the interior by this much...
+        const float floor = 5f;       // ...and by at least this many degrees, summed over bones
+        const int warmup = 2;         // the lead-in occupies the first TWO steps, so the interior
+                                      // must be sampled from two frames in, not one
+
+        int frames = 0;
+        foreach (var pair in rotationDictionary)
+        {
+            if (pair.Value != null) frames = Mathf.Max(frames, pair.Value.Count);
+        }
+        if (frames < warmup + 6) return 0;
+
+        System.Func<int, float> step = i =>
+        {
+            float total = 0f;
+            foreach (var pair in rotationDictionary)
+            {
+                var rotations = pair.Value;
+                if (rotations != null && i >= 0 && i + 1 < rotations.Count)
+                {
+                    total += Quaternion.Angle(rotations[i], rotations[i + 1]);
+                }
+            }
+            return total;
+        };
+
+        float interiorMax = 0f;
+        for (int i = warmup; i < frames - 2; i++) interiorMax = Mathf.Max(interiorMax, step(i));
+        if (interiorMax <= 0f) return 0;
+
+        float threshold = Mathf.Max(factor * interiorMax, floor);
+        int drop = 0;
+        while (drop < maxDrop && drop + warmup < frames && step(drop) > threshold) drop++;
+        if (drop == 0) return 0;
+
+        // Remove the same number of frames from every per-frame list. They are indexed by frame
+        // number, so dropping entries at the front renumbers the whole take; FrameNumber and the
+        // visibility keys are shifted to match.
+        foreach (var pair in positionDictionary)
+        {
+            if (pair.Value != null) pair.Value.RemoveRange(0, Mathf.Min(drop, pair.Value.Count));
+        }
+        foreach (var pair in rotationDictionary)
+        {
+            if (pair.Value != null) pair.Value.RemoveRange(0, Mathf.Min(drop, pair.Value.Count));
+        }
+        if (morphRecorder != null)
+        {
+            foreach (var driver in morphRecorder.MorphDrivers.Values)
+            {
+                if (driver.ValueList != null)
+                {
+                    driver.ValueList.RemoveRange(0, Mathf.Min(drop, driver.ValueList.Count));
+                }
+            }
+        }
+        if (visitableDictionary.Count > 0)
+        {
+            var shifted = new Dictionary<int, bool>();
+            foreach (var pair in visitableDictionary)
+            {
+                int key = pair.Key - drop;
+                if (key >= 0) shifted[key] = pair.Value;
+            }
+            visitableDictionary = shifted;
+        }
+        FrameNumber = Mathf.Max(0, FrameNumber - drop);
+        return drop;
+    }
+
     /// <summary>How many bones actually move over the recorded loop (the closing frame is ignored).</summary>
     private int CountMovingBones()
     {
@@ -825,10 +1171,23 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public IEnumerator RecordCurrentLoop(AnimationClip clip, int fps = 30, Action onFinished = null)
     {
         var character = GetComponentInParent<UmaContainerCharacter>();
-        var animators = character == null
-            ? new Animator[0]
-            : new[] { character.UmaAnimator, character.UmaFaceAnimator }.Where(a => a != null).ToArray();
-        return RecordClipLoop(clip, fps, animators, onFinished);
+        var animators = new List<Animator>();
+        if (character != null)
+        {
+            if (character.UmaAnimator) animators.Add(character.UmaAnimator);
+            if (character.UmaFaceAnimator) animators.Add(character.UmaFaceAnimator);
+        }
+
+        // The motion's camera is played by its own animator, and it belongs in this list: rewinding is
+        // what puts everything at the first frame of the take, so without it the recorded camera vmd
+        // starts wherever the camera happened to be and lines up with neither the body motion nor the
+        // frame the take began on. Going through here also means it gets the same speed, culling and
+        // playback position handling as the body, instead of being left on the last frame of its move.
+        var cameraAnimator = UmaViewerBuilder.Instance ? UmaViewerBuilder.Instance.AnimationCameraAnimator : null;
+        if (cameraAnimator && cameraAnimator.runtimeAnimatorController == null) cameraAnimator = null;
+        if (cameraAnimator) animators.Add(cameraAnimator);
+
+        return RecordClipLoop(clip, fps, animators.ToArray(), onFinished);
     }
 
     private class RecordedLayer
@@ -837,6 +1196,12 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         public int Layer;
         /// <summary>Short name hash of the state, which is what <see cref="Animator.Play(int, int, float)"/> takes.</summary>
         public int StateHash;
+        /// <summary>
+        /// Where the layer had got to, so the take can put playback back where it found it. Capped at 1,
+        /// because a looping state reports an ever growing time: the end of a loop is the start of it, so
+        /// landing on the last frame of one is the same place.
+        /// </summary>
+        public float NormalizedTime;
     }
 
     /// <summary>
@@ -857,7 +1222,8 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 {
                     Animator = animator,
                     Layer = layer,
-                    StateHash = state.shortNameHash
+                    StateHash = state.shortNameHash,
+                    NormalizedTime = Mathf.Min(state.normalizedTime, 1f)
                 });
             }
         }
@@ -870,6 +1236,12 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
     public void StopRecording()
     {
         IsRecording = false;
+        lookAtForSession?.Dispose();
+        lookAtForSession = null;
+        // Also from here, because this is the one place both recording paths pass through: a take driven by the
+        // manual Record VMD button never reaches the auto-record coroutine, so a dump written only at the end of
+        // that coroutine silently produced nothing for exactly the takes a user reports.
+        WriteHarnessDump();
         frameNumberSaved = FrameNumber;
         morphRecorderSaved = morphRecorder;
         FrameNumber = 0;
@@ -885,13 +1257,47 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             rotationDictionary.Add(boneName, new List<Quaternion>());
         }
         morphRecorder = new MorphRecorder(transform);
-        
+
+        // the take is over, saved or not, so the app gets its own fixed timestep back instead of staying
+        // pinned to the recording rate for the rest of the session
+        if (previousFixedDeltaTime > 0f)
+        {
+            Time.fixedDeltaTime = previousFixedDeltaTime;
+            previousFixedDeltaTime = -1f;
+        }
+
         if (IsLive)
         {
             var director = Gallop.Live.Director.instance;
             director._liveTimelineControl.RecordUma -= LiveSaveFrame;
         }
     }
+
+    /// <summary>
+    /// Destroys the ghost objects <see cref="BoneGhost"/> built. They are GameObjects parented to the
+    /// character's bones, and SaveVMD used to be the only thing that freed them - so a take whose save
+    /// dialog was cancelled leaked a whole set every time <see cref="Initialize"/> ran again.
+    /// </summary>
+    private void DestroyBoneGhosts()
+    {
+        if (boneGhost == null) return;
+
+        foreach (var pair in boneGhost.GhostDictionary)
+        {
+            try
+            {
+                if (pair.Value.ghost != null) Destroy(pair.Value.ghost.gameObject);
+            }
+            catch (Exception ex)
+            {
+                // mini-uma motion export is what throws in here
+                Debug.LogWarning($"Failed to destroy ghost for {pair.Key}: {ex.Message}");
+            }
+        }
+        boneGhost = null;
+    }
+
+    private void OnDestroy() => DestroyBoneGhosts();
 
     /// <summary>
     /// VMDを作成する
@@ -1106,22 +1512,7 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                 binaryWriter.Close();
             }
         }
-        if (boneGhost != null)
-        {   
-            // Mini-umas motion export cause an exception here
-            foreach(var pair in boneGhost.GhostDictionary)
-            {
-                try 
-                {
-                    if (pair.Value.ghost != null) Destroy(pair.Value.ghost.gameObject);
-                } 
-                catch (Exception ex) 
-                {
-                    Debug.LogWarning($"Failed to destroy ghost for {pair.Key}: {ex.Message}");
-                }
-            }
-            
-        }
+        DestroyBoneGhosts();
         Destroy(this);
     }
 
@@ -1295,9 +1686,60 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
             centerOffsetLength = Vector3.Distance(boneDictionary[BoneNames.全ての親].position, boneDictionary[BoneNames.センター].position);
         }
 
+        /// <summary>
+        /// The ghost bones ordered parents-first within the ghost hierarchy.
+        ///
+        /// Each ghost is given a *world* rotation, and a child's local rotation is fixed against its parent's world
+        /// at the moment it is written - so writing a child before its parent leaves that child's local computed
+        /// against a stale parent, worst on the first frame when every parent still sits at its capture state.
+        /// Measured on a dance clip: the live head moved 0.4 degrees into frame 1 while the recorded head jumped
+        /// 29.5, and the take opened with Head at 71.8x its own typical step - a defect the known-good reference
+        /// recording of the same clip has too (71.7x), so it had been there as long as the recorder had.
+        /// </summary>
+        System.Collections.Generic.List<BoneNames> GhostParentsFirst()
+        {
+            if (_ghostOrder != null) return _ghostOrder;
+            var ordered = new System.Collections.Generic.List<BoneNames>(GhostDictionary.Count);
+            var remaining = new System.Collections.Generic.HashSet<BoneNames>(GhostDictionary.Keys);
+            // repeatedly take the bones whose ghost parent is not itself a pending ghost
+            while (remaining.Count > 0)
+            {
+                bool progressed = false;
+                foreach (var boneName in new System.Collections.Generic.List<BoneNames>(remaining))
+                {
+                    var ghost = GhostDictionary[boneName].ghost;
+                    BoneNames? pendingParent = null;
+                    if (ghost != null)
+                    {
+                        foreach (var other in remaining)
+                        {
+                            if (other == boneName) continue;
+                            var otherGhost = GhostDictionary[other].ghost;
+                            if (otherGhost != null && ghost.parent == otherGhost) { pendingParent = other; break; }
+                        }
+                    }
+                    if (pendingParent != null) continue;
+                    ordered.Add(boneName);
+                    remaining.Remove(boneName);
+                    progressed = true;
+                }
+                if (!progressed)
+                {
+                    // a cycle or an unexpected hierarchy: keep the rest in whatever order is left
+                    ordered.AddRange(remaining);
+                    break;
+                }
+            }
+            _ghostOrder = ordered;
+            return ordered;
+        }
+
+        /// <summary>The parents-first order, computed once: the ghost hierarchy does not change during a take.</summary>
+        System.Collections.Generic.List<BoneNames> _ghostOrder;
+
         public void GhostAll()
         {
-            foreach (BoneNames boneName in GhostDictionary.Keys)
+            foreach (BoneNames boneName in GhostParentsFirst())
             {
                 if (GhostDictionary[boneName].ghost == null || !GhostDictionary[boneName].enabled) { continue; }
                 Quaternion transQuaternion = boneDictionary[boneName].rotation * Quaternion.Inverse(OriginalRotationDictionary[boneName]);
@@ -1355,16 +1797,11 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
                     }
                 }
                 Debug.Log($"[Morph Debug] Final MorphDrivers count: {MorphDrivers.Count}");
-                if (Config.Instance.VmdUseEnglishMorphNames && !MorphNaming.ModelAndMotionNamesAgree(Config.Instance.PmxMorphNameMode))
+                if (!MorphNaming.ModelAndMotionNamesAgree(Config.Instance.PmxMorphNameMode))
                 {
                     Debug.LogWarning("[VMD] PmxMorphNameMode 0 (BlenderCompatible) names morphs longer than a vmd morph name field, "
-                                     + "so exported motions cannot drive the exported model. Use mode 3 (Unified) or 2 (Both) for motions.");
-                }
-                else if (!Config.Instance.VmdUseEnglishMorphNames)
-                {
-                    Debug.LogWarning("[VMD] Japanese vmd morph names do not match any morph name an exported model can carry, "
-                                     + "so Blender will drop the morph keyframes on import. Enable 'english morph names' in the "
-                                     + "animation settings to match the exported model.");
+                                     + "so this motion cannot drive a model exported in that mode. Export the model with mode 2 "
+                                     + "(Unified) if the two are meant to be used together.");
                 }
                 foreach (var kvp in MorphDrivers)
                 {
@@ -1383,32 +1820,16 @@ public class UnityHumanoidVMDRecorder : MonoBehaviour
         /// <summary>
         /// The name this morph gets in the vmd. It has to be the same name <see cref="ModelExporter"/>
         /// wrote into the model, otherwise Blender's mmd_tools silently drops the morph keyframes when
-        /// the motion is imported - both sides therefore go through <see cref="MorphNaming"/>.
+        /// the motion is imported - both sides therefore go through <see cref="MorphNaming"/>, and there
+        /// is deliberately no separate switch for motion-side morph names: a motion spelled differently
+        /// from its model is silently useless, so <see cref="Config.PmxMorphNameMode"/> decides both.
         /// </summary>
         public string ConvertMorphName(FacialMorph morph)
         {
             string name = morph != null ? morph.name : "";
             string tag = morph != null ? morph.tag : "";
 
-            if (Config.Instance.VmdUseEnglishMorphNames)
-            {
-                return MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode);
-            }
-
-            // Default behavior: Convert to Japanese MMD standard names
-            if (Config.Instance.VmdMorphConvertSetting != null && Config.Instance.VmdMorphConvertSetting.Count > 0)
-            {
-                var setting = Config.Instance.VmdMorphConvertSetting;
-                foreach (var val in setting)
-                {
-                    foreach (var v in val.UMAMorph)
-                    {
-                        if(v.Equals(name)) return val.MMDMorph;
-                    }
-                }
-            }
-
-            return MorphNaming.ShortName(name);
+            return MorphNaming.VmdName(name, tag, Config.Instance.PmxMorphNameMode);
         }
 
         public void RecrodAllMorph()

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Mono.Data.Sqlite;
 using System.Data;
@@ -59,6 +59,26 @@ public class UmaDatabaseController
     {
         try
         {
+            // The configured folder is tried first. When it no longer holds a database - a moved or
+            // reinstalled client, a path left over in Config.json, a machine the game was never set up on -
+            // the viewer looks for the install itself, and writes down the folder it found, so the search
+            // only happens once.
+            if (!IsDataFolder(Config.Instance.MainPath))
+            {
+                Debug.Log($"[UmaDatabase] Failed to locate DB at the config path {Config.Instance.MainPath}. Starting automatic search...");
+                var located = FindDataFolder();
+                if (located == null)
+                {
+                    Debug.LogWarning("[UmaDatabase] Automatic search did not find the game database.");
+                }
+                else
+                {
+                    Debug.Log($"[UmaDatabase] Using {located} and updating the config path (Config.json -> MainPath).");
+                    Config.Instance.MainPath = located;
+                    Config.Instance.UpdateConfig(false);
+                }
+            }
+
             var dbKey = Config.Instance.DBKey;
             if (Config.Instance.Region == Region.Global)
             {
@@ -139,6 +159,288 @@ public class UmaDatabaseController
         }
     }
 
+
+
+    // --------------------------------------------------------------------------------------------
+    // Finding the game's data folder
+    //
+    // The viewer needs a folder holding the meta database and master/master.mdb (or their _umaviewer
+    // counterparts in WorkMode.Standalone). Which folder that is depends on the client:
+    //
+    //   DMM client                  <install>\umamusume_Data\Persistent
+    //   Steam, Japanese             <install>\UmamusumePrettyDerby_Jpn\UmamusumePrettyDerby_Jpn_Data\Persistent
+    //   Steam, Global               <install>\UmamusumePrettyDerby\UmamusumePrettyDerby_Data\Persistent
+    //   older DMM/Steam clients     %USERPROFILE%\AppData\LocalLow\Cygames\umamusume   (the data folder itself)
+    //
+    // <install> is wherever the user put the game: a Steam library's steamapps\common, a folder of their
+    // own, or one of the usual places on any drive. Everything below is only a list of places to look -
+    // no folder is ever written to, and a folder that does not exist is skipped without noise.
+    // --------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Folders to look in before anything else, for an install in a place the guesses below do not cover.
+    /// Empty by default: writing a path here - @"D:\Games\Uma" - is all it takes, and the search still
+    /// checks the folder itself and the client layouts inside it.
+    /// </summary>
+    private static readonly string[] ExtraSearchFolders = { };
+
+    /// <summary>
+    /// Game folder names, in the order they are tried. The "_Data" folder a client keeps the game in is
+    /// named after its executable, which is these names with the case Windows ignores.
+    /// </summary>
+    private static readonly string[] GameFolderNames =
+    {
+        "Umamusume",
+        "UmamusumePrettyDerby",
+        "UmamusumePrettyDerby_Jpn",
+    };
+
+    /// <summary>Subfolders of a drive root that installs are commonly placed in ("" is the root itself).</summary>
+    private static readonly string[] CommonInstallFolders =
+    {
+        "",
+        "Games",
+        "Program Files",
+        "Program Files (x86)",
+        "SteamLibrary",
+    };
+
+    /// <summary>
+    /// Whether <paramref name="folder"/> is a folder the viewer can read the game from: it holds the meta
+    /// database and the master database of the configured work mode.
+    /// </summary>
+    private static bool IsDataFolder(string folder)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return false;
+
+            bool standalone = Config.Instance.WorkMode == WorkMode.Standalone;
+            string meta = Path.Combine(folder, standalone ? "meta_umaviewer" : "meta");
+            string master = Path.Combine(folder, "master", standalone ? "master_umaviewer.mdb" : "master.mdb");
+            return File.Exists(meta) && File.Exists(master);
+        }
+        catch (Exception)
+        {
+            return false; // a path the runtime refuses to look at is simply not the one
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="path"/> spelled the way it really is on disk, or null when no folder of that name
+    /// is there at all. Windows ignores case, so a client found as "Umamusume_Data" can really be
+    /// "umamusume_Data" - and the folder written to Config.json should be the one that exists.
+    /// </summary>
+    private static string RealCasePath(string path)
+    {
+        try
+        {
+            string full = Path.GetFullPath(path);
+            string root = Path.GetPathRoot(full);
+            string rest = full.Substring(root.Length).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (rest.Length == 0) return root;
+
+            string current = root;
+            foreach (var segment in rest.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            {
+                if (segment.Length == 0) continue;
+
+                string match = null;
+                foreach (var entry in Directory.GetDirectories(current))
+                {
+                    if (string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        match = entry;
+                        break;
+                    }
+                }
+
+                if (match == null) return null; // nothing of that name, under any spelling
+                current = match;
+            }
+
+            return current;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Looks for the game's data folder in the places a client is known to install to, logging every
+    /// location it rules out. Returns null when none of them holds a database.
+    /// </summary>
+    private static string FindDataFolder()
+    {
+        var bases = CandidateBaseFolders();
+        Debug.Log($"[UmaDatabase] Searching {bases.Count} location(s): Steam libraries, the folders the game " +
+                  $"and the viewer keep its data in, and the usual install folders on each drive.");
+
+        foreach (var baseFolder in bases)
+        {
+            string found = null;
+            foreach (var candidate in DataFoldersUnder(baseFolder))
+            {
+                if (IsDataFolder(candidate))
+                {
+                    found = RealCasePath(candidate) ?? candidate;
+                    break;
+                }
+            }
+
+            Debug.Log($"[UmaDatabase] Checking subdirectories for {baseFolder}...{(found == null ? "FAILED" : "OK")}");
+            if (found != null)
+            {
+                Debug.Log($"[UmaDatabase]   data folder at {found}");
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Every data folder an install at <paramref name="baseFolder"/> could be using.</summary>
+    private static IEnumerable<string> DataFoldersUnder(string baseFolder)
+    {
+        // the older clients keep meta/ and master/ straight in their own folder
+        yield return baseFolder;
+
+        foreach (var name in GameFolderNames)
+        {
+            string game = Path.Combine(baseFolder, name);
+            yield return Path.Combine(game, name + "_Data", "Persistent");
+            yield return Path.Combine(game, "Persistent");
+        }
+    }
+
+    /// <summary>
+    /// The folders to look inside, most likely first: the Steam libraries, then where the clients keep
+    /// data on their own, then the usual places on every fixed drive.
+    /// </summary>
+    private static List<string> CandidateBaseFolders()
+    {
+        var bases = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        Action<string> add = path =>
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            if (seen.Add(path)) bases.Add(path);
+        };
+
+        foreach (var folder in ExtraSearchFolders)
+        {
+            add(folder);
+        }
+
+        foreach (var library in SteamLibraries())
+        {
+            add(Path.Combine(library, "steamapps", "common"));
+        }
+
+        // the viewer's own default, and the folder both older clients write their meta/ into
+        string localLow = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "Low";
+        add(Path.Combine(localLow, "Cygames", "umamusume"));
+        add(Path.Combine(localLow, "Cygames"));
+
+        // installs the user placed themselves, the usual case for the DMM client
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrEmpty(profile)) add(profile);
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR
+        foreach (var drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (drive.DriveType != DriveType.Fixed || !drive.IsReady) continue;
+                foreach (var folder in CommonInstallFolders)
+                {
+                    add(Path.Combine(drive.RootDirectory.FullName, folder));
+                }
+            }
+            catch (Exception)
+            {
+                // a drive that cannot be queried is not worth a single line of noise
+            }
+        }
+#endif
+
+        return bases;
+    }
+
+    /// <summary>
+    /// Every Steam library folder: the one Steam itself is installed in, and the extra libraries listed
+    /// in its steamapps\libraryfolders.vdf, which is where games installed to another drive live.
+    /// </summary>
+    private static List<string> SteamLibraries()
+    {
+        var libraries = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        Action<string> add = path =>
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            try
+            {
+                path = Path.GetFullPath(path);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (seen.Add(path)) libraries.Add(path);
+        };
+
+        var roots = new List<string>();
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR
+        try
+        {
+            // the install the user actually runs, then the machine-wide one
+            var steamPath = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null) as string;
+            if (!string.IsNullOrEmpty(steamPath)) roots.Add(steamPath);
+            var installPath = Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null) as string;
+            if (!string.IsNullOrEmpty(installPath)) roots.Add(installPath);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[UmaDatabase] Could not read Steam's install path from the registry: {e.Message}");
+        }
+#endif
+
+        // the defaults, for a registry that has nothing to say (or an editor on another platform)
+        roots.Add(@"C:\Program Files (x86)\Steam");
+        roots.Add(@"C:\Program Files\Steam");
+
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root)) continue;
+            add(root);
+
+            string vdf = Path.Combine(root, "steamapps", "libraryfolders.vdf");
+            if (!File.Exists(vdf)) continue;
+
+            try
+            {
+                foreach (var line in File.ReadAllLines(vdf))
+                {
+                    int key = line.IndexOf("\"path\"", StringComparison.Ordinal);
+                    if (key < 0) continue;
+                    int first = line.IndexOf('"', key + 6);
+                    int last = first < 0 ? -1 : line.IndexOf('"', first + 1);
+                    if (last < 0) continue;
+                    add(line.Substring(first + 1, last - first - 1).Replace("\\\\", "\\"));
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[UmaDatabase] Could not read {vdf}: {e.Message}");
+            }
+        }
+
+        return libraries;
+    }
 
 
     //修改(载入通用服装ColorSet相关)
@@ -444,6 +746,94 @@ public class UmaDatabaseController
     static List<DataRow> ReadAllDressData(SqliteConnection conn)
     {
         return ReadMaster(conn, $"SELECT * FROM dress_data C,(SELECT D.'index' dressid,D.'text' dressname FROM text_data D WHERE id like 14) T WHERE C.id like T.dressid");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The text of the recorded character voices
+    //
+    // `character_system_text` holds one row per recorded voice line - the home, training, outgame,
+    // minigame, victory and event lines - with the line itself and the cue the audio is played from. It is
+    // the only place this text exists: the sound assets carry no text at all, only cue names. Story
+    // dialogue is not here; it lives in the story timeline assets (see AudioTranscripts).
+    //
+    // The table is read on first use rather than at startup: 33k rows are not worth the boot time until
+    // something actually asks for a transcript.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>Cue name -> the line it voices, with the speaker's name. Null until first use.</summary>
+    private static Dictionary<string, KeyValuePair<string, string>> systemVoiceText;
+
+    /// <summary>How many cue names the character voice table resolved to, for diagnostics.</summary>
+    public static int SystemVoiceTextCount => SystemVoiceText().Count;
+
+    /// <summary>
+    /// The line a recorded character voice plays, by the cue name the sound asset's acb gives it
+    /// (e.g. `snd_voi_home_100100_0021`). False when the clip is not a recorded character voice.
+    /// </summary>
+    public static bool TryGetSystemVoiceText(string cueName, out string speaker, out string text)
+    {
+        speaker = "";
+        text = "";
+        if (string.IsNullOrEmpty(cueName)) return false;
+
+        var table = SystemVoiceText();
+        if (!table.TryGetValue(cueName, out KeyValuePair<string, string> line)) return false;
+        speaker = line.Key;
+        text = line.Value;
+        return !string.IsNullOrEmpty(text);
+    }
+
+    private static Dictionary<string, KeyValuePair<string, string>> SystemVoiceText()
+    {
+        if (systemVoiceText != null) return systemVoiceText;
+        systemVoiceText = new Dictionary<string, KeyValuePair<string, string>>(StringComparer.Ordinal);
+        if (instance?.masterDb == null)
+        {
+            Debug.LogWarning($"[Transcript] no master database connection "
+                             + $"(controller {(instance == null ? "missing" : "present")})");
+            return systemVoiceText;
+        }
+
+        try
+        {
+            // character names, the same rows the character list is built from (text_data category 6)
+            var names = new Dictionary<int, string>();
+            List<DataRow> nameRows = ReadMaster(instance.masterDb, "SELECT \"index\", text FROM text_data WHERE id = 6");
+            foreach (DataRow row in nameRows)
+            {
+                int id = Convert.ToInt32(row[0]);
+                if (!names.ContainsKey(id)) names[id] = Convert.ToString(row[1]);
+            }
+
+            List<DataRow> rows = ReadMaster(instance.masterDb,
+                "SELECT character_id, cue_sheet, cue_id, lip_sync_data, text FROM character_system_text");
+            Debug.Log($"[Transcript] character voices: {rows.Count} row(s), {names.Count} character name(s)");
+            foreach (DataRow row in rows)
+            {
+                int characterId = Convert.ToInt32(row[0]);
+                string sheet = Convert.ToString(row[1]);
+                int cueId = Convert.ToInt32(row[2]);
+                string lipSync = Convert.ToString(row[3]);
+                string line = Convert.ToString(row[4]);
+                if (string.IsNullOrEmpty(line)) continue;
+
+                string speaker = names.TryGetValue(characterId, out string name) ? name : "";
+                var value = new KeyValuePair<string, string>(speaker, line);
+
+                // Two keys, because the table is not consistent about how it names a cue: `lip_sync_data` is
+                // the cue name most of the time, but a few hundred rows carry `..._00` where the sheet and
+                // cue id spell `..._0000`. Indexing both shapes is enough to catch those.
+                if (!string.IsNullOrEmpty(lipSync)) systemVoiceText[lipSync] = value;
+                string fromParts = $"{sheet}_{cueId:0000}";
+                if (!systemVoiceText.ContainsKey(fromParts)) systemVoiceText[fromParts] = value;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Transcript] character_system_text unavailable: {e.Message}");
+        }
+
+        return systemVoiceText;
     }
 
     public static DataRow ReadCharaData(CharaEntry chara)

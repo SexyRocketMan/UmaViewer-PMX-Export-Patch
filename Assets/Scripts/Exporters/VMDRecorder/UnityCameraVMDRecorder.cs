@@ -39,6 +39,9 @@ public class UnityCameraVMDRecorder : MonoBehaviour
     // Start is called before the first frame update
     public void Initialize()
     {
+        // Pinned but not restored here: the humanoid recorder of the same take sets aside the app's own
+        // timestep and puts it back in its StopRecording, and a second capture here would only ever read
+        // the already pinned value back. Both recorders describe one recording, and that one owns the pin.
         Time.fixedDeltaTime = FPSs;
 
         SetCameraTransform();
@@ -180,6 +183,11 @@ public class UnityCameraVMDRecorder : MonoBehaviour
     public void StartRecording()
     {
         SetInitialPositionAndRotation();
+        // firstKey, LastRotation and finalRotation build one continuous rotation track, and a take whose
+        // save dialog was cancelled leaves them set: the component only goes away in SaveVMD. Without this
+        // the next take's track carries on from the previous take's last frame instead of starting from
+        // where the camera is now, which is the camera motion not resetting between recordings.
+        firstKey = false;
         IsRecording = true;
     }
 

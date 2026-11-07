@@ -11,6 +11,18 @@ public class Config
     public static Config Instance;
     public string Version = "";
 
+    /// <summary>
+    /// The config, loaded on first use.
+    ///
+    /// The config used to be created in one place only, <see cref="UmaViewerMain.Awake"/>, and anything that
+    /// read <see cref="Instance"/> from another component's `Awake` was racing it: Unity promises that every
+    /// `Awake` runs before any `Start`, never an order *between* two `Awake`s. <see cref="UIShortcuts"/> was
+    /// built in <see cref="UmaViewerUI.Awake"/> and lost that race in the shipped build, so it bound the
+    /// built-in defaults and every `ViewerShortcuts` edit in Config.json was silently ignored while the log
+    /// still printed a healthy-looking binding list. Whoever needs the config first now creates it.
+    /// </summary>
+    public static Config Ensure() => Instance ?? new Config();
+
     public string DBBaseKeyTip = "Base key to read game database files";
     public string DBBaseKeyText;
 
@@ -47,19 +59,44 @@ public class Config
     public string LastMotionFolderTip = "Folder the VMD save dialogs open in. Updated after every save, so the next one starts where the last one went.";
     public string LastMotionFolder = "";
 
-    public string VmdUseEnglishBoneNamesTip = "True = uses the same bone names as exported models, false = uses japanese names";
-    public bool VmdUseEnglishBoneNames = true;
-    public string VmdUseEnglishMorphNamesTip = "True = uses the same morph names as exported models, false = uses japanese names";
-    public bool VmdUseEnglishMorphNames = true;
+    public string ViewerShortcutsTip = "Every keyboard shortcut in the viewer: Name is the action (PanelPrev, PanelNext, ListUp, ListDown, ExportModel, AutoRecord, RainLook), Key is a UnityEngine.KeyCode name (R, E, UpArrow, Keypad1, ...), Alt requires Alt to be held. One line per key, so an action can have several, and deleting a line removes that key. Neither is guessed at: an unknown Name or Key is named in the log and skipped rather than silently doing nothing. The keys do not fight the modes - a shortcut on a key the free camera flies with (WASD and the arrows) is inactive while the camera is in free mode, and in pose mode the list walk, the panel cycle and recording are inactive: the list walk because it loads whatever it lands on and would replace the model mid-pose, recording because pose mode disables the animator it samples.";
+    public List<ShortcutConfig> ViewerShortcuts = DefaultViewerShortcuts();
 
-    public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and vmd motions. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but is too long for a vmd morph name; 1 = short english names (Eye_2_L); 2 = both, tagged morphs plus short english aliases; 3 = unified, descriptive and vmd sized (Brow_WaraiA_R)";
+    /// <summary>The shortcuts a fresh Config.json starts with - the viewer's own defaults.</summary>
+    public static List<ShortcutConfig> DefaultViewerShortcuts() => new List<ShortcutConfig>
+    {
+        new ShortcutConfig("PanelPrev", "LeftArrow"),
+        new ShortcutConfig("PanelNext", "RightArrow"),
+        // the hand on the mouse is usually the right one, so the list walk has a letter as well
+        new ShortcutConfig("ListUp", "UpArrow"),
+        new ShortcutConfig("ListUp", "W"),
+        new ShortcutConfig("ListDown", "DownArrow"),
+        new ShortcutConfig("ListDown", "S"),
+        new ShortcutConfig("ExportModel", "E"),
+        new ShortcutConfig("AutoRecord", "A"),
+        new ShortcutConfig("RainLook", "R"),
+    };
+
+    public string PmxMorphNameModeTip = "Naming of morphs in exported .pmx models and in the vmd motions recorded beside them - one setting for both, because a motion can only drive a model whose morphs are spelled the same way, and the two used to be independently selectable. 0 = Blender/uma_addon compatible, keeps the \"(Tag)[Mesh]\" suffix the stock addon matches on (Eye_2_L(CloseA)[M_Face]) but that is 27-30 bytes and a vmd morph name field holds 15, so a model exported this way cannot be driven by any motion; 1 = short english names (Eye_2_L), fits a motion but says nothing about what the morph does; 2 = unified, descriptive and vmd sized (Brow_WaraiA_R). Bone names have no switch at all: a recorded vmd always carries the rig's own names, which are the names the exported pmx carries.";
     public PmxMorphNameMode PmxMorphNameMode = PmxMorphNameMode.Unified;
 
-    public string PmxAPoseRestPoseTip = "true/false. Exports the model with both upper arms rotated 38.5 degrees into the A-pose that motion recording is relative to, so a recorded vmd lines up in Blender on its own - no posing the model and re-importing the motion with \"Use current pose as rest pose\". true for MMD style use, false (default) keeps the plain T-pose rest that rigging/retargeting expects.";
-    public bool PmxAPoseRestPose = false;
+    public string PmxAPoseRestPoseTip = "true/false. Exports the model with both upper arms rotated 38.5 degrees into the A-pose that motion recording is relative to, so a recorded vmd lines up in Blender on its own - no posing the model and re-importing the motion with \"Use current pose as rest pose\". true for MMD style use, false keeps the plain T-pose rest that rigging/retargeting expects; the default is true.";
+    public bool PmxAPoseRestPose = true;
 
     public string PmxUmaMaterialFieldsTip = "true/false. Writes the uma material data an MMD material has no field for into the exported materials: the shader settings (shade threshold, rim, specular, outline, map names) as one line in the material comment, which the Blender uma addon reads back, and the material's specular and outline values. false exports plain MMD materials (white diffuse, no specular, black outline at 0.4) for models meant to be used without that addon.";
     public bool PmxUmaMaterialFields = true;
+
+    public string PmxExtraMorphsTip = "true/false. The facial morphs an MMD morph cannot express (the cheek blush, the eye-manga and the tear objects) are exported as extra MMD vertex morphs instead of being lost: each decal part is collapsed onto a point inside the head and a morph of its own (Cheek_Blush, one per eye manga expression, Tear_Static_L and Tear_Static_R, Tear_Pool_L and Tear_Pool_R) puts it back, so the model rests hidden and the morph at weight 1 is the deployed decal - the idiom MMD models use for a hidden accessory, and it needs nothing but MMD itself. The tall rolling tear card is left out on purpose: it has no way to roll, and a tear that cannot move reads as a mistake, so it stays collapsed and is simply not in the model. What a morph cannot hold (the cheek texture pair and _CheekRate, the face shadow alpha) is described in the comments instead: a morph= line in the material comments and extra morphs / object morphs lines in the model comment, which the Blender uma addon reads back. The two *animated* decals (the @_@ turn and the tear sprite-sheet scroll) are not morphs at all any more: their data is in those comment tokens and the addon drives them on the material. false leaves the decal parts out of the model entirely, and writes no comment lines: those parts are only in the file because a vertex morph can deploy them, and a card collapsed against the head with no morph to show it is invisible junk that nothing in the file explains. Measured on character 1001 costume 00: 8 materials and 13,968 vertices with the option off, 27 and 14,492 with it on. So a model exported with false simply has no blush, manga eyes or tears - not 'visible at rest', absent.";
+    public bool PmxExtraMorphs = true;
+
+    public string PmxTextureVariantsTip = "true/false. Also exports the game's wet and dirt maps, which ship as assets of their own beside the dry ones (the dry maps live inside the part prefabs, the variants do not): tex_x_diff -> tex_x_diff_wet for the rain look, and tex_x_diff -> tex_x_dirt for the dirty one, written into the same Texture2D folder under the game's own names. A pmx material has one texture slot, so they cannot be material textures: each material's comment names its own with a wet=<file> / dirt=<file> token (see docs/PMX_EXTENSIONS.md), and the model comment says which families the export carries. Measured on character 1001 costume 00: 8 of the 34 maps have a wet twin and 2 have a dirt map, about +2.1 MB on a 2.7 MB texture set, which is why it is a setting. Nothing in MMD reads these; they are for a shader that knows what they are (the uma addon).";
+    public bool PmxTextureVariants = true;
+
+    public string FbxApplyUmaRefinementTip = "true/false. FBX export only, and optional on purpose: aims the eye bones the way the Blender uma addon's \"Refine Structure\" aims them (Y out of the face along the gaze, roll so Z points down) and keeps the eyeball skinned to Eye_L/Eye_R, so rotating an eye bone moves the gaze without any driver - which is what FBX cannot carry. true (default) exports the rig as close to an addon-refined model as the format allows; false exports the rig exactly as the viewer holds it.";
+    public bool FbxApplyUmaRefinement = true;
+
+    public string FbxEmbedTexturesTip = "true/false. FBX export only. Carries the PNGs inside the .fbx as well as writing the Texture2D folder next to it, so the model stays textured when the file is copied somewhere on its own (Blender packs the embedded copy into the .blend). Costs the size of the textures. false writes the relative paths only, which is what the .pmx does.";
+    public bool FbxEmbedTextures = true;
 
     public string AntiAliasingTip = "Display, screenshot antialiasing level. 0 - no AA, 1 - 2x MSAA, 2 - 4x MSAA, 3 - 8x MSAA";
     public int AntiAliasing = 2;
@@ -333,7 +370,14 @@ public enum WorkMode
 }
 
 /// <summary>
-/// How vertex morphs are named in exported .pmx models.
+/// How vertex morphs are named in exported .pmx models and in the vmds recorded beside them.
+///
+/// The values are numbered explicitly because this enum is persisted into Config.json as a number. The
+/// numbering changed once: 2 used to be <c>Both</c> (tagged plus a short alias) and <c>Unified</c> was 3.
+/// <c>Both</c> is gone - it wrote 432 morph entries for what <c>Unified</c> does in 192, and nothing
+/// needed the tagged spelling in the same file as a motion - so <c>Unified</c> took slot 2. Every build
+/// ships its own Config.json, so no migration is needed; a stale value of 3 simply lands on the
+/// fail-safe in <see cref="MorphNaming.NamesFor"/>.
 /// </summary>
 public enum PmxMorphNameMode
 {
@@ -345,18 +389,18 @@ public enum PmxMorphNameMode
     /// </summary>
     BlenderCompatible = 0,
 
-    /// <summary>Short names only (e.g. "Eye_20_R"), matching the names used in exported vmd motions.</summary>
+    /// <summary>
+    /// Short names only (e.g. "Eye_20_R"). Fits a vmd, but the name says nothing about what the morph
+    /// does - which is what <see cref="Unified"/> exists to fix.
+    /// </summary>
     ShortEnglish = 1,
-
-    /// <summary>Emits both the tagged and the short name for every morph.</summary>
-    Both = 2,
 
     /// <summary>
     /// Descriptive, unique and within the vmd byte limit: english group + romaji tag + side
     /// (e.g. "Brow_WaraiA_R", "Eye_XRange_L"). One name for the model and the motion, see
     /// <see cref="MorphNaming"/>. Default.
     /// </summary>
-    Unified = 3
+    Unified = 2
 }
 
 [Serializable]
@@ -369,5 +413,26 @@ public class MorphConvertConfig
     {
         UMAMorph = new List<string>(umaMorphs);
         MMDMorph = mmdMorph;
+    }
+}
+
+/// <summary>
+/// One keyboard shortcut, as it appears in `Config.json`: which action, which key, and whether Alt has to
+/// be held. The key is a name ("R", "UpArrow") rather than a number because the file is meant to be edited
+/// by hand. <see cref="UIShortcuts"/> owns the list of valid <see cref="Name"/>s and names the rest in the
+/// log rather than binding them to nothing.
+/// </summary>
+[Serializable]
+public class ShortcutConfig
+{
+    public string Name;
+    public string Key;
+    public bool Alt;
+
+    public ShortcutConfig(string name, string key, bool alt = false)
+    {
+        Name = name;
+        Key = key;
+        Alt = alt;
     }
 }
