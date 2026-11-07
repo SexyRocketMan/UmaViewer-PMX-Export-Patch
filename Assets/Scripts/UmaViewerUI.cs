@@ -127,6 +127,11 @@ public class UmaViewerUI : MonoBehaviour
     private void Awake()
     {
         Instance = this;
+
+        // Built here, in Awake, because the command line takes over in `RuntimeInitializeOnLoadMethod(AfterSceneLoad)`
+        // - after Awake, before any Start - so a shortcut list built in Start would be missing from every CLI run,
+        // which is where the binding log is checked. The config is therefore created on first use
+        // (Config.Ensure) rather than depending on which component's Awake happens to run first.
         shortcuts = new UIShortcuts(this);
     }
 

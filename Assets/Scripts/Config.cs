@@ -11,6 +11,18 @@ public class Config
     public static Config Instance;
     public string Version = "";
 
+    /// <summary>
+    /// The config, loaded on first use.
+    ///
+    /// The config used to be created in one place only, <see cref="UmaViewerMain.Awake"/>, and anything that
+    /// read <see cref="Instance"/> from another component's `Awake` was racing it: Unity promises that every
+    /// `Awake` runs before any `Start`, never an order *between* two `Awake`s. <see cref="UIShortcuts"/> was
+    /// built in <see cref="UmaViewerUI.Awake"/> and lost that race in the shipped build, so it bound the
+    /// built-in defaults and every `ViewerShortcuts` edit in Config.json was silently ignored while the log
+    /// still printed a healthy-looking binding list. Whoever needs the config first now creates it.
+    /// </summary>
+    public static Config Ensure() => Instance ?? new Config();
+
     public string DBBaseKeyTip = "Base key to read game database files";
     public string DBBaseKeyText;
 

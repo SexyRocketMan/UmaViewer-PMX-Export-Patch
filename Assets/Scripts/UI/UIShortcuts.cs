@@ -13,16 +13,16 @@ using UnityEngine.UI;
 ///
 ///   * a text box has focus - every shortcut is off, the field owns the keyboard (see
 ///     <see cref="TypingInField"/>);
+///   * pose mode is on - every shortcut is off, because pose mode owns the keyboard (see
+///     <see cref="Suspended"/>);
 ///   * the camera is in free mode - a shortcut on a key the camera flies with is off, because the camera
 ///     is being flown and <see cref="CameraOrbit"/> already reads that key as an axis (see
-///     <see cref="CameraKeys"/>). Export and the rain look do not collide, so they keep working;
-///   * pose mode is on - navigation is off, because the list walk loads whatever it lands on and would
-///     replace the model being posed mid-pose, and so is recording, because
-///     <see cref="PoseManager.EnablePoseMode"/> disables the animator the recorder samples.
+///     <see cref="CameraKeys"/>). Matched against the key a shortcut was actually given, so a rebinding
+///     onto a key the camera does not fly with keeps working.
 ///
 /// Each entry in the config list is one key, so the same action can have several (the list walk has an
 /// arrow and a letter each by default). An action whose name is not in <see cref="Definitions"/> is
-/// reported and skipped rather than silently doing nothing.
+/// reported and skipped rather than silently doing nothing, and so is an unknown key name.
 /// </summary>
 public class UIShortcuts
 {
@@ -44,23 +44,10 @@ public class UIShortcuts
         KeyCode.LeftArrow, KeyCode.RightArrow, KeyCode.UpArrow, KeyCode.DownArrow,
     };
 
-    /// <summary>What a shortcut does, which decides what suspends it (see the class summary).</summary>
-    private enum Scope
-    {
-        /// <summary>Changes what is loaded or shown: the panel cycle and the list walk.</summary>
-        Navigation,
-
-        /// <summary>Does something to what is already loaded.</summary>
-        Action,
-    }
-
     private class Definition
     {
         public Action Run;
-        public Scope Scope;
         public bool Repeat;
-        /// <summary>True for actions that need the character's animator running.</summary>
-        public bool NeedsAnimator;
     }
 
     private class Binding
@@ -72,6 +59,9 @@ public class UIShortcuts
 
         /// <summary>Unscaled time this may fire again at, or 0 while the key is not held.</summary>
         public float NextRepeat;
+
+        /// <summary>How a binding is named in the log: the key it is on, then the action it runs.</summary>
+        public string Label => $"{(Alt ? "Alt+" : "")}{Key} -> {Name}";
     }
 
     private readonly UmaViewerUI ui;
@@ -82,8 +72,14 @@ public class UIShortcuts
         this.ui = ui;
 
         var definitions = Definitions();
-        var wanted = Config.Instance != null ? Config.Instance.ViewerShortcuts : null;
-        if (wanted == null || wanted.Count == 0) wanted = Config.DefaultViewerShortcuts();
+        var wanted = ReadConfig();
+
+        if (wanted.Count == 0)
+        {
+            Debug.LogWarning($"[Shortcuts] {Config.configPath} binds no keys at all: every shortcut is off. "
+                             + "That is what an empty ViewerShortcuts list means - delete a line to drop one "
+                             + "key, delete them all to drop every key.");
+        }
 
         foreach (var entry in wanted)
         {
@@ -108,9 +104,31 @@ public class UIShortcuts
             bindings.Add(new Binding { Key = key, Alt = entry.Alt, Definition = definition, Name = entry.Name });
         }
 
-        Debug.Log($"[Shortcuts] {bindings.Count} binding(s): "
+        Debug.Log($"[Shortcuts] {bindings.Count} binding(s) from {Config.configPath}: "
                   + string.Join(", ", bindings.ConvertAll(b =>
-                        $"{(b.Alt ? "Alt+" : "")}{b.Key}{(b.Definition.Repeat ? " (repeat)" : "")} -> {b.Name}")));
+                        $"{(b.Definition.Repeat ? "held " : "")}{b.Label}")));
+
+        Probe();
+    }
+
+    /// <summary>
+    /// The list of keys to bind: the one in Config.json, or the built-in defaults when the file has no list
+    /// at all.
+    ///
+    /// The defaults used to be a *silent* fallback, and that is what hid the real defect for two releases:
+    /// the shortcuts were built before the config existed, so they always bound these defaults while every
+    /// run logged a plausible binding list. The fallback now has to say so, naming the file it read and the
+    /// list it wanted.
+    /// </summary>
+    private static List<ShortcutConfig> ReadConfig()
+    {
+        var config = Config.Ensure();
+        var wanted = config.ViewerShortcuts;
+        if (wanted != null) return wanted;
+
+        Debug.LogWarning($"[Shortcuts] {Config.configPath} has no ViewerShortcuts list, so the built-in "
+                         + "defaults are used and no key can be rebound. Add the list back to that file.");
+        return Config.DefaultViewerShortcuts();
     }
 
     /// <summary>
@@ -119,20 +137,18 @@ public class UIShortcuts
     private Dictionary<string, Definition> Definitions() =>
         new Dictionary<string, Definition>(StringComparer.OrdinalIgnoreCase)
         {
-            { "PanelPrev", new Definition { Run = () => CyclePanel(-1), Scope = Scope.Navigation } },
-            { "PanelNext", new Definition { Run = () => CyclePanel(1), Scope = Scope.Navigation } },
-            { "ListUp", new Definition { Run = () => MoveSelection(-1), Scope = Scope.Navigation, Repeat = true } },
-            { "ListDown", new Definition { Run = () => MoveSelection(1), Scope = Scope.Navigation, Repeat = true } },
+            { "PanelPrev", new Definition { Run = () => CyclePanel(-1) } },
+            { "PanelNext", new Definition { Run = () => CyclePanel(1) } },
+            { "ListUp", new Definition { Run = () => MoveSelection(-1), Repeat = true } },
+            { "ListDown", new Definition { Run = () => MoveSelection(1), Repeat = true } },
 
             // the same calls the export model button and the auto record button make
-            { "ExportModel", new Definition { Run = () => ui.ModelSettings.ExportModel(), Scope = Scope.Action } },
-            { "AutoRecord", new Definition { Run = () => ui.AutoRecordVMD(), Scope = Scope.Action, NeedsAnimator = true } },
+            { "ExportModel", new Definition { Run = () => ui.ModelSettings.ExportModel() } },
+            { "AutoRecord", new Definition { Run = () => ui.AutoRecordVMD() } },
 
             // the rain look: the wet texture set the game uses when a race is rained on
-            { "RainLook", new Definition { Run = () => ui.ModelSettings.ToggleWetLook(), Scope = Scope.Action } },
-
+            { "RainLook", new Definition { Run = () => ui.ModelSettings.ToggleWetLook() } },
         };
-
 
     public void Update()
     {
@@ -171,13 +187,23 @@ public class UIShortcuts
     }
 
     /// <summary>
-    /// Whether the mode the viewer is in owns this key right now. See the class summary for the three
-    /// cases and why each one is what it is.
+    /// Whether the mode the viewer is in owns this key right now. See the class summary for the cases and
+    /// why each one is what it is.
+    ///
+    /// Pose mode suspends <b>everything</b>, which is narrower than it sounds and was the release's defect
+    /// the other way round: the pose system's own keys are `H` (help), `Space` (IK toggle) and the
+    /// Alt/Shift/Ctrl combinations <see cref="TransformGizmo"/> and <see cref="HandleManager"/> read, so
+    /// none of them is a plain letter this class binds - and every action this class can run is wrong while
+    /// a pose is being made. The list walk loads whatever it lands on and would replace the model mid-pose;
+    /// export writes the model as it happens to be posed; recording samples the animator
+    /// <see cref="PoseManager.EnablePoseMode"/> has just disabled; the rain look swaps the textures the pose
+    /// is being judged under. Suspending only some of them left `E` and `R` live, which is exactly what a
+    /// posed user hit.
     /// </summary>
     private static bool Suspended(Binding binding, bool posing, bool flying)
     {
+        if (posing) return true;
         if (flying && CameraKeys.Contains(binding.Key)) return true;
-        if (posing && (binding.Definition.Scope == Scope.Navigation || binding.Definition.NeedsAnimator)) return true;
         return false;
     }
 
@@ -222,6 +248,28 @@ public class UIShortcuts
         if (field) return field.isFocused;
         var textMeshField = selected.GetComponent<TMPro.TMP_InputField>();
         return textMeshField && textMeshField.isFocused;
+    }
+
+    /// <summary>
+    /// With `UMA_SHORTCUT_PROBE=1`, one line per binding per context saying whether it would fire. The
+    /// contexts *are* the suspension rules, so this is the way to check them without flying the camera or
+    /// posing a model by hand - the one thing the keybind release never did. `Tools/verify_keybinds.ps1`
+    /// asserts on these lines.
+    /// </summary>
+    private void Probe()
+    {
+        if (System.Environment.GetEnvironmentVariable("UMA_SHORTCUT_PROBE") != "1") return;
+
+        foreach (var binding in bindings)
+        {
+            foreach (var context in new[] { "idle", "flying", "posing" })
+            {
+                bool posing = context == "posing";
+                bool flying = context == "flying";
+                Debug.Log($"[Shortcuts] probe {context} {binding.Label} "
+                          + $"{(Suspended(binding, posing, flying) ? "SUSPENDED" : "FIRE")}");
+            }
+        }
     }
 
     /// <summary>Shows the next panel of <see cref="UmaViewerUI.TogglablePanels"/>, wrapping at the ends.</summary>

@@ -35,7 +35,7 @@ public class UmaViewerMain : MonoBehaviour
     private void Awake()
     {
         Instance = this;
-        new Config();
+        Config.Ensure();
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 120;
 

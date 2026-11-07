@@ -110,3 +110,30 @@ The build is reproduced with `Unity.exe -batchmode -quit -projectPath . -execute
 which writes `BuildDev/uma-cli/UmaViewer.exe` (ignored by git); packaging is that folder plus `README.txt` and
 `CHANGELOG.txt`, minus `Config.json`, which would otherwise overwrite a user's settings.
 
+## Hot patch, 7 November 2026 - keybinds
+
+Shipped on top of 3.5 (and of the 5 November hot patch) as `UmaViewer-3.5-hotfix-2026-11-07.zip` (47.8 MB, sha256
+`ACFC56229AFB0F6BF3E28A7B72BE21EEB25D3DC85B81FDB30135467A65536EBA`). A user reported two things about the 3.5 keybind
+work, and both were real:
+
+| report | what it actually was |
+|---|---|
+| "the keybindings in the config file have no effect - E still exports" | exact. `UIShortcuts` was built in `UmaViewerUI.Awake` and read `Config.Instance`; the config is created in `UmaViewerMain.Awake`, and Unity does not order two `Awake`s. The UI's ran first, so the shortcuts bound `Config.DefaultViewerShortcuts()` **silently** - and the startup log printed that default list, which is why nobody noticed: the shipped `Config.json` binds the same keys. `Config.Ensure()` now creates the config on first use, so no order matters, and a missing list is a warning naming the file instead of a silent fallback |
+| "pose mode is still affected by the hotkeys" | the pose mask suspended only navigation and recording, on the reasoning that `E` and `R` do not collide with the gizmo. True, and beside the point: a posed user pressing `E` gets an export of the model mid-pose. Pose mode now suspends **every** binding, which costs the pose tool nothing - its own keys are `H`, `Space` and the Alt/Shift/Ctrl combinations `TransformGizmo` and `HandleManager` read |
+
+`Tools/verify_keybinds.ps1` is the gate both defects would have failed. It writes a probe `Config.json` beside
+the player (rebound keys, one unknown action, one unknown key), runs it with `UMA_SHORTCUT_PROBE=1`, and asserts
+the binding log and the context decisions; `UMA_SHORTCUT_PROBE=1` prints one line per binding per context, so the
+suspension rules are checkable without flying the camera or posing a model by hand.
+
+Verified: `dotnet build` 0 errors, and `./Tools/verify_keybinds.ps1` green against the rebuilt player - 10 checks.
+The same gate against the 5 November binary fails 9 of them, and fails them for the right reason: it logs
+`9 binding(s): ... E -> ExportModel, A -> AutoRecord, R -> RainLook` while the probe file beside it asks for
+`Keypad1`/`Keypad2`/`W`/`Keypad3`.
+
+Packaging is the 5 November recipe: `BuildDev/uma-cli` (minus `AgemaViewer_BurstDebugInformation_DoNotShip`) plus
+`README.txt` and `CHANGELOG.txt`, with `Config.json` keeping the shipped values but its `LastModelFolder` /
+`LastMotionFolder` blanked so one machine's dialog history does not travel. The zip holds a
+`UmaViewer-3.5-win64/` folder, as before.
+
+

@@ -385,6 +385,11 @@ Two more things to know before comparing it with the PMX:
   record buttons - the manual one and the auto-record one - sample the same way the reference was captured. Whether the
   setting still changes a recording, given that the reference pose is also reset correctly, has not been measured;
   viewing with it on is unaffected.
+* **`UMA_SHORTCUT_PROBE=1` prints what each keyboard shortcut would do, and when.** Startup logs one line per binding
+  per context - `[Shortcuts] probe posing E -> ExportModel SUSPENDED` - for `idle`, `flying` (the camera's free mode)
+  and `posing`. The contexts *are* the suspension rules in `UIShortcuts`, so this is how those rules are checked
+  without flying the camera or posing a model by hand; `Tools\verify_keybinds.ps1` asserts on the lines, together
+  with the binding list and the file it was read from. See `docs/KEYBINDS.md`.
 * **`UMA_GHOST_DUMP=1` records what the sampler actually used** to `ghost_dump.jsonl` in the temp directory: per bone
   and per frame the value written (the ghost's local rotation), the live bone's rotation and both parent frames; one
   reference row per bone (`role: "reference"`) holding the pose the take is a delta against; and one row per control
